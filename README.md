@@ -19,6 +19,8 @@ The public welcome page uses clearly labeled representative data. The private `/
 
 The private workspace is served from [pf.lofuyu.com](https://pf.lofuyu.com). The raw Worker hostname is not an application origin: after the hardened Worker is deployed, browser routes redirect to the custom origin and API requests to the raw hostname return `404`. No bank data or secrets are embedded in the public front desk.
 
+The Sandbox promotion on 2026-10-13 used the authenticated Cloudflare connector. Because that connector cannot forward Cloudflare's short-lived static-asset upload JWT, the promoted Worker carries the same built UI bundle inline for this deployment; `wrangler.jsonc` remains the canonical assets-binding configuration for future tokenized Wrangler deployments.
+
 ## Local development
 
 ```bash
@@ -119,3 +121,4 @@ Open Accounts & settings and choose Start bank connection. Plaid Link runs in th
 The account options menu includes Disconnect Plaid connection. That action calls Plaid’s Item removal endpoint first; only after Plaid confirms revocation does the Worker delete the encrypted access token and mappings. Existing ledger transactions remain available as historical records.
 
 Use Plaid’s Sandbox test institution and credentials while `PLAID_ENV=sandbox`. Sandbox transactions are simulated; test an actual RBC Item only after enabling the appropriate Plaid production access. The Bank of China/WeChat path remains statement or Android-companion work and is not changed by this integration.
+
