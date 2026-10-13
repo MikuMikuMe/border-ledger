@@ -1,0 +1,73 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "border-ledger",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-12",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "PLAID_ENV": "sandbox",
+    "LEDGER_APP_ORIGIN": "https://pf.lofuyu.com",
+    "PLAID_WEBHOOK_URL": "https://pf.lofuyu.com/api/webhooks/plaid"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "border-ledger",
+      "database_id": "14378887-f604-4d04-95f1-26930405b5a8",
+      "migrations_dir": "./worker/migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "SYNC_QUEUE", "queue": "border-ledger-sync" }
+    ],
+    "consumers": [
+      {
+        "queue": "border-ledger-sync",
+        "max_batch_size": 1,
+        "max_retries": 5,
+        "max_concurrency": 1,
+        "dead_letter_queue": "border-ledger-sync-dlq"
+      }
+    ]
+  },
+  "env": {
+    "production": {
+      "name": "border-ledger-production",
+      "vars": {
+        "PLAID_ENV": "production",
+        "LEDGER_APP_ORIGIN": "https://pf.lofuyu.com",
+        "PLAID_WEBHOOK_URL": "https://pf.lofuyu.com/api/webhooks/plaid"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "border-ledger-production",
+          "database_id": "5758f0f5-ea46-463d-b5b7-45f02eb96409",
+          "migrations_dir": "./worker/migrations"
+        }
+      ],
+      "queues": {
+        "producers": [
+          { "binding": "SYNC_QUEUE", "queue": "border-ledger-production-sync" }
+        ],
+        "consumers": [
+          {
+            "queue": "border-ledger-production-sync",
+            "max_batch_size": 1,
+            "max_retries": 5,
+            "max_concurrency": 1,
+            "dead_letter_queue": "border-ledger-production-sync-dlq"
+          }
+        ]
+      }
+    }
+  }
+}
