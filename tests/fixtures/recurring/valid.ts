@@ -1,0 +1,46 @@
+export const validRecurringResponse = {
+  updated_at: '2026-10-13T14:00:00.000Z',
+  request_id: 'recurring-fixture-1',
+  outflow_streams: [
+    {
+      account_id: 'plaid-cad',
+      stream_id: 'stream-cad',
+      merchant_name: 'Metro Toronto',
+      description: 'Metro Toronto',
+      merchant_entity_id: 'entity-metro',
+      frequency: 'MONTHLY',
+      status: 'MATURE',
+      is_outflow: true,
+      average_amount: { amount: 12.34, iso_currency_code: 'CAD' },
+      last_amount: { amount: 13, iso_currency_code: 'CAD' },
+      predicted_amount: { amount: 12.34, iso_currency_code: 'CAD' },
+      first_date: '2026-01-01',
+      last_date: '2026-10-01',
+      predicted_next_date: '2026-11-01',
+      transactions: [
+        { transaction_id: 'posted-cad-1', pending_transaction_id: null, date: '2026-10-01', amount: 12.34, iso_currency_code: 'CAD' },
+      ],
+    },
+  ],
+  inflow_streams: [
+    {
+      account_id: 'plaid-cny',
+      stream_id: 'stream-cny',
+      merchant_name: null,
+      description: 'Salary',
+      merchant_entity_id: null,
+      frequency: 'SEMI_MONTHLY',
+      status: 'EARLY_DETECTION',
+      is_outflow: false,
+      average_amount: { amount: -1200, iso_currency_code: 'CNY' },
+      last_amount: { amount: -1200, iso_currency_code: 'CNY' },
+      predicted_amount: null,
+      first_date: '2026-09-15',
+      last_date: '2026-10-01',
+      predicted_next_date: null,
+      transactions: [
+        { transaction_id: 'posted-cny-1', pending_transaction_id: 'pending-cny-1', date: '2026-10-01', amount: -1200, iso_currency_code: 'CNY' },
+      ],
+    },
+  ],
+} as const;
