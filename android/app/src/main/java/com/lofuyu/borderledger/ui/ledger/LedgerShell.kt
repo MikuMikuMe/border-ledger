@@ -22,6 +22,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -32,7 +33,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.EventRepeat
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -49,6 +57,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.lofuyu.borderledger.LedgerRepository
 import com.lofuyu.borderledger.accounts.AccountRepository
@@ -78,6 +89,7 @@ import com.lofuyu.borderledger.ui.recurring.RecurringScreen
 import com.lofuyu.borderledger.ui.settings.DeviceDisplayPreferences
 import com.lofuyu.borderledger.ui.settings.DeviceDisplayPreferencesStore
 import com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository
+import com.lofuyu.borderledger.ui.settings.ReportingPreferences
 import com.lofuyu.borderledger.ui.settings.reportingCurrencyOptions
 import com.lofuyu.borderledger.ui.settings.SettingsScreen
 import com.lofuyu.borderledger.ui.settings.SettingsViewModel
@@ -92,6 +104,8 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.Instant
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 @Composable
 fun LedgerShell(
@@ -134,6 +148,7 @@ fun LedgerShell(
     var recurringDetailId by rememberSaveable { mutableStateOf<String?>(null) }
     var devicePreferences by remember(deviceDisplayPreferencesStore) { mutableStateOf(deviceDisplayPreferencesStore.read()) }
     var deviceMessage by remember { mutableStateOf<String?>(null) }
+    val reportQueryState = remember { ReportQueryState() }
     val scope = rememberCoroutineScope()
     val destination = LedgerDestination.valueOf(destinationName)
     val recurringViewModel = remember(recurringRepository) {
@@ -165,29 +180,51 @@ fun LedgerShell(
         }
     }
 
-    fun refreshOwnerReport(window: ReportWindow, includeProvisional: Boolean, sourceCurrency: String?, targetCurrency: String?) {
+    fun reportQuery(window: ReportWindow, includeProvisional: Boolean, sourceCurrency: String?, targetCurrency: String?): ReportQuerySpec {
+        val preferences = settingsState.preferences ?: ReportingPreferences.DEFAULT
+        return ReportQuerySpec(
+            window = window,
+            includeProvisional = includeProvisional,
+            sourceCurrency = sourceCurrency,
+            reportingCurrency = targetCurrency,
+            reportingTimezone = preferences.reportingTimezone,
+            weekStart = preferenceWeekStart(preferences.weekStart),
+            preferencesRevision = preferences.revision,
+        )
+    }
+
+    fun refreshOwnerReport(query: ReportQuerySpec) {
+        val request = reportQueryState.begin(query)
+        // Keep the visible report bound to the exact query being loaded.
+        // Otherwise a fast preference change can relabel stale CAD/EUR
+        // values as the newly selected currency.
+        reportOverride = null
         scope.launch {
             reportLoading = true
             reportMessage = null
-            val today = LocalDate.now(ZoneId.of("America/Toronto"))
-            val range = reportDateWindow(window, today)
+            val zone = runCatching { ZoneId.of(query.reportingTimezone) }.getOrDefault(ZoneId.of("America/Toronto"))
+            val range = reportDateWindow(query.window, LocalDate.now(zone), query.weekStart)
             when (val result = repository.refreshOwnerReport(
                 OwnerReportQuery(
                     startDate = range.startDate.toString(),
                     endDate = range.endDate.toString(),
-                    includeProvisional = includeProvisional,
-                    currency = sourceCurrency,
-                    reportingCurrency = targetCurrency,
-                    timeZone = "America/Toronto",
+                    includeProvisional = query.includeProvisional,
+                    currency = query.sourceCurrency,
+                    reportingCurrency = query.reportingCurrency,
+                    timeZone = query.reportingTimezone,
                 ),
             )) {
-                is LedgerRepository.ReportRefreshResult.Refreshed -> reportOverride = result.report
-                LedgerRepository.ReportRefreshResult.NotSignedIn -> reportMessage = "Owner sign-in is required before changing the report window."
-                LedgerRepository.ReportRefreshResult.Offline -> reportMessage = "The selected report is unavailable offline; showing the last report."
-                LedgerRepository.ReportRefreshResult.Unauthorized -> reportMessage = "The owner session needs to be renewed before reading this report."
-                LedgerRepository.ReportRefreshResult.Unavailable -> reportMessage = "The selected report is unavailable; no financial values were changed."
+                else -> if (reportQueryState.isCurrent(request)) {
+                    when (result) {
+                        is LedgerRepository.ReportRefreshResult.Refreshed -> reportOverride = result.report
+                        LedgerRepository.ReportRefreshResult.NotSignedIn -> reportMessage = "Owner sign-in is required before changing the report window."
+                        LedgerRepository.ReportRefreshResult.Offline -> reportMessage = "The selected report is unavailable offline; retry when the owner session is online."
+                        LedgerRepository.ReportRefreshResult.Unauthorized -> reportMessage = "The owner session needs to be renewed before reading this report."
+                        LedgerRepository.ReportRefreshResult.Unavailable -> reportMessage = "The selected report is unavailable; no financial values were changed."
+                    }
+                }
             }
-            reportLoading = false
+            if (reportQueryState.isCurrent(request)) reportLoading = false
         }
     }
 
@@ -195,12 +232,17 @@ fun LedgerShell(
         settingsViewModel.load()
     }
 
-    LaunchedEffect(settingsState.preferences?.revision) {
-        val persistedTarget = settingsState.preferences?.preferredCurrency ?: return@LaunchedEffect
-        if (persistedTarget != reportingCurrency) {
-            reportingCurrency = persistedTarget
-            refreshOwnerReport(ReportWindow.valueOf(reportWindowName), reportIncludeProvisional, reportSourceCurrency, persistedTarget)
-        }
+    LaunchedEffect(
+        settingsState.preferences?.revision,
+        settingsState.preferences?.preferredCurrency,
+        settingsState.preferences?.reportingTimezone,
+        settingsState.preferences?.weekStart,
+    ) {
+        val preferences = settingsState.preferences ?: return@LaunchedEffect
+        val persistedTarget = preferences.preferredCurrency
+        reportingCurrency = persistedTarget
+        val query = reportQuery(ReportWindow.valueOf(reportWindowName), reportIncludeProvisional, reportSourceCurrency, persistedTarget)
+        if (!reportQueryState.hasSameSpec(query)) refreshOwnerReport(query)
     }
 
     fun refreshActivity(reset: Boolean) {
@@ -251,6 +293,9 @@ fun LedgerShell(
                 is LedgerSnapshotDecodeResult.Unsupported -> SnapshotState.Unsupported(cache, decoded.message)
             }
         }
+        settingsState.preferences?.let {
+            refreshOwnerReport(reportQuery(ReportWindow.valueOf(reportWindowName), reportIncludeProvisional, reportSourceCurrency, reportingCurrency))
+        }
     }
 
     LaunchedEffect(destination) {
@@ -260,6 +305,25 @@ fun LedgerShell(
             LedgerDestination.Settings -> Unit
             LedgerDestination.Activity -> refreshActivity(reset = true)
             else -> Unit
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, destination) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START && destination == LedgerDestination.Overview) {
+                refreshOwnerReport(reportQuery(ReportWindow.valueOf(reportWindowName), reportIncludeProvisional, reportSourceCurrency, reportingCurrency))
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(destination, reportWindowName, reportIncludeProvisional, reportSourceCurrency, reportingCurrency, settingsState.preferences?.revision) {
+        if (destination != LedgerDestination.Overview) return@LaunchedEffect
+        while (isActive) {
+            delay(15 * 60 * 1000L)
+            refreshOwnerReport(reportQuery(ReportWindow.valueOf(reportWindowName), reportIncludeProvisional, reportSourceCurrency, reportingCurrency))
         }
     }
 
@@ -306,7 +370,7 @@ fun LedgerShell(
                     NavigationBarItem(
                         selected = item == destination,
                         onClick = { destinationName = item.name },
-                        icon = { Text(item.shortLabel.take(1)) },
+                        icon = { Icon(item.navigationIcon(), contentDescription = null) },
                         label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         alwaysShowLabel = true,
                         modifier = Modifier.semantics { contentDescription = "Open ${item.label}" },
@@ -334,7 +398,7 @@ fun LedgerShell(
                         reportIncludeProvisional = include
                         reportSourceCurrency = sourceCurrency
                         reportingCurrency = targetCurrency
-                        refreshOwnerReport(window, include, sourceCurrency, targetCurrency)
+                        refreshOwnerReport(reportQuery(window, include, sourceCurrency, targetCurrency))
                     },
                     refreshMessage = refreshMessage,
                 )
@@ -577,6 +641,7 @@ private fun OverviewDestination(
                             }
                         }
                     }
+                    item { SpendingChart(fullReport, includeProvisional) }
                     if (selectedReportingCurrency != null && fullReport.fx.chineseBankBand != null) {
                         item { ChineseBankBandCard(fullReport.fx.chineseBankBand) }
                     }
@@ -602,6 +667,15 @@ private fun OverviewDestination(
             }
         }
     }
+}
+
+private fun LedgerDestination.navigationIcon() = when (this) {
+    LedgerDestination.Overview -> Icons.Filled.Home
+    LedgerDestination.Recurring -> Icons.Filled.EventRepeat
+    LedgerDestination.Activity -> Icons.AutoMirrored.Filled.ReceiptLong
+    LedgerDestination.Review -> Icons.Filled.RateReview
+    LedgerDestination.Accounts -> Icons.Filled.AccountBalanceWallet
+    else -> Icons.Filled.Home
 }
 
 /** Credential-free deterministic FX preview used only by the debug build. */
@@ -1105,3 +1179,4 @@ private fun recurringSummaryQuery(): RecurringSummaryQuery {
         endDate = today.plusDays(30).toString(),
     )
 }
+
