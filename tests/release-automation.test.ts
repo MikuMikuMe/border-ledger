@@ -42,7 +42,7 @@ describe('release automation contract', () => {
 
   it('deploys the named Cloudflare production environment and fails closed on missing credentials', () => {
     expect(deployWorkflow).toContain('CLOUDFLARE_API_TOKEN');
-    expect(deployWorkflow).toContain('CLOUDFLARE_ACCOUNT_ID');
+    expect(deployWorkflow).not.toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(deployWorkflow).toContain('Missing required Cloudflare deployment secret');
     expect(deployWorkflow).toContain('d1 migrations apply border-ledger-production --remote --env production');
     expect(deployWorkflow).toContain('MOBILE_SESSION_ENCRYPTION_KEY');
@@ -55,6 +55,7 @@ describe('release automation contract', () => {
 
   it('targets the existing production custom-domain Worker instead of creating a shadow Worker', () => {
     expect(wrangler).toContain('"name": "border-ledger"');
+    expect(wrangler).toContain('"account_id": "a0af41818e1b715f66046b0d7870ce70"');
     expect(wrangler).not.toContain('"name": "border-ledger-production"');
     expect(wrangler).toContain('"production": {');
     expect(wrangler).toContain('"MOBILE_ACCESS_AUTHORIZATION_URL": "https://pf.lofuyu.com/mobile/authorize"');

@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "border-ledger",
+  "account_id": "a0af41818e1b715f66046b0d7870ce70",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-12",
   "assets": {

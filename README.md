@@ -67,7 +67,7 @@ npm run build
 
 6. Keep the public welcome page at `/` outside the Access login wall, and protect `/mobile/authorize`, `/app/*`, `/api/mobile-auth/*`, plus the financial API routes. The front page links into `/app`, so Access can return an invited user to the workspace after sign-in. Add the Access team domain (for example `https://your-team.cloudflareaccess.com`) as `ACCESS_TEAM_DOMAIN` and the private Access application AUD tag as `ACCESS_AUDIENCE` in the Worker variables. The browser sends the Access session cookie; it never receives `LEDGER_API_KEY`.
 7. Add an Access Bypass policy for exactly `/api/webhooks/plaid`, because Plaid cannot present your browser session. The Worker verifies Plaid’s signed `Plaid-Verification` header before enqueueing a sync.
-8. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to the GitHub repository Actions secrets.
+8. Add `CLOUDFLARE_API_TOKEN` to the GitHub repository Actions secrets. The non-secret Cloudflare account ID is pinned in `wrangler.jsonc` so the workflow cannot accidentally target another account.
 
 ### Production rollout gate
 
