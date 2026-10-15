@@ -63,11 +63,11 @@ npm run build
    $bytes = [byte[]]::new(32); [Security.Cryptography.RandomNumberGenerator]::Fill($bytes); [Convert]::ToBase64String($bytes)
    ```
 
-   Mobile owner sign-in uses one additional production secret and one non-secret runtime variable. `MOBILE_ACCESS_AUTHORIZATION_URL` is declared in the production Wrangler variables as the app URL `https://pf.lofuyu.com/mobile/authorize`; it is not a Cloudflare-generated OAuth URL. `MOBILE_SESSION_ENCRYPTION_KEY` is a separate random Worker-only secret used for short-lived replay protection; generate at least 32 random bytes and never reuse the Plaid encryption key.
+   Mobile owner sign-in uses one session-encryption secret plus three approved-identity allowlist secrets. `MOBILE_ACCESS_AUTHORIZATION_URL` is declared in the production Wrangler variables as the app URL `https://pf.lofuyu.com/mobile/authorize`; it is not a Cloudflare-generated OAuth URL. `MOBILE_SESSION_ENCRYPTION_KEY` is a separate random Worker-only secret used for short-lived replay protection; generate at least 32 random bytes and never reuse the Plaid encryption key. Set `MOBILE_APPROVED_ACCESS_ISSUERS` to the exact Access JWT issuer, `MOBILE_APPROVED_ACCESS_AUDIENCES` to the exact Access AUD value, and `MOBILE_APPROVED_ACCESS_SUBJECTS` to one or more approved Access subject or email values, comma-separated. The Worker fails closed when any allowlist is absent.
 
 6. Keep the public welcome page at `/` outside the Access login wall, and protect `/mobile/authorize`, `/app/*`, `/api/mobile-auth/*`, plus the financial API routes. The front page links into `/app`, so Access can return an invited user to the workspace after sign-in. Add the Access team domain (for example `https://your-team.cloudflareaccess.com`) as `ACCESS_TEAM_DOMAIN` and the private Access application AUD tag as `ACCESS_AUDIENCE` in the Worker variables. The browser sends the Access session cookie; it never receives `LEDGER_API_KEY`.
 7. Add an Access Bypass policy for exactly `/api/webhooks/plaid`, because Plaid cannot present your browser session. The Worker verifies Plaid’s signed `Plaid-Verification` header before enqueueing a sync.
-8. Add `CLOUDFLARE_API_TOKEN` to the GitHub repository Actions secrets. The non-secret Cloudflare account ID is pinned in `wrangler.jsonc` so the workflow cannot accidentally target another account.
+8. Add `CLOUDFLARE_API_TOKEN` to the GitHub repository Actions secrets. The non-secret Cloudflare account ID is pinned in `wrangler.jsonc` so the workflow cannot accidentally target another account. The production health smoke test also needs the Cloudflare Access service-token credentials as separate GitHub Actions secrets: `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET`. Granting Access-management permissions to the Wrangler API token does not substitute for these HTTP headers.
 
 ### Production rollout gate
 
@@ -92,6 +92,9 @@ Before connecting a real bank Item, complete these steps in order:
    npx wrangler secret put ACCESS_TEAM_DOMAIN --env production
    npx wrangler secret put ACCESS_AUDIENCE --env production
    npx wrangler secret put MOBILE_SESSION_ENCRYPTION_KEY --env production
+   npx wrangler secret put MOBILE_APPROVED_ACCESS_ISSUERS --env production
+   npx wrangler secret put MOBILE_APPROVED_ACCESS_AUDIENCES --env production
+   npx wrangler secret put MOBILE_APPROVED_ACCESS_SUBJECTS --env production
    ```
 
    Keep the existing `MOBILE_SESSION_ENCRYPTION_KEY` stable; replacing it invalidates sessions and outstanding mobile authorization state. `MOBILE_ACCESS_AUTHORIZATION_URL` is a non-secret production variable declared in `wrangler.jsonc`.
