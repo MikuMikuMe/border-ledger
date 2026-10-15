@@ -6,6 +6,9 @@ const baseEnvironment = {
   MOBILE_ENVIRONMENT: 'production',
   MOBILE_ACCESS_AUTHORIZATION_URL: 'https://pf.example.com/mobile/authorize',
   MOBILE_SESSION_ENCRYPTION_KEY: 'a-valid-session-key',
+  MOBILE_APPROVED_ACCESS_ISSUERS: 'https://team.cloudflareaccess.com',
+  MOBILE_APPROVED_ACCESS_AUDIENCES: 'mobile-audience',
+  MOBILE_APPROVED_ACCESS_SUBJECTS: 'owner-subject',
   ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
 };
 
@@ -20,6 +23,23 @@ describe('production health mobile-auth configuration signal', () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       mobileAuthConfigured: true,
+    });
+  });
+
+  it.each([
+    'MOBILE_APPROVED_ACCESS_ISSUERS',
+    'MOBILE_APPROVED_ACCESS_AUDIENCES',
+    'MOBILE_APPROVED_ACCESS_SUBJECTS',
+  ])('reports a missing %s allowlist as unavailable', async (field) => {
+    const response = await worker.fetch(
+      new Request('https://pf.example.com/api/health'),
+      { ...baseEnvironment, [field]: '' } as never,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      mobileAuthConfigured: false,
     });
   });
 
