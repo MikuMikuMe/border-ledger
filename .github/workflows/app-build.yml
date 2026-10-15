@@ -74,6 +74,10 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's historical default includes the removed `tools`
+          # package. Install only packages required by this project.
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
       - name: Run Android lint and unit tests
         working-directory: android
         shell: pwsh
@@ -86,3 +90,4 @@ jobs:
     steps:
       - name: Report unavailable Android build prerequisites
         run: echo '::notice::Android lint/unit validation was intentionally gated; no Android build or test is claimed.'
+
