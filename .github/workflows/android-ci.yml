@@ -60,3 +60,4 @@ jobs:
     steps:
       - name: Report unavailable Android build prerequisites
         run: echo 'Android Gradle validation was intentionally gated because the wrapper JAR is missing; no Android build or test is claimed.'
+

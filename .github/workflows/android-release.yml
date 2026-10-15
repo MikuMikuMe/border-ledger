@@ -115,7 +115,6 @@ jobs:
               throw "Missing protected signing secret: $name"
             }
           }
-
       - name: Compute deterministic release identity
         id: release-version
         shell: pwsh

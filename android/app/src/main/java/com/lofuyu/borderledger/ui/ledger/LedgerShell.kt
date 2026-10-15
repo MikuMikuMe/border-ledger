@@ -1179,3 +1179,4 @@ private fun recurringSummaryQuery(): RecurringSummaryQuery {
         endDate = today.plusDays(30).toString(),
     )
 }
+

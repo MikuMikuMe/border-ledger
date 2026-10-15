@@ -203,3 +203,4 @@ describe('full-window Overview report', () => {
     expect(table?.textContent).toContain('-$5.00');
   });
 });
+

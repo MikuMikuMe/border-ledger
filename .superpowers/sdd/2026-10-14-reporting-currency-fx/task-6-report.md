@@ -65,3 +65,4 @@ The evidence below is retained from the earlier unlocked-device/AVD validation r
 - The physical `boc+cny` interaction used the UI-tree scroll bounds `[0,248][1080,2176]` to perform a `540,1976 -> 540,448` swipe. The resulting tree and screenshot showed the dashed card, `±1.5% Chinese bank settlement estimate; CNY spending excluded`, `Range: CA$0.99 – CA$1.01 CAD`, and `rates locked to purchase dates`, with CNY retained in the source audit.
 - The current unsigned release APK was signed only with the disposable local QA key, verified with APK Signature Schemes v2/v3, installed as `com.lofuyu.borderledger`, and launched into `MainActivity`. The real release login screen and coordinate-derived About interaction were visually verified on USB; the About screen rendered the privacy copy; crash-buffer checks were empty.
 - The USB package remained unlocked and foregrounded during the final checks. No production release signing or signing secret was added.
+

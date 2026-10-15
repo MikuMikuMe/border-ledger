@@ -1508,3 +1508,4 @@ function AccountCard({ account, connectionBusy, onSync, onDisconnect, onNavigate
 }
 
 export default App;
+
