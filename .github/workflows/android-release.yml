@@ -49,7 +49,9 @@ jobs:
 
           changed_paths="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"
           package_diff="$(git diff --unified=0 "$BEFORE_SHA" "$CURRENT_SHA" -- package.json package-lock.json)"
-          result="$(CHANGED_PATHS="$changed_paths" PACKAGE_DIFF="$package_diff" EVENT_NAME="$EVENT_NAME" node scripts/detect-android-release-change.mjs)"
+          package_before="$(git show "$BEFORE_SHA:package.json" 2>/dev/null || true)"
+          package_current="$(git show "$CURRENT_SHA:package.json" 2>/dev/null || true)"
+          result="$(CHANGED_PATHS="$changed_paths" PACKAGE_DIFF="$package_diff" PACKAGE_BEFORE="$package_before" PACKAGE_CURRENT="$package_current" EVENT_NAME="$EVENT_NAME" node scripts/detect-android-release-change.mjs)"
           echo "$result" >> "$GITHUB_OUTPUT"
           if [[ "$result" == 'app_changed=false' ]]; then
             echo 'Only backend paths and backend dependency manifests changed; Android release is skipped.'

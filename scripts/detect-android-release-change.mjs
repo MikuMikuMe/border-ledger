@@ -1,7 +1,51 @@
-const BACKEND_ONLY_PATH = /^(?:worker\/|wrangler\.jsonc$|\.github\/workflows\/deploy\.yml$|tests\/(?:worker-|ledger-|fx-))/;
-const FRONTEND_PACKAGE_LINE = /^(?:\+|-)\s*"(?:(?:node_modules\/)?(?:@types\/react(?:-dom)?|@vitejs\/plugin-react|lucide-react|react(?:-dom)?|vite|typescript|jsdom|vitest)|scripts|version)"\s*:/;
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-export function shouldPublishAndroidRelease({ eventName, changedPaths, packageDiff = '' }) {
+const BACKEND_ONLY_PATH = /^(?:worker\/|wrangler\.jsonc$|\.github\/workflows\/deploy\.yml$|tests\/(?:worker-|ledger-|fx-))/;
+const FRONTEND_BUILD_DEPENDENCIES = new Set(['@types/react', '@types/react-dom', '@vitejs/plugin-react', 'vite', 'typescript']);
+
+function readFrontendSource(root) {
+  const files = ['index.html', 'vite.config.ts'];
+  const visit = (directory) => {
+    if (!existsSync(directory)) return;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (/\.(?:css|html|js|jsx|ts|tsx)$/.test(entry.name)) files.push(path);
+    }
+  };
+  visit(join(root, 'src'));
+  return files.filter((path) => existsSync(join(root, path)) || existsSync(path))
+    .map((path) => readFileSync(existsSync(path) ? path : join(root, path), 'utf8'))
+    .join('\n');
+}
+
+function dependencyIsFrontend(name, frontendSource) {
+  if (FRONTEND_BUILD_DEPENDENCIES.has(name)) return true;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:from|import|require\\s*\\()\\s*["']${escaped}(?:/|["'])`).test(frontendSource);
+}
+
+function parsePackageJson(value) {
+  try {
+    return JSON.parse(value || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function packageAffectsFrontend(beforeValue, currentValue, frontendSource) {
+  const before = parsePackageJson(beforeValue);
+  const current = parsePackageJson(currentValue);
+  if (JSON.stringify(before.scripts ?? {}) !== JSON.stringify(current.scripts ?? {})) return true;
+
+  const beforeDependencies = { ...(before.dependencies ?? {}), ...(before.devDependencies ?? {}) };
+  const currentDependencies = { ...(current.dependencies ?? {}), ...(current.devDependencies ?? {}) };
+  const names = new Set([...Object.keys(beforeDependencies), ...Object.keys(currentDependencies)]);
+  return [...names].some((name) => beforeDependencies[name] !== currentDependencies[name] && dependencyIsFrontend(name, frontendSource));
+}
+
+export function shouldPublishAndroidRelease({ eventName, changedPaths, packageDiff = '', packageBefore = '', packageCurrent = '', frontendSource = readFrontendSource(process.cwd()) }) {
   if (eventName === 'workflow_dispatch') return true;
   if (changedPaths.length === 0) return true;
 
@@ -9,7 +53,7 @@ export function shouldPublishAndroidRelease({ eventName, changedPaths, packageDi
   if (!packageChanged) return true;
 
   const nonPackagePaths = changedPaths.filter((path) => path !== 'package.json' && path !== 'package-lock.json');
-  const frontendPackageChanged = packageDiff.split(/\r?\n/).some((line) => FRONTEND_PACKAGE_LINE.test(line));
+  const frontendPackageChanged = packageAffectsFrontend(packageBefore, packageCurrent, frontendSource);
   if (frontendPackageChanged) return true;
   if (nonPackagePaths.length === 0) return false;
 
@@ -22,6 +66,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     eventName: process.env.EVENT_NAME ?? '',
     changedPaths,
     packageDiff: process.env.PACKAGE_DIFF ?? '',
+    packageBefore: process.env.PACKAGE_BEFORE ?? '',
+    packageCurrent: process.env.PACKAGE_CURRENT ?? '',
   });
   process.stdout.write(`app_changed=${appChanged}\n`);
 }

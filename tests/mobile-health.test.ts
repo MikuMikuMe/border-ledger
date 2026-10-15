@@ -23,14 +23,26 @@ describe('production health mobile-auth configuration signal', () => {
     });
   });
 
-  it('reports malformed URLs and short encryption keys as unavailable', async () => {
+  it('reports a malformed authorization URL as unavailable', async () => {
     const response = await worker.fetch(
       new Request('https://pf.example.com/api/health'),
       {
         ...baseEnvironment,
         MOBILE_ACCESS_AUTHORIZATION_URL: 'not-an-https-url',
-        MOBILE_SESSION_ENCRYPTION_KEY: 'short',
       } as never,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      mobileAuthConfigured: false,
+    });
+  });
+
+  it('reports a short encryption key as unavailable', async () => {
+    const response = await worker.fetch(
+      new Request('https://pf.example.com/api/health'),
+      { ...baseEnvironment, MOBILE_SESSION_ENCRYPTION_KEY: 'short' } as never,
     );
 
     expect(response.status).toBe(200);
