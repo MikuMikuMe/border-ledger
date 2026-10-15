@@ -44,6 +44,10 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's historical default includes the removed `tools`
+          # package. Install only packages required by this project.
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
       - name: Run Android lint, unit tests, and unsigned release assembly
         working-directory: android
         shell: pwsh
@@ -56,3 +60,4 @@ jobs:
     steps:
       - name: Report unavailable Android build prerequisites
         run: echo 'Android Gradle validation was intentionally gated because the wrapper JAR is missing; no Android build or test is claimed.'
+
