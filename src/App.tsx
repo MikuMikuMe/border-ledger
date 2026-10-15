@@ -197,8 +197,6 @@ function conversionState(report: OverviewReport): 'complete' | 'partial' | 'unav
 function chartCurrenciesForReport(report: OverviewReport, preferredCurrency: CurrencyCode | null = null) {
   if (report.reportingCurrency) return [report.reportingCurrency];
   return orderedCurrencies([
-    'CAD',
-    'CNY',
     ...report.currencyTotals.map((entry) => entry.currency),
     ...report.dailyTotals.map((entry) => entry.currency),
   ], preferredCurrency);
@@ -213,7 +211,10 @@ function chartDataForRange(range: ChartRange, report: OverviewReport, includePro
     if (entry.date < selectedWindow.start || entry.date > selectedWindow.end) continue;
     const current = daily.get(entry.date) ?? {};
     const amount = entry.confirmedMinorUnits + (includeProvisional ? entry.provisionalMinorUnits : 0);
-    current[entry.currency] = (current[entry.currency] ?? 0) + Math.abs(amount);
+    // Preserve signed refunds in the chart model. The visual uses magnitude
+    // only for bar height and marks the direction; the table exposes the
+    // signed amount to assistive technology.
+    current[entry.currency] = (current[entry.currency] ?? 0) + amount;
     daily.set(entry.date, current);
   }
   const dates = [...daily.keys()].sort();
@@ -1297,8 +1298,29 @@ function CurrencyLane({ currency, amount, share, detail }: { currency: CurrencyC
 function SpendingChart({ range, report, includeProvisional, selectedWindow, preferredCurrency }: { range: ChartRange; report: OverviewReport; includeProvisional: boolean; selectedWindow: ReportWindow; preferredCurrency: CurrencyCode | null }) {
   const entries = chartDataForRange(range, report, includeProvisional, selectedWindow);
   const currencies = chartCurrenciesForReport(report, preferredCurrency);
-  const max = Math.max(...entries.map((entry) => currencies.reduce((total, currency) => total + (entry.totals[currency] ?? 0), 0)), 1);
-  return <div className="spending-chart" role="img" aria-label={`Bar chart showing ${chartRangeLabels[range].toLowerCase()} spending in ${currencies.join(', ')}`}><div className="chart-y-labels"><span>$100</span><span>$50</span><span>$0</span></div><div className="chart-bars">{entries.map((entry) => <div className="chart-column" key={entry.day}><div className="bar-track">{[...currencies].reverse().map((currency) => <span key={currency} className={`bar ${currency === 'CAD' ? 'cad-bar' : currency === 'CNY' ? 'cny-bar' : ''}`} style={{ height: `${((entry.totals[currency] ?? 0) / max) * 100}%`, ...(currency === 'CAD' || currency === 'CNY' ? {} : { backgroundColor: 'var(--muted)', opacity: 0.72 }) }} />)}</div><span className="bar-label">{entry.day}</span></div>)}</div></div>;
+  const max = Math.max(...entries.map((entry) => currencies.reduce((total, currency) => total + Math.abs(entry.totals[currency] ?? 0), 0)), 1);
+  const chartLabel = `Bar chart showing ${chartRangeLabels[range].toLowerCase()} spending in ${currencies.join(', ')}`;
+  return <>
+    <div className="spending-chart" role="img" aria-label={chartLabel}>
+      <div className="chart-y-labels"><span>largest</span><span>midpoint</span><span>zero</span></div>
+      <div className="chart-bars">{entries.map((entry) => <div className="chart-column" key={entry.day}><div className="bar-track">{[...currencies].reverse().map((currency) => {
+        const amount = entry.totals[currency] ?? 0;
+        const direction = amount < 0 ? 'refund' : 'spending';
+        return <span key={currency} className={`bar ${amount < 0 ? 'refund-bar' : ''} ${currency === 'CAD' ? 'cad-bar' : currency === 'CNY' ? 'cny-bar' : ''}`} data-direction={direction} aria-label={`${entry.day} ${currency} ${formatMoney(amount, currency)} ${direction}`} style={{ height: `${(Math.abs(amount) / max) * 100}%`, ...(currency === 'CAD' || currency === 'CNY' ? {} : { backgroundColor: 'var(--muted)', opacity: 0.72 }) }} />;
+      })}</div><span className="bar-label">{entry.day}</span></div>)}</div>
+    </div>
+    <details className="chart-data-details">
+      <summary>View spending data table</summary>
+      <table className="chart-data-table">
+        <caption>{chartLabel}; signed refunds are shown as negative amounts.</caption>
+        <thead><tr><th scope="col">Date</th><th scope="col">Currency</th><th scope="col">Amount</th><th scope="col">Type</th></tr></thead>
+        <tbody>{entries.flatMap((entry) => currencies.map((currency) => {
+          const amount = entry.totals[currency] ?? 0;
+          return <tr key={`${entry.day}-${currency}`}><th scope="row">{entry.day}</th><td>{currency}</td><td>{formatMoney(amount, currency)}</td><td>{amount < 0 ? 'Refund' : 'Spending'}</td></tr>;
+        }))}</tbody>
+      </table>
+    </details>
+  </>;
 }
 
 function ReviewRow({ label, detail, provisional = false }: { label: string; detail: string; provisional?: boolean }) {
@@ -1479,3 +1501,4 @@ function AccountCard({ account, connectionBusy, onSync, onDisconnect, onNavigate
 }
 
 export default App;
+
