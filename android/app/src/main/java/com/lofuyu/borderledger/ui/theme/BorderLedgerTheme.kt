@@ -28,6 +28,7 @@ private val DarkMuted = Color(0xFFA5B2AA)
 private val DarkRule = Color(0xFF43534B)
 private val DarkTeal = Color(0xFF83C9B1)
 private val DarkCopper = Color(0xFFEDA087)
+private val DarkReview = Color(0xFFE6B16E)
 
 enum class ThemeColorSource { BrandLight, BrandDark, DynamicLight, DynamicDark }
 
@@ -46,9 +47,28 @@ private val LightColors = lightColorScheme(
     onSurface = Ink,
     surfaceVariant = Color(0xFFE8E2D8),
     onSurfaceVariant = MutedInk,
+    surfaceTint = Teal,
+    surfaceDim = Color(0xFFDAD4C9),
+    surfaceBright = Color(0xFFFFFCF4),
+    surfaceContainerLowest = Color(0xFFFFFDF7),
+    surfaceContainerLow = Color(0xFFF7F2E8),
+    surfaceContainer = Color(0xFFEFE9DE),
+    surfaceContainerHigh = Color(0xFFE9E2D7),
+    surfaceContainerHighest = Color(0xFFE3DCD1),
+    inverseSurface = Ink,
+    inverseOnSurface = Paper,
+    inversePrimary = DarkTeal,
     outline = Rule,
+    outlineVariant = Color(0xFFBEB7AB),
     error = Color(0xFFA83F3F),
     onError = Color.White,
+    errorContainer = Color(0xFFF8DAD5),
+    onErrorContainer = Color(0xFF6F1716),
+    tertiary = Review,
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFF3E0B7),
+    onTertiaryContainer = Ink,
+    scrim = Color.Black,
 )
 
 private val DarkColors = darkColorScheme(
@@ -66,9 +86,28 @@ private val DarkColors = darkColorScheme(
     onSurface = DarkInk,
     surfaceVariant = DarkRaised,
     onSurfaceVariant = DarkMuted,
+    surfaceTint = DarkTeal,
+    surfaceDim = DarkCanvas,
+    surfaceBright = Color(0xFF3A4640),
+    surfaceContainerLowest = Color(0xFF0B100E),
+    surfaceContainerLow = Color(0xFF151E1B),
+    surfaceContainer = DarkSurface,
+    surfaceContainerHigh = Color(0xFF23312C),
+    surfaceContainerHighest = Color(0xFF2D3A34),
+    inverseSurface = DarkInk,
+    inverseOnSurface = Ink,
+    inversePrimary = Teal,
     outline = DarkRule,
+    outlineVariant = Color(0xFF5A6B62),
     error = Color(0xFFFFB4AB),
     onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+    tertiary = DarkReview,
+    onTertiary = Color(0xFF3E2E00),
+    tertiaryContainer = Color(0xFF5A4300),
+    onTertiaryContainer = Color(0xFFFFDDB2),
+    scrim = Color.Black,
 )
 
 @Composable

@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -71,6 +73,7 @@ enum class SignedOutReason {
     Explicit,
     Canceled,
     Offline,
+    StartFailed,
     FailedReturn,
     ExchangeFailed,
     UnapprovedIdentity,
@@ -186,14 +189,21 @@ class OwnerSessionManager(
             val challenge = base64Url(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(StandardCharsets.UTF_8)))
             val idempotencyKey = randomToken(24)
             return try {
-                val response = client.startLogin(
-                    OwnerLoginStartRequest(
-                        codeChallenge = challenge,
-                        state = stateToken,
-                        deviceId = deviceId,
-                        environment = environment,
-                    ),
-                )
+                val response = try {
+                    withTimeout(LOGIN_START_TIMEOUT_MILLIS) {
+                        client.startLogin(
+                            OwnerLoginStartRequest(
+                                codeChallenge = challenge,
+                                state = stateToken,
+                                deviceId = deviceId,
+                                environment = environment,
+                            ),
+                        )
+                    }
+                } catch (_: TimeoutCancellationException) {
+                    _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.StartFailed)
+                    throw TransportFailure.Offline
+                }
                 val pending = PendingOwnerLogin(
                     requestId = response.requestId,
                     state = stateToken,
@@ -212,13 +222,17 @@ class OwnerSessionManager(
                 _state.value = OwnerSessionState.AwaitingBrowser(response.requestId, response.expiresAt)
                 LoginLaunch(response.requestId, response.authorizationUrl, response.expiresAt)
             } catch (error: TransportFailure) {
-                _state.value = OwnerSessionState.SignedOut(
-                    reason = if (error == TransportFailure.Offline) SignedOutReason.Offline else SignedOutReason.ExchangeFailed,
-                )
+                val startTimedOut = (_state.value as? OwnerSessionState.SignedOut)?.reason == SignedOutReason.StartFailed
+                if (!startTimedOut) {
+                    _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.StartFailed)
+                }
                 throw error
             } catch (_: SecureStorageException) {
                 _state.value = OwnerSessionState.StorageFailure(StorageOperation.Callback)
                 throw SecureStorageException("Owner login state could not be protected.")
+            } catch (error: Throwable) {
+                _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.StartFailed)
+                throw error
             }
         }
     }
@@ -497,6 +511,8 @@ class OwnerSessionManager(
     private fun randomToken(bytes: Int): String = ByteArray(bytes).also(random::nextBytes).let(::base64Url)
 
     private companion object {
+        const val LOGIN_START_TIMEOUT_MILLIS = 15_000L
+
         fun sha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
         fun base64Url(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)

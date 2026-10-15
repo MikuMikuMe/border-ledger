@@ -1,21 +1,30 @@
 package com.lofuyu.borderledger.api
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.UnknownHostException
-import java.util.UUID
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /** Minimal owner-auth transport; full ledger/sync transports remain outside Task 5. */
 class HttpWorkerOwnerLoginClient(
     private val origin: String,
     private val environment: String,
     private val callbackUrl: String,
+    private val networkTimeoutMillis: Int = DEFAULT_NETWORK_TIMEOUT_MILLIS,
 ) : OwnerLoginClient {
+    private val requestExecutor = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "border-ledger-http").apply { isDaemon = true }
+    }
+
     override suspend fun startLogin(input: OwnerLoginStartRequest): OwnerLoginStartResponse {
         val body = JSONObject()
             .put("codeChallenge", input.codeChallenge)
@@ -67,12 +76,34 @@ class HttpWorkerOwnerLoginClient(
         body: JSONObject? = null,
         bearer: String? = null,
         idempotencyKey: String? = null,
-    ): JSONObject? = withContext(Dispatchers.IO) {
+    ): JSONObject? = runInterruptible(Dispatchers.IO) {
+        val request = requestExecutor.submit<JSONObject?> {
+            requestBlocking(method, path, body, bearer, idempotencyKey)
+        }
+        try {
+            request.get(networkTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+        } catch (_: TimeoutException) {
+            request.cancel(true)
+            throw TransportFailure.Offline
+        } catch (error: ExecutionException) {
+            throw error.cause ?: error
+        } finally {
+            request.cancel(true)
+        }
+    }
+
+    private fun requestBlocking(
+        method: String,
+        path: String,
+        body: JSONObject?,
+        bearer: String?,
+        idempotencyKey: String?,
+    ): JSONObject? {
         val connection = try {
             (URL(origin.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
-                connectTimeout = NETWORK_TIMEOUT_MILLIS
-                readTimeout = NETWORK_TIMEOUT_MILLIS
+                connectTimeout = networkTimeoutMillis
+                readTimeout = networkTimeoutMillis
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Cache-Control", "no-store")
                 if (bearer != null) setRequestProperty("Authorization", "Bearer $bearer")
@@ -87,10 +118,10 @@ class HttpWorkerOwnerLoginClient(
         } catch (_: IOException) {
             throw TransportFailure.Offline
         }
-        try {
+        return try {
             if (body != null) connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val code = connection.responseCode
-            if (code == HttpURLConnection.HTTP_NO_CONTENT) return@withContext null
+            if (code == HttpURLConnection.HTTP_NO_CONTENT) return null
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val responseText = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
             if (code !in 200..299) throw when (code) {
@@ -101,6 +132,8 @@ class HttpWorkerOwnerLoginClient(
             if (responseText.isBlank()) null else JSONObject(responseText)
         } catch (error: TransportFailure) {
             throw error
+        } catch (_: JSONException) {
+            throw TransportFailure.Retryable
         } catch (_: UnknownHostException) {
             throw TransportFailure.Offline
         } catch (_: IOException) {
@@ -132,6 +165,6 @@ class HttpWorkerOwnerLoginClient(
     }
 
     private companion object {
-        const val NETWORK_TIMEOUT_MILLIS = 15_000
+        const val DEFAULT_NETWORK_TIMEOUT_MILLIS = 10_000
     }
 }
