@@ -7,6 +7,7 @@ const gradle = readFileSync(resolve(root, 'android/app/build.gradle.kts'), 'utf8
 const releaseWorkflow = readFileSync(resolve(root, '.github/workflows/android-release.yml'), 'utf8');
 const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'), 'utf8');
 const wrangler = readFileSync(resolve(root, 'wrangler.jsonc'), 'utf8');
+const productionConfig = wrangler.slice(wrangler.indexOf('"production": {'));
 
 describe('release automation contract', () => {
   it('allows CI to provide a deterministic Android version while preserving local defaults', () => {
@@ -40,11 +41,12 @@ describe('release automation contract', () => {
     expect(releaseWorkflow).toContain('"-PreleaseVersionName=');
   });
 
-  it('deploys the named Cloudflare production environment and fails closed on missing credentials', () => {
+  it('deploys the existing Cloudflare production Worker and fails closed on missing credentials', () => {
     expect(deployWorkflow).toContain('CLOUDFLARE_API_TOKEN');
     expect(deployWorkflow).not.toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(deployWorkflow).toContain('Missing required Cloudflare deployment secret');
-    expect(deployWorkflow).toContain('d1 migrations apply border-ledger-production --remote --env production');
+    expect(deployWorkflow).toContain('d1 migrations apply border-ledger --remote --env production');
+    expect(deployWorkflow).not.toContain('border-ledger-production');
     expect(deployWorkflow).toContain('MOBILE_SESSION_ENCRYPTION_KEY');
     expect(deployWorkflow).toContain('command: deploy --env production --keep-vars --var');
     expect(deployWorkflow).toContain('deploymentRevision');
@@ -53,11 +55,14 @@ describe('release automation contract', () => {
     expect(deployWorkflow).not.toContain('deployment skipped');
   });
 
-  it('targets the existing production custom-domain Worker instead of creating a shadow Worker', () => {
+  it('targets the existing production Worker bindings instead of creating a shadow Worker', () => {
     expect(wrangler).toContain('"name": "border-ledger"');
     expect(wrangler).toContain('"account_id": "a0af41818e1b715f66046b0d7870ce70"');
-    expect(wrangler).not.toContain('"name": "border-ledger-production"');
-    expect(wrangler).toContain('"production": {');
-    expect(wrangler).toContain('"MOBILE_ACCESS_AUTHORIZATION_URL": "https://pf.lofuyu.com/mobile/authorize"');
+    expect(productionConfig).toContain('"name": "border-ledger"');
+    expect(productionConfig).toContain('"database_name": "border-ledger"');
+    expect(productionConfig).toContain('"database_id": "14378887-f604-4d04-95f1-26930405b5a8"');
+    expect(productionConfig).toContain('"queue": "border-ledger-sync"');
+    expect(productionConfig).not.toContain('border-ledger-production');
+    expect(productionConfig).toContain('"MOBILE_ACCESS_AUTHORIZATION_URL": "https://pf.lofuyu.com/mobile/authorize"');
   });
 });
