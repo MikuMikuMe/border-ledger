@@ -13,6 +13,15 @@ android {
         .orElse(1)
     val releaseVersionName = providers.gradleProperty("releaseVersionName")
         .orElse("0.1-foundation")
+    val mobileEnvironment = providers.gradleProperty("mobileEnvironment")
+        .map { value ->
+            value.trim().also {
+                if (it != "sandbox" && it != "production") {
+                    throw GradleException("mobileEnvironment must be sandbox or production")
+                }
+            }
+        }
+        .orElse("sandbox")
 
     defaultConfig {
         applicationId = "com.lofuyu.borderledger"
@@ -20,7 +29,7 @@ android {
         targetSdk = 36
         versionCode = releaseVersionCode.get()
         versionName = releaseVersionName.get()
-        buildConfigField("String", "MOBILE_ENVIRONMENT", "\"sandbox\"")
+        buildConfigField("String", "MOBILE_ENVIRONMENT", "\"${mobileEnvironment.get()}\"")
         buildConfigField("String", "MOBILE_API_ORIGIN", "\"https://pf.lofuyu.com\"")
         buildConfigField("String", "MOBILE_CALLBACK_SCHEME", "\"https\"")
         buildConfigField("String", "MOBILE_CALLBACK_HOST", "\"pf.lofuyu.com\"")
