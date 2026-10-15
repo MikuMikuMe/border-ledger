@@ -78,6 +78,7 @@ interface Env {
   MOBILE_APPROVED_ACCESS_ISSUERS?: string;
   MOBILE_APPROVED_ACCESS_AUDIENCES?: string;
   MOBILE_APPROVED_ACCESS_SUBJECTS?: string;
+  DEPLOYMENT_REVISION?: string;
 }
 
 type Currency = CurrencyCode;
@@ -952,7 +953,12 @@ export default {
     }
     if (!isApplicationOrigin) return json({ error: 'Not found' }, { status: 404 });
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...apiSecurityHeaders(), 'access-control-allow-methods': 'GET,POST,PATCH,OPTIONS', 'access-control-allow-headers': 'content-type,authorization,cf-access-jwt-assertion' } });
-    if (url.pathname === '/api/health' && request.method === 'GET') return json({ ok: true, service: 'border-ledger-api', time: new Date().toISOString() });
+    if (url.pathname === '/api/health' && request.method === 'GET') return json({
+      ok: true,
+      service: 'border-ledger-api',
+      deploymentRevision: env.DEPLOYMENT_REVISION ?? null,
+      time: new Date().toISOString(),
+    });
     if (url.pathname === '/api/webhooks/plaid' && request.method === 'POST') {
       try {
         return await handlePlaidWebhook(request, env);

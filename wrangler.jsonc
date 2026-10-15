@@ -44,7 +44,6 @@
   },
   "env": {
     "production": {
-      "name": "border-ledger-production",
       "triggers": {
         "crons": ["15 6 * * *"]
       },

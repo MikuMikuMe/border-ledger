@@ -6,6 +6,7 @@ const root = process.cwd();
 const gradle = readFileSync(resolve(root, 'android/app/build.gradle.kts'), 'utf8');
 const releaseWorkflow = readFileSync(resolve(root, '.github/workflows/android-release.yml'), 'utf8');
 const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'), 'utf8');
+const wrangler = readFileSync(resolve(root, 'wrangler.jsonc'), 'utf8');
 
 describe('release automation contract', () => {
   it('allows CI to provide a deterministic Android version while preserving local defaults', () => {
@@ -20,6 +21,9 @@ describe('release automation contract', () => {
     expect(releaseWorkflow).toContain('android/**');
     expect(releaseWorkflow).toContain('src/**');
     expect(releaseWorkflow).toContain('contracts/**');
+    expect(releaseWorkflow).not.toContain('package.json');
+    expect(releaseWorkflow).not.toContain('package-lock.json');
+    expect(releaseWorkflow).toContain("if: github.ref == 'refs/heads/main'");
     expect(releaseWorkflow).toContain('if-no-files-found: error');
     expect(releaseWorkflow).toContain('contents: write');
     expect(releaseWorkflow).toContain('assembleRelease');
@@ -38,8 +42,18 @@ describe('release automation contract', () => {
     expect(deployWorkflow).toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(deployWorkflow).toContain('Missing required Cloudflare deployment secret');
     expect(deployWorkflow).toContain('d1 migrations apply border-ledger-production --remote --env production');
-    expect(deployWorkflow).toContain('command: deploy --env production');
+    expect(deployWorkflow).toContain('MOBILE_ACCESS_AUTHORIZATION_URL');
+    expect(deployWorkflow).toContain('MOBILE_SESSION_ENCRYPTION_KEY');
+    expect(deployWorkflow).toContain('command: deploy --env production --keep-vars --var');
+    expect(deployWorkflow).toContain('deploymentRevision');
+    expect(deployWorkflow).toContain('/api/mobile/v1/auth/requests');
     expect(deployWorkflow).not.toContain('configured=false');
     expect(deployWorkflow).not.toContain('deployment skipped');
+  });
+
+  it('targets the existing production custom-domain Worker instead of creating a shadow Worker', () => {
+    expect(wrangler).toContain('"name": "border-ledger"');
+    expect(wrangler).not.toContain('"name": "border-ledger-production"');
+    expect(wrangler).toContain('"production": {');
   });
 });

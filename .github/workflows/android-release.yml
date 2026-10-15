@@ -9,8 +9,6 @@ on:
       - src/**
       - index.html
       - contracts/**
-      - package.json
-      - package-lock.json
       - tsconfig.json
       - vite.config.ts
       - public/**
@@ -22,7 +20,9 @@ permissions:
 jobs:
   release:
     # A backend-only change never matches the path filter above. Manual runs
-    # remain available for an explicitly requested recovery release.
+    # are intentionally limited to main so a feature branch cannot publish a
+    # production APK or overwrite a release tag.
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     permissions:
       contents: write
