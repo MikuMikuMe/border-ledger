@@ -92,7 +92,7 @@ function json(data: unknown, init: ResponseInit = {}) {
 
 function configFromEnv(env: MobileRouteEnv): MobileAuthConfig {
   const canonicalOrigin = env.LEDGER_APP_ORIGIN?.split(',')[0]?.trim();
-  if (!canonicalOrigin || !env.MOBILE_ACCESS_AUTHORIZATION_URL || !env.MOBILE_SESSION_ENCRYPTION_KEY) throw new MobileAuthError('configuration', 'Mobile authorization is not configured.', 503);
+  if (!canonicalOrigin || !env.MOBILE_ACCESS_AUTHORIZATION_URL || !env.MOBILE_SESSION_ENCRYPTION_KEY || env.MOBILE_SESSION_ENCRYPTION_KEY.length < 16) throw new MobileAuthError('configuration', 'Mobile authorization is not configured.', 503);
   const callbackUrl = env.MOBILE_CALLBACK_URL ?? `${canonicalOrigin}/android/auth/callback`;
   assertHttpsCallback(callbackUrl, { canonicalOrigin, callbackUrl, environment: env.MOBILE_ENVIRONMENT ?? '', accessAuthorizationUrl: env.MOBILE_ACCESS_AUTHORIZATION_URL, sessionEncryptionKey: env.MOBILE_SESSION_ENCRYPTION_KEY });
   return {
@@ -106,6 +106,15 @@ function configFromEnv(env: MobileRouteEnv): MobileAuthConfig {
     approvedAccessSubjects: splitEnv(env.MOBILE_APPROVED_ACCESS_SUBJECTS),
     now: env.now,
   };
+}
+
+export function isMobileAuthConfigured(env: MobileRouteEnv) {
+  try {
+    configFromEnv(env);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function splitEnv(value: string | undefined) {

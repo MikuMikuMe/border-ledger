@@ -24,6 +24,7 @@ describe('release automation contract', () => {
     expect(releaseWorkflow).toContain('package.json');
     expect(releaseWorkflow).toContain('package-lock.json');
     expect(releaseWorkflow).toContain('Distinguish app changes from backend-only package changes');
+    expect(releaseWorkflow).toContain('detect-android-release-change.mjs');
     expect(releaseWorkflow).toContain("needs.detect-app-change.outputs.app_changed == 'true'");
     expect(releaseWorkflow).toContain("github.ref == 'refs/heads/main'");
     expect(releaseWorkflow).toContain('if-no-files-found: error');

@@ -14,6 +14,7 @@ on:
       - tsconfig.json
       - vite.config.ts
       - public/**
+      - scripts/detect-android-release-change.mjs
       - .github/workflows/android-release.yml
 
 permissions:
@@ -46,30 +47,12 @@ jobs:
             exit 0
           fi
 
-          mapfile -t changed < <(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")
-          package_changed=false
-          non_package_changed=false
-          backend_only=true
-          for path in "${changed[@]}"; do
-            case "$path" in
-              package.json|package-lock.json)
-                package_changed=true
-                ;;
-              worker/*|wrangler.jsonc|.github/workflows/deploy.yml|tests/worker-*|tests/ledger-*|tests/fx-*)
-                non_package_changed=true
-                ;;
-              *)
-                non_package_changed=true
-                backend_only=false
-                ;;
-            esac
-          done
-
-          if [[ "$package_changed" == true && "$non_package_changed" == true && "$backend_only" == true ]]; then
-            echo 'app_changed=false' >> "$GITHUB_OUTPUT"
-            echo 'Only backend paths and package manifests changed; Android release is skipped.'
-          else
-            echo 'app_changed=true' >> "$GITHUB_OUTPUT"
+          changed_paths="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"
+          package_diff="$(git diff --unified=0 "$BEFORE_SHA" "$CURRENT_SHA" -- package.json package-lock.json)"
+          result="$(CHANGED_PATHS="$changed_paths" PACKAGE_DIFF="$package_diff" EVENT_NAME="$EVENT_NAME" node scripts/detect-android-release-change.mjs)"
+          echo "$result" >> "$GITHUB_OUTPUT"
+          if [[ "$result" == 'app_changed=false' ]]; then
+            echo 'Only backend paths and backend dependency manifests changed; Android release is skipped.'
           fi
 
   release:

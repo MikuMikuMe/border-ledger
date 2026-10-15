@@ -38,7 +38,7 @@ import {
   validateImportPayload,
   validatePlaidExchangeInput,
 } from './validation';
-import { handleMobileRequest } from './mobile';
+import { handleMobileRequest, isMobileAuthConfigured } from './mobile';
 import type { AccessIdentity } from './mobile-auth';
 import { applyAlertReview, commitStatementRows, ReconciliationConflictError, ReconciliationReviewError } from './reconciliation-store';
 import type { ValidatedImportPayload } from './validation';
@@ -957,7 +957,7 @@ export default {
       ok: true,
       service: 'border-ledger-api',
       deploymentRevision: env.DEPLOYMENT_REVISION ?? null,
-      mobileAuthConfigured: Boolean(env.MOBILE_ACCESS_AUTHORIZATION_URL && env.MOBILE_SESSION_ENCRYPTION_KEY),
+      mobileAuthConfigured: isMobileAuthConfigured(env),
       time: new Date().toISOString(),
     });
     if (url.pathname === '/api/webhooks/plaid' && request.method === 'POST') {
