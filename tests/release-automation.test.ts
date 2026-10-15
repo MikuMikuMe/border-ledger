@@ -15,6 +15,8 @@ describe('release automation contract', () => {
     expect(gradle).toContain('gradleProperty("releaseVersionName")');
     expect(gradle).toContain('versionCode = releaseVersionCode');
     expect(gradle).toContain('versionName = releaseVersionName');
+    expect(gradle).toContain('gradleProperty("mobileEnvironment")');
+    expect(gradle).toContain('buildConfigField("String", "MOBILE_ENVIRONMENT"');
   });
 
   it('publishes an Android release only from app-owned changes on main', () => {
@@ -39,6 +41,7 @@ describe('release automation contract', () => {
     expect(releaseWorkflow).toContain('releaseVersionName');
     expect(releaseWorkflow).toContain('"-PreleaseVersionCode=');
     expect(releaseWorkflow).toContain('"-PreleaseVersionName=');
+    expect(releaseWorkflow).toContain('"-PmobileEnvironment=production"');
   });
 
   it('deploys the existing Cloudflare production Worker and fails closed on missing credentials', () => {
@@ -48,6 +51,10 @@ describe('release automation contract', () => {
     expect(deployWorkflow).toContain('d1 migrations apply border-ledger --remote --env production');
     expect(deployWorkflow).not.toContain('border-ledger-production');
     expect(deployWorkflow).toContain('MOBILE_SESSION_ENCRYPTION_KEY');
+    expect(deployWorkflow).toContain('MOBILE_APPROVED_ACCESS_ISSUERS');
+    expect(deployWorkflow).toContain('MOBILE_APPROVED_ACCESS_AUDIENCES');
+    expect(deployWorkflow).toContain('MOBILE_APPROVED_ACCESS_SUBJECTS');
+    expect(deployWorkflow).toContain('Missing required production Worker secret');
     expect(deployWorkflow).toContain('command: deploy --env production --keep-vars --var');
     expect(deployWorkflow).toContain('deploymentRevision');
     expect(deployWorkflow).toContain('mobileAuthConfigured');
