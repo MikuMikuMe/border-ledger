@@ -71,12 +71,18 @@ npm run build
 
 ### Production rollout gate
 
-The default Wrangler environment remains Sandbox. A separate `production` environment is prepared in `wrangler.jsonc`; it uses a distinct Worker name, D1 database (`border-ledger-production`), primary Queue (`border-ledger-production-sync`), and dead-letter Queue (`border-ledger-production-sync-dlq`) so a production deploy cannot silently reuse Sandbox state. Wrangler environments do not inherit bindings or variables, so every production binding is declared explicitly.
+The live production service is the existing `border-ledger` Worker used by [pf.lofuyu.com](https://pf.lofuyu.com). The Wrangler `production` environment explicitly names that same Worker, keeps the default environment on Sandbox settings, and binds production code to the existing `border-ledger` D1 database and `border-ledger-sync` Queue. Do not create or deploy a shadow `border-ledger-production` Worker.
 
-Before a real bank connection, complete these steps in order:
+Before connecting a real bank Item, complete these steps in order:
 
 1. Obtain Plaid production approval and confirm the production client ID/secret are for the intended account.
-2. Provision production-only secrets into the production Worker:
+2. Verify the existing production Worker secrets without replacing stable encryption keys:
+
+   ```bash
+   npx wrangler secret list --env production
+   ```
+
+   The existing Worker already contains the production Plaid, Access, API, and `MOBILE_SESSION_ENCRYPTION_KEY` secrets. Add or rotate a secret only when it is genuinely missing or intentionally being rotated:
 
    ```bash
    npx wrangler secret put LEDGER_API_KEY --env production
@@ -88,30 +94,30 @@ Before a real bank connection, complete these steps in order:
    npx wrangler secret put MOBILE_SESSION_ENCRYPTION_KEY --env production
    ```
 
-   `MOBILE_ACCESS_AUTHORIZATION_URL` is the deployed, Access-protected SPA page that receives `request_id` and PKCE `state`; keep it as the production runtime variable declared in `wrangler.jsonc`, not as a secret. Generate `MOBILE_SESSION_ENCRYPTION_KEY` independently as a fresh random value, for example with the PowerShell command above, and keep it out of the repository. `PLAID_ENCRYPTION_KEY` must also be a fresh base64 or hex encoding of exactly 32 random bytes. Do not copy Sandbox secrets into production unless that is intentional.
-3. Apply all versioned migrations to the production D1 database:
+   Keep the existing `MOBILE_SESSION_ENCRYPTION_KEY` stable; replacing it invalidates sessions and outstanding mobile authorization state. `MOBILE_ACCESS_AUTHORIZATION_URL` is a non-secret production variable declared in `wrangler.jsonc`.
+
+3. Apply the versioned migrations to the existing production database:
 
    ```bash
-   npx wrangler d1 migrations apply border-ledger-production --remote --env production
+   npx wrangler d1 migrations apply border-ledger --remote --env production
    ```
-4. Build and deploy the named environment:
+
+4. Build and deploy the existing production Worker:
 
    ```bash
    npm run typecheck
    npm test
    npm run build
-   npx wrangler deploy --env production
+   npx wrangler deploy --env production --keep-vars
    ```
 
-5. Point the protected `pf.lofuyu.com` Worker route and Access application at the production Worker. Keep `/app/*` and financial API routes behind the existing Access allow policy; keep only `/api/webhooks/plaid` bypassed. The two approved Access identities are the owner-controlled addresses already configured for this app.
-6. Keep the Cloudflare zone rule `Border Ledger Plaid webhook protection` enabled for `POST /api/webhooks/plaid`. It currently allows 20 requests per 10 seconds per source IP/colo and blocks for 10 seconds. The webhook is intentionally public to Plaid; signature verification is necessary but does not replace edge throttling.
+5. Keep the existing `pf.lofuyu.com` route and Access application attached to `border-ledger`. Keep `/app/*` and financial API routes behind the existing Access allow policy; keep only `/api/webhooks/plaid` bypassed. The deployment workflow does not alter Access policies.
+
+6. Keep the Cloudflare zone rule `Border Ledger Plaid webhook protection` enabled for `POST /api/webhooks/plaid`. The webhook is intentionally public to Plaid; signature verification is necessary but does not replace edge throttling.
+
 7. Smoke-test through the custom origin: Access-protected `/app`, authenticated `/api/accounts`, raw-host redirect/`404` behavior, a Plaid Link connection with only the intended account selected, one sync, and the disconnect action. Confirm that disconnect revokes the Item and preserves existing ledger history.
 
 Do not set `PLAID_ENV=production` on the default environment or connect an RBC Item until the production Worker, Access route, secrets, rate limit, and smoke tests all pass.
-
-Cloudflare Access is the intended private-login boundary. The Worker still keeps bank integrations server-side and never accepts bank passwords.
-
-The single-page UI serves the public front desk at `/` and the authenticated dashboard at `/app`. If an existing hostname-wide Access application currently intercepts the whole Worker, narrow that application to `/app/*` and the API paths (or add an explicit public-root policy) so friends can read the front page without exposing financial data.
 
 ## Import format
 
