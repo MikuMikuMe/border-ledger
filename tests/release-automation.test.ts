@@ -45,7 +45,6 @@ describe('release automation contract', () => {
     expect(deployWorkflow).toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(deployWorkflow).toContain('Missing required Cloudflare deployment secret');
     expect(deployWorkflow).toContain('d1 migrations apply border-ledger-production --remote --env production');
-    expect(deployWorkflow).toContain('MOBILE_ACCESS_AUTHORIZATION_URL');
     expect(deployWorkflow).toContain('MOBILE_SESSION_ENCRYPTION_KEY');
     expect(deployWorkflow).toContain('command: deploy --env production --keep-vars --var');
     expect(deployWorkflow).toContain('deploymentRevision');
@@ -58,5 +57,6 @@ describe('release automation contract', () => {
     expect(wrangler).toContain('"name": "border-ledger"');
     expect(wrangler).not.toContain('"name": "border-ledger-production"');
     expect(wrangler).toContain('"production": {');
+    expect(wrangler).toContain('"MOBILE_ACCESS_AUTHORIZATION_URL": "https://pf.lofuyu.com/mobile/authorize"');
   });
 });
