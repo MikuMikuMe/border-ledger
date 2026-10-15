@@ -43,11 +43,12 @@ import { formatReportingDay, getReportWindows, type ReportingTimezone, type Week
 import type { Account, ReportWindow, Transaction } from './domain/types';
 import { getCurrencyMeta, supportedCurrencyCodes, type CurrencyCode } from './domain/currencies';
 import RecurringView from './components/RecurringView';
+import MobileAuthorizationPage from './MobileAuthorizationPage';
 
 type View = 'overview' | 'recurring' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
 type ChartRange = 'daily' | 'weekly' | 'monthly';
-type AppRoute = 'landing' | 'workspace';
+type AppRoute = 'landing' | 'workspace' | 'mobile-authorization';
 type AppAccount = Omit<Account, 'currency'> & { currency: CurrencyCode };
 type CurrencyTotals = Record<string, number>;
 interface ChartEntry {
@@ -501,6 +502,8 @@ function connectionErrorMessage(error: unknown) {
 
 interface AppProps {
   initialRoute?: AppRoute;
+  authorizationRequestId?: string | null;
+  authorizationState?: string | null;
 }
 
 interface PendingPlaidConnection {
@@ -509,8 +512,12 @@ interface PendingPlaidConnection {
   accounts: PlaidAccountMetadata[];
 }
 
-function App({ initialRoute = 'workspace' }: AppProps) {
-  return initialRoute === 'landing' ? <LandingPage /> : <WorkspaceApp />;
+function App({ initialRoute = 'workspace', authorizationRequestId = null, authorizationState = null }: AppProps) {
+  if (initialRoute === 'landing') return <LandingPage />;
+  if (initialRoute === 'mobile-authorization') {
+    return <MobileAuthorizationPage requestId={authorizationRequestId} state={authorizationState} />;
+  }
+  return <WorkspaceApp />;
 }
 
 function WorkspaceApp() {

@@ -13,7 +13,7 @@ const CONFIG = {
   canonicalOrigin: ORIGIN,
   callbackUrl: `${ORIGIN}/android/auth/callback`,
   environment: ENVIRONMENT,
-  accessAuthorizationUrl: 'https://access.example.com/authorize',
+  accessAuthorizationUrl: `${ORIGIN}/mobile/authorize`,
   sessionEncryptionKey: SESSION_KEY,
 };
 

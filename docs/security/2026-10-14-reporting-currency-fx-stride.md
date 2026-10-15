@@ -31,4 +31,3 @@ The protected Worker reads the single-owner D1 ledger, fetches official Frankfur
 ## Decision
 
 No high-severity security finding was found in the feature implementation. The local static/native/browser evidence is green, with the device/interactive-browser limitations above. Normal production operational controls remain for Access, D1, rate limiting, and release signing.
-

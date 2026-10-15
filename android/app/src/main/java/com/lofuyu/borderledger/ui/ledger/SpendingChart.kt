@@ -135,4 +135,3 @@ private fun ChartLane(lane: SpendingChartLane, target: Boolean) {
 }
 
 private fun List<SpendingChartPoint>.maxAbs(): Long = maxOf(0L, maxOfOrNull { kotlin.math.abs(it.amountMinorUnits) } ?: 0L)
-

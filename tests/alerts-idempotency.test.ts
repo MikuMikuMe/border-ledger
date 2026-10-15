@@ -44,7 +44,7 @@ describe('mobile alert idempotency', () => {
       DB: fixture.db,
       LEDGER_APP_ORIGIN: 'https://pf.example.com',
       MOBILE_ENVIRONMENT: 'sandbox',
-      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://pf.example.com/mobile/authorize',
       MOBILE_SESSION_ENCRYPTION_KEY: 'synthetic-session-key-for-alert-tests',
     } as never);
     expect(response.status).toBe(200);
@@ -61,7 +61,7 @@ describe('mobile alert idempotency', () => {
       DB: fixture.db,
       LEDGER_APP_ORIGIN: 'https://pf.example.com',
       MOBILE_ENVIRONMENT: 'sandbox',
-      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://pf.example.com/mobile/authorize',
       MOBILE_SESSION_ENCRYPTION_KEY: 'synthetic-session-key-for-alert-tests',
     } as never);
     const body = await response.json() as Record<string, unknown>;
@@ -85,7 +85,7 @@ describe('mobile alert idempotency', () => {
       DB: fixture.db,
       LEDGER_APP_ORIGIN: 'https://pf.example.com',
       MOBILE_ENVIRONMENT: 'sandbox',
-      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://pf.example.com/mobile/authorize',
       MOBILE_SESSION_ENCRYPTION_KEY: 'synthetic-session-key-for-alert-tests',
     } as never);
 
@@ -100,7 +100,7 @@ describe('mobile alert idempotency', () => {
       DB: fixture.db,
       LEDGER_APP_ORIGIN: 'https://pf.example.com',
       MOBILE_ENVIRONMENT: 'sandbox',
-      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://pf.example.com/mobile/authorize',
       MOBILE_SESSION_ENCRYPTION_KEY: 'synthetic-session-key-for-alert-tests',
     } as never);
     expect(response.status).toBe(400);
@@ -124,7 +124,7 @@ describe('mobile alert idempotency', () => {
       DB: fixture.db,
       LEDGER_APP_ORIGIN: 'https://pf.example.com',
       MOBILE_ENVIRONMENT: 'sandbox',
-      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+      MOBILE_ACCESS_AUTHORIZATION_URL: 'https://pf.example.com/mobile/authorize',
       MOBILE_SESSION_ENCRYPTION_KEY: 'synthetic-session-key-for-alert-tests',
     } as never);
     expect(await status.json()).toMatchObject({ deviceId: 'capture-device-2', receipt: null, lastAcceptedAt: null });

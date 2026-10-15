@@ -137,9 +137,23 @@ export async function runTask4Cases() {
 
     const ownerFlow = await beginAndApproveOwner(fixture.db, cfg);
     assert.equal(ownerFlow.start.expiresAt, '2026-10-13T12:10:00.000Z');
-    assert.match(ownerFlow.start.authorizationUrl, /request_id=/);
-    assert.ok(!ownerFlow.start.authorizationUrl.includes(ownerFlow.state));
-    assert.equal(ownerFlow.approval.expiresAt, '2026-10-13T12:02:00.000Z');
+    const authorizationUrl = new URL(ownerFlow.start.authorizationUrl);
+    assert.equal(authorizationUrl.searchParams.get('request_id'), ownerFlow.start.requestId);
+    assert.equal(authorizationUrl.searchParams.get('state'), ownerFlow.state);
+    assert.equal(ownerFlow.approval.expiresAt, '2026-10-13T12:01:00.000Z');
+
+    const duplicateApproval = await approveOwnerLogin(fixture.db, {
+      requestId: ownerFlow.start.requestId,
+      identity: {
+        subject: OWNER_SUBJECT,
+        issuer: 'https://team.cloudflareaccess.com',
+        audience: 'synthetic-mobile-audience',
+      },
+      environment: cfg.environment,
+      callbackUrl: cfg.callbackUrl,
+      consent: true,
+    }, cfg);
+    assert.deepEqual(duplicateApproval, ownerFlow.approval);
 
     const storedRequest = await fixture.db.prepare('SELECT state_hash, pkce_challenge_hash, code_hash, approved_subject_hash, callback_origin, callback_path FROM mobile_auth_requests WHERE id = ?')
       .bind(ownerFlow.start.requestId).all<Record<string, string>>();

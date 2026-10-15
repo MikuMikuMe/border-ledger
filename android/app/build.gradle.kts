@@ -8,13 +8,28 @@ android {
     namespace = "com.lofuyu.borderledger"
     compileSdk = 36
 
+    val releaseVersionCode = providers.gradleProperty("releaseVersionCode")
+        .map { value -> value.toIntOrNull() ?: throw GradleException("releaseVersionCode must be an integer") }
+        .orElse(1)
+    val releaseVersionName = providers.gradleProperty("releaseVersionName")
+        .orElse("0.1-foundation")
+    val mobileEnvironment = providers.gradleProperty("mobileEnvironment")
+        .map { value ->
+            value.trim().also {
+                if (it != "sandbox" && it != "production") {
+                    throw GradleException("mobileEnvironment must be sandbox or production")
+                }
+            }
+        }
+        .orElse("sandbox")
+
     defaultConfig {
         applicationId = "com.lofuyu.borderledger"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1-foundation"
-        buildConfigField("String", "MOBILE_ENVIRONMENT", "\"sandbox\"")
+        versionCode = releaseVersionCode.get()
+        versionName = releaseVersionName.get()
+        buildConfigField("String", "MOBILE_ENVIRONMENT", "\"${mobileEnvironment.get()}\"")
         buildConfigField("String", "MOBILE_API_ORIGIN", "\"https://pf.lofuyu.com\"")
         buildConfigField("String", "MOBILE_CALLBACK_SCHEME", "\"https\"")
         buildConfigField("String", "MOBILE_CALLBACK_HOST", "\"pf.lofuyu.com\"")

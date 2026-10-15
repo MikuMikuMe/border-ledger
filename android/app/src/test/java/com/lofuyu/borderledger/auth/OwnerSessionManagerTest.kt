@@ -11,6 +11,7 @@ import com.lofuyu.borderledger.local.LocalDataPolicy
 import com.lofuyu.borderledger.local.SecureStorageException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -80,6 +81,40 @@ class OwnerSessionManagerTest {
         assertTrue(manager.state.value is OwnerSessionState.SignedOut)
         assertEquals(null, store.session)
         assertEquals(0, client.exchangeCalls.get())
+    }
+
+    @Test
+    fun stalledLoginStartReturnsToRetryableOfflineState() = runTest {
+        val store = TestOwnerSessionStore()
+        val client = TestOwnerLoginClient(startDelayMillis = 20_000)
+        val manager = manager(store, client)
+
+        assertThrows<TransportFailure.Offline> {
+            manager.beginLogin(staySignedIn = false, pendingDestination = "/capture")
+        }
+
+        assertEquals(
+            OwnerSessionState.SignedOut(reason = SignedOutReason.StartFailed),
+            manager.state.value,
+        )
+        assertEquals(null, store.pendingLogin)
+    }
+
+    @Test
+    fun unexpectedLoginStartFailureReturnsToRetryableStartFailedState() = runTest {
+        val store = TestOwnerSessionStore()
+        val client = TestOwnerLoginClient(startFailure = IllegalStateException("malformed response"))
+        val manager = manager(store, client)
+
+        assertThrows<IllegalStateException> {
+            manager.beginLogin(staySignedIn = false, pendingDestination = "/capture")
+        }
+
+        assertEquals(
+            OwnerSessionState.SignedOut(reason = SignedOutReason.StartFailed),
+            manager.state.value,
+        )
+        assertEquals(null, store.pendingLogin)
     }
 
     @Test
@@ -319,7 +354,11 @@ private class TestOwnerSessionStore(
     }
 }
 
-private class TestOwnerLoginClient(private val offline: Boolean = false) : OwnerLoginClient {
+private class TestOwnerLoginClient(
+    private val offline: Boolean = false,
+    private val startDelayMillis: Long = 0,
+    private val startFailure: Throwable? = null,
+) : OwnerLoginClient {
     var lastStart: OwnerLoginStartRequest? = null
     val exchangeCalls = AtomicInteger()
     val refreshCalls = AtomicInteger()
@@ -328,6 +367,8 @@ private class TestOwnerLoginClient(private val offline: Boolean = false) : Owner
 
     override suspend fun startLogin(input: OwnerLoginStartRequest): OwnerLoginStartResponse {
         lastStart = input
+        if (startDelayMillis > 0) delay(startDelayMillis)
+        startFailure?.let { throw it }
         return OwnerLoginStartResponse("synthetic-request", "https://access.example/authorize", "2099-01-01T00:00:00Z")
     }
 

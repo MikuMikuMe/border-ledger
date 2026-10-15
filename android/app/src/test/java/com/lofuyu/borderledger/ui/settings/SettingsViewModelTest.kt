@@ -37,4 +37,3 @@ class SettingsViewModelTest {
         assertEquals("JPY", viewModel.state.value.preferences?.preferredCurrency)
     }
 }
-

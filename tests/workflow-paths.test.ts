@@ -15,6 +15,7 @@ const APP_PATH_ALLOWLIST = [
   'vite.config.ts',
   'public/**',
   '.github/workflows/app-build.yml',
+  '.github/workflows/android-release.yml',
 ];
 
 type WorkflowTrigger = 'push' | 'pull_request';
@@ -70,6 +71,7 @@ describe('app-build workflow path contract', () => {
       'vite.config.ts',
       'public/brand.svg',
       '.github/workflows/app-build.yml',
+      '.github/workflows/android-release.yml',
     ];
     const backendOnlyChanges = [
       'worker/index.ts',

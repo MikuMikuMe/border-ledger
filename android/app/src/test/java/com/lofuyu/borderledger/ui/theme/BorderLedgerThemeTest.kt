@@ -16,4 +16,3 @@ class BorderLedgerThemeTest {
         assertEquals(ThemeColorSource.BrandLight, themeColorSource(AppearanceMode.System, systemDark = false, dynamicColorAvailable = false))
     }
 }
-

@@ -85,15 +85,72 @@ export interface MobileRouteEnv {
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
+const MOBILE_AUTHORIZATION_PATH = '/mobile/authorize';
+const MOBILE_CALLBACK_PATH = '/android/auth/callback';
 
 function json(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), { ...init, headers: { ...apiSecurityHeaders(), ...JSON_HEADERS, ...init.headers } });
 }
 
+function assertMobileAuthorizationUrl(value: string, canonicalOrigin: string) {
+  let authorization: URL;
+  let canonical: URL;
+  try {
+    authorization = new URL(value);
+    canonical = new URL(canonicalOrigin);
+  } catch {
+    throw new Error('invalid mobile authorization URL');
+  }
+  if (
+    authorization.protocol !== 'https:'
+    || canonical.protocol !== 'https:'
+    || authorization.origin !== canonical.origin
+    || authorization.pathname !== MOBILE_AUTHORIZATION_PATH
+    || authorization.search
+    || authorization.hash
+    || authorization.username
+    || authorization.password
+  ) {
+    throw new Error('invalid mobile authorization URL');
+  }
+}
+
+function assertMobileCallbackUrl(value: string, canonicalOrigin: string) {
+  let callback: URL;
+  let canonical: URL;
+  try {
+    callback = new URL(value);
+    canonical = new URL(canonicalOrigin);
+  } catch {
+    throw new Error('invalid mobile callback URL');
+  }
+  if (
+    callback.protocol !== 'https:'
+    || canonical.protocol !== 'https:'
+    || callback.origin !== canonical.origin
+    || callback.pathname !== MOBILE_CALLBACK_PATH
+    || callback.search
+    || callback.hash
+    || callback.username
+    || callback.password
+  ) {
+    throw new Error('invalid mobile callback URL');
+  }
+}
+
 function configFromEnv(env: MobileRouteEnv): MobileAuthConfig {
   const canonicalOrigin = env.LEDGER_APP_ORIGIN?.split(',')[0]?.trim();
-  if (!canonicalOrigin || !env.MOBILE_ACCESS_AUTHORIZATION_URL || !env.MOBILE_SESSION_ENCRYPTION_KEY) throw new MobileAuthError('configuration', 'Mobile authorization is not configured.', 503);
+  if (!canonicalOrigin || !env.MOBILE_ACCESS_AUTHORIZATION_URL || !env.MOBILE_SESSION_ENCRYPTION_KEY || env.MOBILE_SESSION_ENCRYPTION_KEY.length < 16) throw new MobileAuthError('configuration', 'Mobile authorization is not configured.', 503);
+  try {
+    assertMobileAuthorizationUrl(env.MOBILE_ACCESS_AUTHORIZATION_URL, canonicalOrigin);
+  } catch {
+    throw new MobileAuthError('configuration', 'Mobile authorization is not configured.', 503);
+  }
   const callbackUrl = env.MOBILE_CALLBACK_URL ?? `${canonicalOrigin}/android/auth/callback`;
+  const approvedAccessIssuers = splitEnv(env.MOBILE_APPROVED_ACCESS_ISSUERS);
+  const approvedAccessAudiences = splitEnv(env.MOBILE_APPROVED_ACCESS_AUDIENCES);
+  const approvedAccessSubjects = splitEnv(env.MOBILE_APPROVED_ACCESS_SUBJECTS);
+  assertMobileCallbackUrl(callbackUrl, canonicalOrigin);
   assertHttpsCallback(callbackUrl, { canonicalOrigin, callbackUrl, environment: env.MOBILE_ENVIRONMENT ?? '', accessAuthorizationUrl: env.MOBILE_ACCESS_AUTHORIZATION_URL, sessionEncryptionKey: env.MOBILE_SESSION_ENCRYPTION_KEY });
   return {
     canonicalOrigin,
@@ -101,11 +158,24 @@ function configFromEnv(env: MobileRouteEnv): MobileAuthConfig {
     environment: env.MOBILE_ENVIRONMENT ?? 'production',
     accessAuthorizationUrl: env.MOBILE_ACCESS_AUTHORIZATION_URL,
     sessionEncryptionKey: env.MOBILE_SESSION_ENCRYPTION_KEY,
-    approvedAccessIssuers: splitEnv(env.MOBILE_APPROVED_ACCESS_ISSUERS),
-    approvedAccessAudiences: splitEnv(env.MOBILE_APPROVED_ACCESS_AUDIENCES),
-    approvedAccessSubjects: splitEnv(env.MOBILE_APPROVED_ACCESS_SUBJECTS),
+    approvedAccessIssuers,
+    approvedAccessAudiences,
+    approvedAccessSubjects,
     now: env.now,
   };
+}
+
+export function isMobileAuthConfigured(env: MobileRouteEnv) {
+  try {
+    const config = configFromEnv(env);
+    return Boolean(
+      config.approvedAccessIssuers?.length
+      && config.approvedAccessAudiences?.length
+      && config.approvedAccessSubjects?.length
+    );
+  } catch {
+    return false;
+  }
 }
 
 function splitEnv(value: string | undefined) {
@@ -222,7 +292,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
           environment: config.environment,
           callbackUrl: config.callbackUrl,
         }, config);
-        return json({ approved: true, expiresAt: result.expiresAt, code: result.code }, { status: 200 });
+        return json({ approved: true, expiresAt: result.expiresAt, code: result.code, callbackUrl: result.callbackUrl }, { status: 200 });
       }
       const pairingMatch = url.pathname.match(/^\/api\/device-pairings\/([^/]+)\/approval$/);
       if (!pairingMatch) return json({ code: 'not_found', message: 'Not found.', requestId: requestId(), retryable: false }, { status: 404 });

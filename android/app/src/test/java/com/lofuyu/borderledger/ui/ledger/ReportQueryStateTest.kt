@@ -36,4 +36,3 @@ class ReportQueryStateTest {
         assertTrue(reportDateWindow(ReportWindow.Week, sunday, DayOfWeek.MONDAY).startDate == java.time.LocalDate.parse("2026-10-12"))
     }
 }
-

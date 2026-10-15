@@ -80,7 +80,7 @@ function routeEnv(db: import('../worker/db-types').D1Database) {
     DB: db,
     LEDGER_APP_ORIGIN: ROUTE_ORIGIN,
     MOBILE_ENVIRONMENT: ROUTE_ENVIRONMENT,
-    MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+    MOBILE_ACCESS_AUTHORIZATION_URL: `${ROUTE_ORIGIN}/mobile/authorize`,
     MOBILE_SESSION_ENCRYPTION_KEY: ROUTE_SESSION_KEY,
     PLAID_CLIENT_ID: 'server-client-id',
     PLAID_SECRET: 'server-secret',

@@ -5,13 +5,19 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import android.content.Intent
+import android.graphics.Color as AndroidColor
+import android.os.Build
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import com.lofuyu.borderledger.auth.OwnerSessionState
@@ -44,6 +50,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = AndroidColor.TRANSPARENT
+        window.navigationBarColor = AndroidColor.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
         container = (application as BorderLedgerApplication).container
         plaidLinkLauncher = OfficialPlaidLinkLauncher(this) { result ->
             lifecycleScope.launch { container.plaidLinkCoordinator.recover(result) }
@@ -82,7 +94,18 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val appearance by container.themePreferences.mode.collectAsState(initial = com.lofuyu.borderledger.ui.theme.AppearanceMode.System)
+            val systemDark = isSystemInDarkTheme()
+            val dark = when (appearance) {
+                com.lofuyu.borderledger.ui.theme.AppearanceMode.System -> systemDark
+                com.lofuyu.borderledger.ui.theme.AppearanceMode.Light -> false
+                com.lofuyu.borderledger.ui.theme.AppearanceMode.Dark -> true
+            }
             val sessionState by container.ownerSessionManager.state.collectAsState()
+            SideEffect {
+                val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+                insetsController.isAppearanceLightStatusBars = !dark
+                insetsController.isAppearanceLightNavigationBars = !dark
+            }
             LaunchedEffect(Unit) { container.ownerSessionManager.restore() }
             LaunchedEffect(sessionState) {
                 container.captureOnboarding.syncOwnerSessionState()

@@ -29,7 +29,7 @@ const owner: OwnerContext = {
   deviceId: null,
   accessGeneration: 1,
   scopes: ['imports:write', 'exports:read'],
-  expiresAt: '2026-10-14T13:00:00.000Z',
+  expiresAt: '2027-01-10T13:00:00.000Z',
   environmentHash: 'task12-environment-hash',
 };
 
@@ -84,7 +84,7 @@ function routeEnv(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
     DB: db,
     LEDGER_APP_ORIGIN: ROUTE_ORIGIN,
     MOBILE_ENVIRONMENT: ROUTE_ENVIRONMENT,
-    MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+    MOBILE_ACCESS_AUTHORIZATION_URL: `${ROUTE_ORIGIN}/mobile/authorize`,
     MOBILE_SESSION_ENCRYPTION_KEY: ROUTE_SESSION_KEY,
     ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
   };
@@ -131,7 +131,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('rejects an unknown currency before starting a ledger export', async () => {
-    await expect(createLedgerExportResponse({} as never, owner, { now: () => new Date('2026-10-14T12:00:00.000Z') }, {
+    await expect(createLedgerExportResponse({} as never, owner, { now: () => new Date('2027-01-10T12:00:00.000Z') }, {
       selection: 'current_filter',
       filters: { currency: 'XYZ' },
     })).rejects.toMatchObject({ code: 'invalid_request' });
@@ -151,7 +151,7 @@ describe('Task 12 mobile import/export primitives', () => {
       format: 'csv',
       rowCount: 1,
       idempotencyKey: 'preview-1',
-    }, new Date('2026-10-14T12:00:00.000Z'));
+    }, new Date('2027-01-10T12:00:00.000Z'));
 
     expect(preview).toMatchObject({ id: expect.any(String), state: 'staged' });
     await expect(fixture.db.prepare('SELECT file_size_bytes FROM import_previews WHERE id = ?').bind(preview.id).all())
@@ -173,8 +173,8 @@ describe('Task 12 mobile import/export primitives', () => {
       rowCount: 1,
       idempotencyKey: 'preview-reused',
     };
-    await createImportPreviewForOwner(fixture.db, owner, input, new Date('2026-10-14T12:00:00.000Z'));
-    await expect(createImportPreviewForOwner(fixture.db, owner, { ...input, fileSizeBytes: 8192, fileSha256: 'f'.repeat(64) }, new Date('2026-10-14T12:00:00.000Z')))
+    await createImportPreviewForOwner(fixture.db, owner, input, new Date('2027-01-10T12:00:00.000Z'));
+    await expect(createImportPreviewForOwner(fixture.db, owner, { ...input, fileSizeBytes: 8192, fileSha256: 'f'.repeat(64) }, new Date('2027-01-10T12:00:00.000Z')))
       .rejects.toMatchObject({ code: 'idempotency_conflict', status: 409 });
   });
 
@@ -192,7 +192,7 @@ describe('Task 12 mobile import/export primitives', () => {
       format: 'csv',
       rowCount: 1,
       idempotencyKey: 'publication-retry',
-    }, new Date('2026-10-14T12:00:00.000Z'));
+    }, new Date('2027-01-10T12:00:00.000Z'));
     const row = importRow('task12-publication-account');
     const staged = await (await import('../worker/mobile-import')).stageImportChunkForOwner(fixture.db, owner, {
       previewId: preview.id,
@@ -235,7 +235,7 @@ describe('Task 12 mobile import/export primitives', () => {
       format: 'csv',
       rowCount: 1,
       idempotencyKey: 'duplicate-contract',
-    }, new Date('2026-10-14T12:00:00.000Z'));
+    }, new Date('2027-01-10T12:00:00.000Z'));
     const staged = await (await import('../worker/mobile-import')).stageImportChunkForOwner(fixture.db, owner, {
       previewId: preview.id,
       chunkIndex: 0,
@@ -321,7 +321,7 @@ describe('Task 12 mobile import/export primitives', () => {
       format: 'csv',
       rowCount: 1,
       idempotencyKey: 'statement-candidate-preview',
-    }, new Date('2026-10-14T12:00:00.000Z'));
+    }, new Date('2027-01-10T12:00:00.000Z'));
     const staged = await (await import('../worker/mobile-import')).stageImportChunkForOwner(fixture.db, owner, {
       previewId: preview.id,
       chunkIndex: 0,
@@ -359,7 +359,7 @@ describe('Task 12 mobile import/export primitives', () => {
       format: 'csv',
       rowCount: 2,
       idempotencyKey: 'operation-selection',
-    }, new Date('2026-10-14T12:00:00.000Z'));
+    }, new Date('2027-01-10T12:00:00.000Z'));
     const row1 = importRow('task12-operation-account');
     const row2 = { ...row1, rowId: 'row-2', rowIndex: 1, fingerprint: 'row-2-fingerprint' };
     const staged = await (await import('../worker/mobile-import')).stageImportChunkForOwner(fixture.db, owner, {

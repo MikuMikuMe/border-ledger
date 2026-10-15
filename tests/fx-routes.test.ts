@@ -28,7 +28,7 @@ function env(db: D1Database) {
     LEDGER_API_KEY: 'route-key',
     LEDGER_APP_ORIGIN: ORIGIN,
     MOBILE_ENVIRONMENT: ENVIRONMENT,
-    MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+    MOBILE_ACCESS_AUTHORIZATION_URL: `${ORIGIN}/mobile/authorize`,
     MOBILE_SESSION_ENCRYPTION_KEY: SESSION_KEY,
     now: () => NOW,
   };

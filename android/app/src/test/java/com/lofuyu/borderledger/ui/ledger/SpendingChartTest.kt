@@ -66,4 +66,3 @@ class SpendingChartTest {
         assertEquals(emptyList<String>(), chartCurrencies(report, false))
     }
 }
-

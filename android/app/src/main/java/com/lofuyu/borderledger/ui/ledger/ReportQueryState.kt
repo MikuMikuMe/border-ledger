@@ -53,4 +53,3 @@ fun preferenceWeekStart(value: Int): DayOfWeek = when (value) {
     in 1..6 -> DayOfWeek.of(value)
     else -> DayOfWeek.MONDAY
 }
-

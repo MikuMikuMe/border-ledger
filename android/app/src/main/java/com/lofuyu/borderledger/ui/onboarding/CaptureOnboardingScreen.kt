@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,8 +32,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 import com.lofuyu.borderledger.auth.AppNotificationPermissionState
 import com.lofuyu.borderledger.api.CaptureApiHealth
@@ -79,18 +83,26 @@ fun CaptureOnboardingScreen(
                 }
             } else {
                 items(state.profiles, key = { it.sourceProfileId }) { profile ->
+                    val isSelected = state.selected?.sourceProfileId == profile.sourceProfileId
+                    val selectProfile = {
+                        val currency = state.selected?.currency?.takeIf { it in profile.currencies } ?: profile.currencies.firstOrNull()
+                        if (currency != null) coordinator.select(profile, currency)
+                    }
                     Column {
                         Row(
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics {
-                                contentDescription = "Select ${profile.displayName}, ${profile.instrumentLabel}"
-                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .clickable(role = Role.RadioButton, onClick = selectProfile)
+                                .semantics(mergeDescendants = true) {
+                                    role = Role.RadioButton
+                                    selected = isSelected
+                                    contentDescription = "Select ${profile.displayName}, ${profile.instrumentLabel}"
+                                },
                         ) {
                             RadioButton(
-                                selected = state.selected?.sourceProfileId == profile.sourceProfileId,
-                                onClick = {
-                                    val currency = state.selected?.currency?.takeIf { it in profile.currencies } ?: profile.currencies.firstOrNull()
-                                    if (currency != null) coordinator.select(profile, currency)
-                                },
+                                selected = isSelected,
+                                onClick = null,
                             )
                             Column(modifier = Modifier.padding(start = 8.dp, top = 7.dp)) {
                                 Text(profile.displayName)
