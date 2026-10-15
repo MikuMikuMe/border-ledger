@@ -21,14 +21,14 @@ The protected Worker reads the single-owner D1 ledger, fetches official Frankfur
 
 ## Security verification performed
 
-- Web/Worker full local suite: 54 files, 289 tests passed.
-- `npm audit --omit=dev --audit-level=high`: 0 production dependency vulnerabilities reported.
-- TypeScript typecheck and production web build passed.
-- Android `:app:testDebugUnitTest`: 208 tests passed; `lintDebug` and unsigned `assembleRelease` passed.
-- USB install and debug activity launch succeeded on `R5CR119NQ7A` (`SM-G9910`, SDK 33); crash-buffer search after launch found no `AndroidRuntime`/`FATAL EXCEPTION`. Visual UI verification is still gated by the phone's secure PIN lockscreen.
-- Browser smoke used an isolated headless Chrome fixture: target selection rendered EUR totals and the dashed estimate, source audit lanes remained visible, and a CNY response without an eligible band rendered no dashed estimate.
-- Workflow path contract: 2 tests passed; backend-only representative paths do not match the app workflow.
+- The current checkout's focused web suites passed: UI/navigation/currency (14 tests), FX/reporting/scheduled routes (39 tests), security/auth/preferences/workflow (18 tests), plus the workflow-path contract (2 tests). TypeScript typecheck and the production web build passed.
+- `npm audit --omit=dev --audit-level=high` reported no production dependency vulnerabilities.
+- Android `:app:testDebugUnitTest :app:lintDebug :app:assembleRelease` passed locally. The release artifact is intentionally unsigned in this local gate; release signing remains protected by the owner-controlled workflow.
+- A real Chrome headless DOM smoke loaded the built application shell, verified the Border Ledger title, and verified the dark theme metadata. Interactive Chrome CDP/Tabbit control was unavailable in this environment; target, source-lane, CNY-exception, and dashed-band behavior are covered by the focused UI/FX tests rather than being claimed from an interactive browser session.
+- The physical USB target was not present in the final verification (`adb devices -l` returned no device). The Android AVD could not boot because Windows hardware acceleration is disabled for the x86_64 image. No device screenshot, install, or crash-buffer result is claimed for this final checkout.
+- Workflow path contract: 2 tests passed; backend-only representative paths do not match the app workflow. The app workflow has read-only contents permissions and allowlisted Android/web/contracts paths.
 
 ## Decision
 
-No high-severity security finding was found in the feature implementation. The remaining release gate is physical Android visual/interaction verification after the owner unlocks the connected device, plus normal production operational controls for Access, D1, rate limiting, and release signing.
+No high-severity security finding was found in the feature implementation. The local static/native/browser evidence is green, with the device/interactive-browser limitations above. Normal production operational controls remain for Access, D1, rate limiting, and release signing.
+
