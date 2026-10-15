@@ -15,11 +15,12 @@ afterEach(async () => {
 });
 
 async function seed(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
+  const recentSyncAt = new Date(Date.now() - 60_000).toISOString();
   await db.batch([
     db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)').bind('account-cad', 'CAD account', 'RBC', 'CAD', 'chequing', 'connected'),
     db.prepare('INSERT INTO plaid_items (item_id, access_token_ciphertext, access_token_iv, institution_name) VALUES (?, ?, ?, ?)').bind('item-1', 'ciphertext', 'iv', 'RBC'),
     db.prepare(`INSERT INTO recurring_sync_state (item_id, history_complete, source_updated_at, last_success_at, lifecycle)
-      VALUES (?, 1, ?, ?, 'active')`).bind('item-1', '2026-10-13T14:00:00.000Z', '2026-10-13T15:00:00.000Z'),
+      VALUES (?, 1, ?, ?, 'active')`).bind('item-1', '2026-10-13T14:00:00.000Z', recentSyncAt),
     db.prepare(`INSERT INTO recurring_streams
       (id, item_id, stream_id, account_id, merchant_name, currency, source_status, source_frequency, frequency, is_outflow,
        first_date, last_date, predicted_next_date, average_amount_minor, last_amount_minor, predicted_amount_minor, source_updated_at)

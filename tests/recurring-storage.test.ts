@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createD1Fixture } from './helpers/d1';
+import { createD1Fixture, task18MigrationNames } from './helpers/d1';
 import { mapPlaidTransaction, removePlaidTransaction, upsertPlaidTransaction } from '../worker/plaid';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -32,7 +32,7 @@ async function seedLedger(db: Awaited<ReturnType<typeof createD1Fixture>>['db'])
 
 describe('Plaid transaction storage identity', () => {
   it('keeps one local row across pending, posted, modified, and removal events', async () => {
-    const fixture = await createD1Fixture();
+    const fixture = await createD1Fixture(task18MigrationNames);
     fixtures.push(fixture);
     await seedLedger(fixture.db);
 

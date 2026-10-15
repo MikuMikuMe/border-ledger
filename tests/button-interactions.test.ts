@@ -11,6 +11,7 @@ import { demoAccounts, demoTransactions } from '../src/domain/demo-data';
 describe('button interactions', () => {
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
+  let reportCalls: URL[] = [];
 
   afterEach(() => {
     if (root) {
@@ -23,8 +24,10 @@ describe('button interactions', () => {
   });
 
   beforeEach(() => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      if (String(input).endsWith('/api/accounts')) {
+    reportCalls = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input), 'https://ledger.example.test');
+      if (url.pathname === '/api/accounts') {
         return new Response(JSON.stringify({ accounts: demoAccounts.map((account) => ({
           id: account.id,
           name: account.name,
@@ -35,6 +38,37 @@ describe('button interactions', () => {
           last_synced_at: account.lastSyncedAt,
           plaid_item_id: account.plaidItemId ?? null,
         })) }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname === '/api/preferences') {
+        if (init?.method === 'PATCH') {
+          const body = JSON.parse(String(init.body)) as { expectedRevision: number; reportingTimezone: string; weekStart: 0 | 1; preferredCurrency: string | null };
+          return new Response(JSON.stringify({ reportingTimezone: body.reportingTimezone, weekStart: body.weekStart, preferredCurrency: body.preferredCurrency, revision: body.expectedRevision + 1 }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ reportingTimezone: 'America/Toronto', weekStart: 1, preferredCurrency: null, revision: 0 }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname === '/api/reports/summary') {
+        reportCalls.push(url);
+        const target = url.searchParams.get('reportingCurrency');
+        return new Response(JSON.stringify({
+          from: '2026-10-01',
+          to: '2026-10-14',
+          includeProvisional: false,
+          currencyTotals: [
+            { currency: 'CAD', confirmedMinorUnits: 10000, provisionalMinorUnits: 0, confirmedCount: 1, provisionalCount: 0 },
+            { currency: 'CNY', confirmedMinorUnits: 20000, provisionalMinorUnits: 0, confirmedCount: 1, provisionalCount: 0 },
+          ],
+          dailyTotals: [
+            { date: '2026-10-12', currency: 'CAD', confirmedMinorUnits: 10000, provisionalMinorUnits: 0 },
+            { date: '2026-10-11', currency: 'CNY', confirmedMinorUnits: 20000, provisionalMinorUnits: 0 },
+          ],
+          reportingCurrency: target,
+          convertedTotals: target ? { confirmedMinorUnits: 30000, provisionalMinorUnits: 0, confirmedCount: 2, provisionalCount: 0 } : null,
+          convertedDailyTotals: target ? [{ date: '2026-10-12', confirmedMinorUnits: 30000, provisionalMinorUnits: 0 }] : [],
+          fx: { provider: 'frankfurter', complete: true, unavailableSourceCurrencies: [], lockedDateCount: 1, observedDateRange: { earliest: '2026-10-12', latest: '2026-10-12' }, chineseBankBand: null },
+          reviewCount: 1,
+          excludedCount: 0,
+          sourceCoverage: { plaid: 1, statement: 1 },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
       }
       return new Response(JSON.stringify({ transactions: demoTransactions.map((transaction) => ({
         id: transaction.id,
@@ -134,5 +168,27 @@ describe('button interactions', () => {
     clickButton('Read the data policy');
     expect(container?.querySelector('[role="region"][aria-label="Data policy"]')).not.toBeNull();
     expect(container?.textContent).toContain('This browser never receives bank passwords.');
+  });
+
+  it('persists the total spending currency and requests it as a reporting target', async () => {
+    await renderApp();
+    openView('Accounts & settings');
+
+    expect(container?.textContent).toContain('Total spending currency');
+    const select = container?.querySelector<HTMLSelectElement>('select[aria-label="Preferred reporting currency"]');
+    expect(select).not.toBeNull();
+    await act(async () => {
+      if (select) {
+        select.value = 'EUR';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(select?.value).toBe('EUR');
+    expect(reportCalls.some((url) => url.searchParams.get('reportingCurrency') === 'EUR' && !url.searchParams.has('currency'))).toBe(true);
   });
 });

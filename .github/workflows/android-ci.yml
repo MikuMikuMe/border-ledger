@@ -1,0 +1,58 @@
+name: Android validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  static-release-gates:
+    runs-on: ubuntu-latest
+    outputs:
+      toolchain_available: ${{ steps.availability.outputs.toolchain_available }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Task 17 static gates
+        shell: pwsh
+        run: pwsh -NoProfile -File android/task17-static-check.ps1
+      - name: Detect Gradle wrapper availability
+        id: availability
+        shell: pwsh
+        run: |
+          $wrapper = Test-Path -LiteralPath 'android/gradlew.bat' -PathType Leaf
+          $jar = Test-Path -LiteralPath 'android/gradle/wrapper/gradle-wrapper.jar' -PathType Leaf
+          if ($wrapper -and $jar) {
+            'toolchain_available=true' >> $env:GITHUB_OUTPUT
+            Write-Output 'Gradle wrapper script and JAR are present; Android build job is enabled.'
+          } else {
+            'toolchain_available=false' >> $env:GITHUB_OUTPUT
+            Write-Output '::notice::Android Gradle job is gated: android/gradle/wrapper/gradle-wrapper.jar is unavailable.'
+          }
+
+  android-build:
+    needs: static-release-gates
+    if: needs.static-release-gates.outputs.toolchain_available == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Run Android lint, unit tests, and unsigned release assembly
+        working-directory: android
+        shell: pwsh
+        run: .\gradlew.bat lintDebug testDebugUnitTest assembleRelease --no-daemon
+
+  android-build-gated:
+    needs: static-release-gates
+    if: needs.static-release-gates.outputs.toolchain_available != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report unavailable Android build prerequisites
+        run: echo 'Android Gradle validation was intentionally gated because the wrapper JAR is missing; no Android build or test is claimed.'

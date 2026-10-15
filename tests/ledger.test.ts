@@ -17,6 +17,12 @@ const tx = (overrides: Partial<Transaction>): Transaction => ({
   ...overrides,
 });
 
+const statementIdentity = (rowIndex: number) => ({
+  accountId: 'rbc-chequing',
+  fileSha256: 'a'.repeat(64),
+  rowIndex,
+});
+
 describe('ledger rules', () => {
   it('counts only confirmed expenses and excludes transfers and repayments', () => {
     const result = calculateSpending([
@@ -47,11 +53,11 @@ describe('ledger rules', () => {
   });
 
   it('deduplicates identical imports but keeps two legitimate same-day purchases', () => {
-    const existing = [tx({ id: 'existing', fingerprint: 'same' })];
+    const existing = [tx({ id: 'existing', fingerprint: 'same', sourceIdentity: statementIdentity(0) })];
     const imported = [
-      tx({ id: 'duplicate', fingerprint: 'same' }),
-      tx({ id: 'new-a', fingerprint: 'different-a', merchant: 'Cafe' }),
-      tx({ id: 'new-b', fingerprint: 'different-b', merchant: 'Cafe' }),
+      tx({ id: 'duplicate', fingerprint: 'same', sourceIdentity: statementIdentity(0) }),
+      tx({ id: 'new-a', fingerprint: 'different-a', merchant: 'Cafe', sourceIdentity: statementIdentity(1) }),
+      tx({ id: 'new-b', fingerprint: 'different-b', merchant: 'Cafe', sourceIdentity: statementIdentity(2) }),
     ];
 
     expect(mergeImportedTransactions(existing, imported).map((item) => item.id)).toEqual(['existing', 'new-a', 'new-b']);

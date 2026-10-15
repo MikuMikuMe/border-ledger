@@ -11,10 +11,14 @@
   "observability": {
     "enabled": true
   },
+  "triggers": {
+    "crons": ["15 6 * * *"]
+  },
   "vars": {
     "PLAID_ENV": "sandbox",
     "LEDGER_APP_ORIGIN": "https://pf.lofuyu.com",
-    "PLAID_WEBHOOK_URL": "https://pf.lofuyu.com/api/webhooks/plaid"
+    "PLAID_WEBHOOK_URL": "https://pf.lofuyu.com/api/webhooks/plaid",
+    "PLAID_ANDROID_PACKAGE_NAME": "com.lofuyu.borderledger"
   },
   "d1_databases": [
     {
@@ -41,10 +45,14 @@
   "env": {
     "production": {
       "name": "border-ledger-production",
+      "triggers": {
+        "crons": ["15 6 * * *"]
+      },
       "vars": {
         "PLAID_ENV": "production",
         "LEDGER_APP_ORIGIN": "https://pf.lofuyu.com",
-        "PLAID_WEBHOOK_URL": "https://pf.lofuyu.com/api/webhooks/plaid"
+        "PLAID_WEBHOOK_URL": "https://pf.lofuyu.com/api/webhooks/plaid",
+        "PLAID_ANDROID_PACKAGE_NAME": "com.lofuyu.borderledger"
       },
       "d1_databases": [
         {

@@ -56,18 +56,52 @@ describe('Plaid recurring adapter', () => {
     expect(snapshot.streams.map((stream) => stream.frequency)).toEqual(frequencies.slice(0, statuses.length));
   });
 
-  it('reports unsupported currency and excludes unapproved accounts without publishing them', () => {
+  it('normalizes every initial registered currency and excludes unapproved accounts without publishing them', () => {
     const response = {
       updated_at: '2026-10-13T14:00:00.000Z',
       outflow_streams: [
-        { ...validRecurringResponse.outflow_streams[0], stream_id: 'usd', account_id: 'plaid-usd', average_amount: { amount: 5, iso_currency_code: 'USD' } },
+        {
+          ...validRecurringResponse.outflow_streams[0],
+          stream_id: 'usd',
+          account_id: 'plaid-usd',
+          average_amount: { amount: 5, iso_currency_code: 'USD' },
+          last_amount: { amount: 5, iso_currency_code: 'USD' },
+          predicted_amount: { amount: 5, iso_currency_code: 'USD' },
+          transactions: [{ ...validRecurringResponse.outflow_streams[0].transactions[0], amount: 5, iso_currency_code: 'USD' }],
+        },
+        {
+          ...validRecurringResponse.outflow_streams[0],
+          stream_id: 'hkd',
+          account_id: 'plaid-hkd',
+          average_amount: { amount: 7, iso_currency_code: 'HKD' },
+          last_amount: { amount: 7, iso_currency_code: 'HKD' },
+          predicted_amount: { amount: 7, iso_currency_code: 'HKD' },
+          transactions: [{ ...validRecurringResponse.outflow_streams[0].transactions[0], amount: 7, iso_currency_code: 'HKD' }],
+        },
         { ...validRecurringResponse.outflow_streams[0], stream_id: 'unapproved', account_id: 'not-selected' },
       ],
       inflow_streams: [],
     };
-    const snapshot = normalizeRecurringSnapshot(response as unknown as PlaidRecurringResponse, 'item-1', new Map([['plaid-usd', 'account-usd']]));
+    const snapshot = normalizeRecurringSnapshot(response as unknown as PlaidRecurringResponse, 'item-1', new Map([
+      ['plaid-usd', 'account-usd'],
+      ['plaid-hkd', 'account-hkd'],
+    ]));
+    expect(snapshot.streams).toHaveLength(2);
+    expect(snapshot.streams.map((stream) => [stream.currency, stream.averageAmountMinor])).toEqual([['USD', -500], ['HKD', -700]]);
+    expect(snapshot.coverageWarnings).toEqual(['unapproved_account']);
+  });
+
+  it('reports currencies outside the registered registry without publishing them', () => {
+    const response = {
+      updated_at: '2026-10-13T14:00:00.000Z',
+      outflow_streams: [
+        { ...validRecurringResponse.outflow_streams[0], stream_id: 'unknown', account_id: 'plaid-unknown', average_amount: { amount: 5, iso_currency_code: 'XYZ' } },
+      ],
+      inflow_streams: [],
+    };
+    const snapshot = normalizeRecurringSnapshot(response as unknown as PlaidRecurringResponse, 'item-1', new Map([['plaid-unknown', 'account-unknown']]));
     expect(snapshot.streams).toHaveLength(0);
-    expect(snapshot.coverageWarnings).toEqual(expect.arrayContaining(['unsupported_currency', 'unapproved_account']));
+    expect(snapshot.coverageWarnings).toEqual(['unsupported_currency']);
   });
 
   it('rejects malformed supported data before publication', () => {

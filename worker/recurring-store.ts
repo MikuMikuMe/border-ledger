@@ -9,6 +9,7 @@ import type {
   RecurringSummaryQuery,
 } from '../src/domain/recurring';
 import { analyzeRecurring } from '../src/domain/recurring';
+import { emptyCurrencyTotals } from '../src/domain/currencies';
 import type { Currency } from '../src/domain/types';
 import type { D1Database, D1Statement } from './db-types';
 import type { NormalizedRecurringSnapshot } from './plaid-recurring';
@@ -53,6 +54,7 @@ interface RecurringStreamRow {
   predicted_amount_minor: number | null;
   source_updated_at: string | null;
   classification: string | null;
+  revision?: number;
   sort_date?: string;
 }
 
@@ -137,7 +139,22 @@ function mapStream(row: RecurringStreamRow, memberships: RecurringMembership[] =
     memberships,
     sourceUpdatedAt: row.source_updated_at,
     classification: classificationOrDefault(row.classification),
+    revision: row.revision ?? 0,
   };
+}
+
+async function attachClassificationRevisions(db: D1Database, rows: RecurringStreamRow[]) {
+  if (rows.length === 0) return rows;
+  const revisions = new Map<string, number>();
+  try {
+    const result = await db.prepare(`SELECT recurring_stream_id, revision
+      FROM recurring_classifications WHERE recurring_stream_id IN (${rows.map(() => '?').join(', ')})`)
+      .bind(...rows.map((row) => row.id)).all<{ recurring_stream_id: string; revision: number }>();
+    for (const row of result.results) revisions.set(row.recurring_stream_id, Number.isSafeInteger(row.revision) ? row.revision : 0);
+  } catch {
+    // Keep databases created before the classification revision migration readable during rollout.
+  }
+  return rows.map((row) => ({ ...row, revision: revisions.get(row.id) ?? 0 }));
 }
 
 function mapMembership(row: RecurringMembershipRow): RecurringMembership {
@@ -228,7 +245,7 @@ async function readStreamRows(db: D1Database, query: RecurringSummaryQuery | Rec
     LEFT JOIN recurring_classifications c ON c.recurring_stream_id = s.id
     ${where}
     ORDER BY sort_date ASC, s.id ASC${suffix}`).bind(...bindings).all<RecurringStreamRow>();
-  return result.results;
+  return attachClassificationRevisions(db, result.results);
 }
 
 async function readMembershipRows(db: D1Database, streamIds?: readonly string[]) {
@@ -275,7 +292,7 @@ export async function readRecurringPage(db: D1Database, query: RecurringQuery = 
   };
 }
 
-export async function readRecurringDetail(db: D1Database, id: string, cursor?: string): Promise<RecurringDetailPage | null> {
+export async function readRecurringDetail(db: D1Database, id: string, cursor?: string, requestedLimit?: number): Promise<RecurringDetailPage | null> {
   const streamResult = await db.prepare(`SELECT s.id, s.item_id, s.stream_id, s.account_id, s.merchant_name, s.merchant_entity_id,
       s.currency, s.source_status, s.source_frequency, s.frequency, s.is_outflow, s.first_date, s.last_date,
       s.predicted_next_date, s.average_amount_minor, s.last_amount_minor, s.predicted_amount_minor, s.source_updated_at,
@@ -285,6 +302,8 @@ export async function readRecurringDetail(db: D1Database, id: string, cursor?: s
     WHERE s.id = ? AND s.present_in_latest_snapshot = 1`).bind(id).all<RecurringStreamRow>();
   const row = streamResult.results[0];
   if (!row) return null;
+  const [rowWithRevision] = await attachClassificationRevisions(db, [row]);
+  const limit = boundedLimit(requestedLimit);
   const decoded = decodeCursor(cursor);
   const clauses = ['rt.recurring_stream_id = ?', 'rt.present_in_latest_snapshot = 1'];
   const bindings: unknown[] = [id];
@@ -298,15 +317,15 @@ export async function readRecurringDetail(db: D1Database, id: string, cursor?: s
     FROM recurring_stream_transactions rt
     LEFT JOIN transactions t ON t.id = rt.transaction_id
     WHERE ${clauses.join(' AND ')}
-    ORDER BY rt.date DESC, rt.provider_transaction_id DESC LIMIT ${DEFAULT_PAGE_LIMIT + 1}`).bind(...bindings).all<RecurringMembershipRow>();
-  const hasMore = historyResult.results.length > DEFAULT_PAGE_LIMIT;
-  const historyRows = hasMore ? historyResult.results.slice(0, DEFAULT_PAGE_LIMIT) : historyResult.results;
+      ORDER BY rt.date DESC, rt.provider_transaction_id DESC LIMIT ${limit + 1}`).bind(...bindings).all<RecurringMembershipRow>();
+  const hasMore = historyResult.results.length > limit;
+  const historyRows = hasMore ? historyResult.results.slice(0, limit) : historyResult.results;
   const last = historyRows.at(-1);
   return {
-    stream: mapStream(row, historyRows.map(mapMembership)),
+    stream: mapStream(rowWithRevision, historyRows.map(mapMembership)),
     history: historyRows.map(mapMembership),
     nextCursor: hasMore && last ? encodeCursor({ date: last.date, id: last.provider_transaction_id }) : null,
-    classification: classificationOrDefault(row.classification),
+    classification: classificationOrDefault(rowWithRevision.classification),
   };
 }
 
@@ -317,7 +336,7 @@ export async function readRecurringSummary(db: D1Database, query: RecurringSumma
   const memberships = await readMembershipRows(db, streamIds);
   const streams = rows.map((row) => mapStream(row, memberships.get(row.id) ?? []));
   const estimates = analyzeRecurring(streams, query.today);
-  const actualCostByCurrency: Record<Currency, number> = { CAD: 0, CNY: 0 };
+  const actualCostByCurrency = emptyCurrencyTotals() as Record<Currency, number>;
   if (streamIds.length > 0) {
     const clauses: string[] = [
       'rt.present_in_latest_snapshot = 1',
@@ -485,14 +504,64 @@ export async function publishRecurringSnapshot(
   return 'published';
 }
 
+export interface RecurringClassificationUpdateResult {
+  kind: 'updated' | 'not_found' | 'conflict';
+  id: string;
+  revision: number;
+  updatedAt: string | null;
+}
+
+async function recurringClassificationRevision(db: D1Database, id: string) {
+  const row = await db.prepare('SELECT revision FROM recurring_classifications WHERE recurring_stream_id = ?').bind(id).first<{ revision: number }>();
+  if (!row) return 0;
+  if (!Number.isSafeInteger(row.revision) || row.revision < 0) throw new Error('Recurring classification revision is unavailable.');
+  return row.revision;
+}
+
+export async function updateRecurringClassification(
+  db: D1Database,
+  id: string,
+  classification: RecurringClassification,
+  expectedRevision: number,
+): Promise<RecurringClassificationUpdateResult> {
+  if (!RECURRING_CLASSIFICATIONS.includes(classification)) return { kind: 'not_found', id, revision: 0, updatedAt: null };
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error('Recurring classification revision is not valid.');
+  const existing = await db.prepare('SELECT id FROM recurring_streams WHERE id = ? AND present_in_latest_snapshot = 1').bind(id).first<{ id: string }>();
+  if (!existing) return { kind: 'not_found', id, revision: 0, updatedAt: null };
+  const normalized = classificationOrDefault(classification);
+  const currentRevision = await recurringClassificationRevision(db, id);
+  if (expectedRevision !== currentRevision) return { kind: 'conflict', id, revision: currentRevision, updatedAt: null };
+  const inserted = await db.prepare(`INSERT INTO recurring_classifications (recurring_stream_id, classification, revision, updated_at)
+      VALUES (?, 'unclassified', 0, CURRENT_TIMESTAMP) ON CONFLICT(recurring_stream_id) DO NOTHING`).bind(id).run();
+  if (inserted.success === false) throw new Error('Recurring classification initialization failed.');
+  const result = await db.prepare(`UPDATE recurring_classifications
+      SET classification = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+      WHERE recurring_stream_id = ? AND revision = ?`).bind(normalized, id, expectedRevision).run();
+  if (result.success === false) throw new Error('Recurring classification update failed.');
+  if ((result.meta?.changes ?? 0) !== 1) {
+    const revision = await recurringClassificationRevision(db, id);
+    return { kind: 'conflict', id, revision, updatedAt: null };
+  }
+  const updated = await db.prepare('SELECT updated_at FROM recurring_classifications WHERE recurring_stream_id = ?').bind(id).first<{ updated_at: string | null }>();
+  if (!updated?.updated_at) throw new Error('Recurring classification acknowledgement is unavailable.');
+  return { kind: 'updated', id, revision: currentRevision + 1, updatedAt: updated.updated_at };
+}
+
 export async function setRecurringClassification(db: D1Database, id: string, classification: RecurringClassification) {
   if (!RECURRING_CLASSIFICATIONS.includes(classification)) return false;
-  const existing = await db.prepare('SELECT id FROM recurring_streams WHERE id = ? AND present_in_latest_snapshot = 1').bind(id).all<{ id: string }>();
-  if (existing.results.length === 0) return false;
-  const normalized = classificationOrDefault(classification);
-  const result = await db.prepare(`INSERT INTO recurring_classifications (recurring_stream_id, classification, updated_at)
-    VALUES (?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(recurring_stream_id) DO UPDATE SET classification = excluded.classification, updated_at = CURRENT_TIMESTAMP`)
-    .bind(id, normalized).run();
-  return result.success !== false;
+  const existing = await db.prepare('SELECT id FROM recurring_streams WHERE id = ? AND present_in_latest_snapshot = 1').bind(id).first<{ id: string }>();
+  if (!existing) return false;
+  try {
+    const currentRevision = await recurringClassificationRevision(db, id);
+    const result = await updateRecurringClassification(db, id, classification, currentRevision);
+    return result.kind === 'updated';
+  } catch (error) {
+    if (!(error instanceof Error) || !/no such column:\s*revision/i.test(error.message)) throw error;
+    const result = await db.prepare(`INSERT INTO recurring_classifications (recurring_stream_id, classification, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(recurring_stream_id) DO UPDATE SET classification = excluded.classification, updated_at = CURRENT_TIMESTAMP`)
+      .bind(id, classification).run();
+    if (result.success === false) throw new Error('Recurring legacy classification update failed.');
+    return true;
+  }
 }

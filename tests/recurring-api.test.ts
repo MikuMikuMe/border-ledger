@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { validRecurringResponse } from './fixtures/recurring/valid';
-import { createD1Fixture } from './helpers/d1';
+import { createD1Fixture, task13MigrationNames } from './helpers/d1';
 import { normalizeRecurringSnapshot } from '../worker/plaid-recurring';
 import { publishRecurringSnapshot, readRecurringDetail, readRecurringPage, readRecurringSummary, setRecurringClassification } from '../worker/recurring-store';
+import { classifyMobileRecurring } from '../worker/recurring-service';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 
@@ -26,7 +27,7 @@ async function seed(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
 
 describe('recurring repository reads', () => {
   it('paginates stable streams, reads detail history, and aggregates actual cost across full history', async () => {
-    const fixture = await createD1Fixture();
+    const fixture = await createD1Fixture(task13MigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const snapshot = normalizeRecurringSnapshot(validRecurringResponse, 'item-1', new Map([['plaid-cad', 'account-cad'], ['plaid-cny', 'account-cny']]));
@@ -55,8 +56,44 @@ describe('recurring repository reads', () => {
 
     const summary = await readRecurringSummary(fixture.db, { startDate: '2026-10-01', endDate: '2026-10-31', today: '2026-10-13' });
     expect(summary.streamCount).toBe(2);
-    expect(summary.actualCostByCurrency).toEqual({ CAD: 1034, CNY: 0 });
+    expect(summary.actualCostByCurrency).toMatchObject({ CAD: 1034, CNY: 0, HKD: 0, USD: 0 });
     expect(summary.subscriptionByCurrency.CAD).toBeLessThan(0);
+  });
+
+  it('keeps registered currencies in recurring summary maps without converting source amounts', async () => {
+    const fixture = await createD1Fixture(task13MigrationNames);
+    fixtures.push(fixture);
+    await fixture.db.batch([
+      fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind('account-usd', 'USD account', 'Synthetic bank', 'USD', 'chequing', 'connected'),
+      fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind('account-hkd', 'HKD account', 'Synthetic bank', 'HKD', 'chequing', 'connected'),
+      fixture.db.prepare('INSERT INTO plaid_items (item_id, access_token_ciphertext, access_token_iv, institution_name) VALUES (?, ?, ?, ?)')
+        .bind('item-multi', 'ciphertext', 'iv', 'Synthetic bank'),
+      fixture.db.prepare('INSERT INTO recurring_sync_state (item_id, history_complete, last_success_at, lifecycle) VALUES (?, ?, ?, ?)')
+        .bind('item-multi', 1, '2026-10-13T15:00:00.000Z', 'active'),
+      fixture.db.prepare(`INSERT INTO recurring_streams
+        (id, item_id, stream_id, account_id, merchant_name, currency, source_status, source_frequency, frequency, is_outflow, average_amount_minor)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind('stream-usd', 'item-multi', 'provider-usd', 'account-usd', 'USD service', 'USD', 'MATURE', 'MONTHLY', 'MONTHLY', 1, -500),
+      fixture.db.prepare(`INSERT INTO recurring_streams
+        (id, item_id, stream_id, account_id, merchant_name, currency, source_status, source_frequency, frequency, is_outflow, average_amount_minor)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind('stream-hkd', 'item-multi', 'provider-hkd', 'account-hkd', 'HKD service', 'HKD', 'MATURE', 'MONTHLY', 'MONTHLY', 1, -700),
+      fixture.db.prepare(`INSERT INTO recurring_stream_transactions
+        (recurring_stream_id, item_id, provider_transaction_id, account_id, date, amount_minor, currency, kind, is_outflow)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind('stream-usd', 'item-multi', 'provider-usd-transaction', 'account-usd', '2026-10-01', -500, 'USD', 'expense', 1),
+      fixture.db.prepare(`INSERT INTO recurring_stream_transactions
+        (recurring_stream_id, item_id, provider_transaction_id, account_id, date, amount_minor, currency, kind, is_outflow)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind('stream-hkd', 'item-multi', 'provider-hkd-transaction', 'account-hkd', '2026-10-01', -700, 'HKD', 'expense', 1),
+    ]);
+
+    const summary = await readRecurringSummary(fixture.db, { startDate: '2026-10-01', endDate: '2026-10-31', today: '2026-10-13' });
+    expect(summary.monthlyByCurrency).toMatchObject({ CAD: 0, CNY: 0, HKD: -700, USD: -500 });
+    expect(summary.yearlyByCurrency).toMatchObject({ CAD: 0, CNY: 0, HKD: -8400, USD: -6000 });
+    expect(summary.actualCostByCurrency).toMatchObject({ CAD: 0, CNY: 0, HKD: 0, USD: 0 });
   });
 
   it('returns waiting state before the first successful source result and validates classification IDs', async () => {
@@ -70,5 +107,30 @@ describe('recurring repository reads', () => {
     const page = await readRecurringPage(fixture.db, { today: '2026-10-13' });
     expect(page.state).toBe('waiting');
     await expect(setRecurringClassification(fixture.db, 'missing', 'bill')).resolves.toBe(false);
+  });
+
+  it('reports classification storage unavailability instead of blind-upserting on a legacy schema', async () => {
+    const fixture = await createD1Fixture();
+    fixtures.push(fixture);
+    await fixture.db.batch([
+      fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind('legacy-account', 'Legacy account', 'Synthetic bank', 'CAD', 'chequing', 'connected'),
+      fixture.db.prepare('INSERT INTO plaid_items (item_id, access_token_ciphertext, access_token_iv, institution_name) VALUES (?, ?, ?, ?)')
+        .bind('legacy-item', 'ciphertext', 'iv', 'Synthetic bank'),
+      fixture.db.prepare(`INSERT INTO recurring_streams
+        (id, item_id, stream_id, account_id, merchant_name, currency, source_status, source_frequency, frequency, is_outflow)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind('legacy-stream', 'legacy-item', 'provider-stream', 'legacy-account', 'Legacy service', 'CAD', 'MATURE', 'MONTHLY', 'MONTHLY', 1),
+      fixture.db.prepare('INSERT INTO recurring_classifications (recurring_stream_id, classification) VALUES (?, ?)')
+        .bind('legacy-stream', 'unclassified'),
+    ]);
+
+    await expect(setRecurringClassification(fixture.db, 'legacy-stream', 'subscription')).resolves.toBe(true);
+    await expect(fixture.db.prepare('SELECT classification FROM recurring_classifications WHERE recurring_stream_id = ?').bind('legacy-stream').first<{ classification: string }>())
+      .resolves.toEqual({ classification: 'subscription' });
+    await expect(classifyMobileRecurring(fixture.db, 'legacy-stream', { expectedRevision: 0, classification: 'subscription' }))
+      .rejects.toMatchObject({ code: 'temporarily_unavailable', status: 503, retryable: true });
+    await expect(fixture.db.prepare('SELECT classification FROM recurring_classifications WHERE recurring_stream_id = ?').bind('legacy-stream').first<{ classification: string }>())
+      .resolves.toEqual({ classification: 'subscription' });
   });
 });

@@ -32,7 +32,7 @@ import {
   WalletCards,
   X,
 } from 'lucide-react';
-import { calculateSpending, filterTransactions, mergeImportedTransactions } from './domain/ledger';
+import { calculateSpending, filterTransactions } from './domain/ledger';
 import { parseStatementCsv } from './domain/imports';
 import { demoAccounts, demoDaily, demoTransactions } from './domain/demo-data';
 import { formatDate, formatMoney } from './domain/format';
@@ -40,13 +40,92 @@ import { ledgerApi, LedgerApiError } from './domain/api';
 import { serializeTransactionsCsv } from './domain/export';
 import { openPlaidLink, type PlaidAccountMetadata, type PlaidInstitutionMetadata } from './plaid-link';
 import { formatReportingDay, getReportWindows, type ReportingTimezone, type WeekStartsOn } from './domain/reporting';
-import type { Account, Currency, ReportWindow, Transaction } from './domain/types';
+import type { Account, ReportWindow, Transaction } from './domain/types';
+import { getCurrencyMeta, supportedCurrencyCodes, type CurrencyCode } from './domain/currencies';
 import RecurringView from './components/RecurringView';
 
 type View = 'overview' | 'recurring' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
 type ChartRange = 'daily' | 'weekly' | 'monthly';
 type AppRoute = 'landing' | 'workspace';
+type AppAccount = Omit<Account, 'currency'> & { currency: CurrencyCode };
+type CurrencyTotals = Record<string, number>;
+interface ChartEntry {
+  day: string;
+  totals: CurrencyTotals;
+}
+
+interface ReportCurrencyTotal {
+  currency: string;
+  confirmedMinorUnits: number;
+  provisionalMinorUnits: number;
+  confirmedCount: number;
+  provisionalCount: number;
+}
+
+interface ReportDailyTotal {
+  date: string;
+  currency: string;
+  confirmedMinorUnits: number;
+  provisionalMinorUnits: number;
+}
+
+interface ConvertedTotals {
+  confirmedMinorUnits: number;
+  provisionalMinorUnits: number;
+  confirmedCount: number;
+  provisionalCount: number;
+}
+
+interface ConvertedDailyTotal {
+  date: string;
+  confirmedMinorUnits: number;
+  provisionalMinorUnits: number;
+}
+
+interface ChineseBankBand {
+  eligible: true;
+  currency: CurrencyCode;
+  baseMinorUnits: number;
+  lowerMinorUnits: number;
+  upperMinorUnits: number;
+  percentageBasisPoints: 150;
+}
+
+interface ReportFx {
+  provider: 'frankfurter';
+  complete: boolean;
+  unavailableSourceCurrencies: CurrencyCode[];
+  lockedDateCount: number;
+  observedDateRange: { earliest: string | null; latest: string | null };
+  chineseBankBand: ChineseBankBand | null;
+}
+
+interface OverviewReport {
+  ledgerId: string;
+  asOf: string | null;
+  timeBasis: string;
+  timeZone: string | null;
+  from: string | null;
+  to: string | null;
+  includeProvisional: boolean;
+  currencyTotals: ReportCurrencyTotal[];
+  dailyTotals: ReportDailyTotal[];
+  reportingCurrency: CurrencyCode | null;
+  convertedTotals: ConvertedTotals | null;
+  convertedDailyTotals: ConvertedDailyTotal[];
+  fx: ReportFx;
+  reviewCount: number;
+  excludedCount: number;
+  sourceCoverage: Record<string, number>;
+}
+
+interface ReportingPreferences {
+  reportingTimezone: ReportingTimezone;
+  weekStart: 0 | 1;
+  preferredCurrency: CurrencyCode | null;
+  revision: number;
+}
 
 const chartRangeLabels: Record<ChartRange, string> = {
   daily: 'Daily',
@@ -68,40 +147,90 @@ const navItems: Array<{ id: View; label: string; icon: typeof LayoutDashboard }>
   { id: 'accounts', label: 'Accounts & settings', icon: Landmark },
 ];
 
-const currencyLabels: Record<Currency, { name: string; flag: string; accent: string }> = {
+const currencyLabels: Partial<Record<CurrencyCode, { name: string; flag: string; accent: string }>> = {
   CAD: { name: 'Canadian dollars', flag: 'CA', accent: 'cad' },
   CNY: { name: 'Chinese yuan', flag: 'CN', accent: 'cny' },
 };
 
-function sumChartEntries(entries: Array<{ CAD: number; CNY: number }>) {
-  return entries.reduce((totals, entry) => ({ CAD: totals.CAD + entry.CAD, CNY: totals.CNY + entry.CNY }), { CAD: 0, CNY: 0 });
+function orderedCurrencies(currencies: Iterable<string>, preferredCurrency: CurrencyCode | null = null) {
+  const ordered = [...new Set(currencies)]
+    .filter((currency) => getCurrencyMeta(currency) !== null)
+    .sort((left, right) => {
+      const priority = (currency: string) => currency === 'CAD' ? 0 : currency === 'CNY' ? 1 : 2;
+      return priority(left) - priority(right) || left.localeCompare(right);
+    });
+  if (!preferredCurrency || !ordered.includes(preferredCurrency)) return ordered;
+  return [preferredCurrency, ...ordered.filter((currency) => currency !== preferredCurrency)];
 }
 
-function chartDataForRange(range: ChartRange, transactions: Transaction[], selectedWindow: ReportWindow) {
-  const daily = new Map<string, { CAD: number; CNY: number }>();
-  for (const transaction of transactions) {
-    if (transaction.date < selectedWindow.start || transaction.date > selectedWindow.end) continue;
-    if (transaction.status !== 'confirmed' && transaction.status !== 'provisional') continue;
-    if (transaction.kind !== 'expense' && transaction.kind !== 'refund' && transaction.kind !== 'fee') continue;
-    const current = daily.get(transaction.date) ?? { CAD: 0, CNY: 0 };
-    current[transaction.currency] += Math.abs(transaction.amountMinor);
-    daily.set(transaction.date, current);
+function currencyPresentation(currency: CurrencyCode) {
+  return currencyLabels[currency] ?? { name: 'Source currency', flag: currency, accent: 'source' };
+}
+
+function sumChartEntries(entries: CurrencyTotals[]) {
+  return entries.reduce<CurrencyTotals>((totals, entry) => {
+    for (const [currency, amount] of Object.entries(entry)) totals[currency] = (totals[currency] ?? 0) + amount;
+    return totals;
+  }, {});
+}
+
+function reportTotals(report: OverviewReport, includeProvisional: boolean) {
+  return report.currencyTotals.reduce<CurrencyTotals>((totals, entry) => {
+    totals[entry.currency] = entry.confirmedMinorUnits + (includeProvisional ? entry.provisionalMinorUnits : 0);
+    return totals;
+  }, {});
+}
+
+function convertedReportTotal(report: OverviewReport, includeProvisional: boolean) {
+  if (!report.reportingCurrency || !report.convertedTotals) return null;
+  const amount = report.convertedTotals.confirmedMinorUnits + (includeProvisional ? report.convertedTotals.provisionalMinorUnits : 0);
+  return Number.isSafeInteger(amount) ? amount : null;
+}
+
+function conversionState(report: OverviewReport): 'complete' | 'partial' | 'unavailable' | null {
+  if (!report.reportingCurrency) return null;
+  if (report.fx.complete) return 'complete';
+  const convertedCount = (report.convertedTotals?.confirmedCount ?? 0) + (report.convertedTotals?.provisionalCount ?? 0);
+  return convertedCount > 0 ? 'partial' : 'unavailable';
+}
+
+function chartCurrenciesForReport(report: OverviewReport, preferredCurrency: CurrencyCode | null = null) {
+  if (report.reportingCurrency) return [report.reportingCurrency];
+  return orderedCurrencies([
+    'CAD',
+    'CNY',
+    ...report.currencyTotals.map((entry) => entry.currency),
+    ...report.dailyTotals.map((entry) => entry.currency),
+  ], preferredCurrency);
+}
+
+function chartDataForRange(range: ChartRange, report: OverviewReport, includeProvisional: boolean, selectedWindow: ReportWindow): ChartEntry[] {
+  const daily = new Map<string, CurrencyTotals>();
+  const dailyTotals = report.reportingCurrency
+    ? report.convertedDailyTotals.map((entry) => ({ ...entry, currency: report.reportingCurrency! }))
+    : report.dailyTotals;
+  for (const entry of dailyTotals) {
+    if (entry.date < selectedWindow.start || entry.date > selectedWindow.end) continue;
+    const current = daily.get(entry.date) ?? {};
+    const amount = entry.confirmedMinorUnits + (includeProvisional ? entry.provisionalMinorUnits : 0);
+    current[entry.currency] = (current[entry.currency] ?? 0) + Math.abs(amount);
+    daily.set(entry.date, current);
   }
   const dates = [...daily.keys()].sort();
   if (range === 'daily') {
     return (dates.length > 0 ? dates : [selectedWindow.end]).slice(-12).map((date) => ({
       day: date.slice(8),
-      ...(daily.get(date) ?? { CAD: 0, CNY: 0 }),
+      totals: daily.get(date) ?? {},
     }));
   }
   if (range === 'weekly') {
     const split = Math.max(1, Math.ceil(dates.length / 2));
     return [
-      { day: 'W1', ...sumChartEntries(dates.slice(0, split).map((date) => daily.get(date) ?? { CAD: 0, CNY: 0 })) },
-      { day: 'W2', ...sumChartEntries(dates.slice(split).map((date) => daily.get(date) ?? { CAD: 0, CNY: 0 })) },
+      { day: 'W1', totals: sumChartEntries(dates.slice(0, split).map((date) => daily.get(date) ?? {})) },
+      { day: 'W2', totals: sumChartEntries(dates.slice(split).map((date) => daily.get(date) ?? {})) },
     ];
   }
-  return [{ day: selectedWindow.end.slice(0, 7).replace('-', ' '), ...sumChartEntries(dates.map((date) => daily.get(date) ?? { CAD: 0, CNY: 0 })) }];
+  return [{ day: selectedWindow.end.slice(0, 7).replace('-', ' '), totals: sumChartEntries(dates.map((date) => daily.get(date) ?? {})) }];
 }
 
 function chartPeriodLabel(range: ChartRange, selectedWindow: ReportWindow) {
@@ -111,7 +240,7 @@ function chartPeriodLabel(range: ChartRange, selectedWindow: ReportWindow) {
   return `${selectedWindow.start.slice(5)} — ${selectedWindow.end.slice(5)}`;
 }
 
-function syncLabel(accounts: Account[]) {
+function syncLabel(accounts: AppAccount[]) {
   const latest = accounts
     .map((account) => account.lastSyncedAt ? new Date(account.lastSyncedAt).valueOf() : 0)
     .filter((value) => value > 0)
@@ -132,8 +261,8 @@ function syncTimestampLabel(value: string | null) {
   return new Intl.DateTimeFormat('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date);
 }
 
-function mapApiAccount(value: Record<string, unknown>): Account | null {
-  const currency = value.currency === 'CAD' || value.currency === 'CNY' ? value.currency : null;
+function mapApiAccount(value: Record<string, unknown>): AppAccount | null {
+  const currency = typeof value.currency === 'string' && getCurrencyMeta(value.currency) ? value.currency : null;
   const kind = value.kind === 'savings' || value.kind === 'credit' ? value.kind : value.kind === 'chequing' ? value.kind : null;
   if (typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.institution !== 'string' || !currency || !kind) return null;
   return {
@@ -148,8 +277,22 @@ function mapApiAccount(value: Record<string, unknown>): Account | null {
   };
 }
 
+function mapApiPreferences(value: unknown): ReportingPreferences | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const reportingTimezone = record.reportingTimezone === 'Asia/Shanghai' ? 'Asia/Shanghai' : record.reportingTimezone === 'America/Toronto' ? 'America/Toronto' : null;
+  const weekStart = record.weekStart === 0 ? 0 : record.weekStart === 1 ? 1 : null;
+  const preferredCurrency = record.preferredCurrency === null || record.preferredCurrency === undefined
+    ? null
+    : typeof record.preferredCurrency === 'string' && getCurrencyMeta(record.preferredCurrency)
+      ? record.preferredCurrency
+      : null;
+  if (!reportingTimezone || weekStart === null || !Number.isInteger(record.revision) || Number(record.revision) < 0) return null;
+  return { reportingTimezone, weekStart, preferredCurrency, revision: Number(record.revision) };
+}
+
 function mapApiTransaction(value: Record<string, unknown>): Transaction | null {
-  const currency = value.currency === 'CAD' || value.currency === 'CNY' ? value.currency : null;
+  const currency = typeof value.currency === 'string' && getCurrencyMeta(value.currency) ? value.currency : null;
   const kind = ['expense', 'income', 'transfer', 'refund', 'fee'].includes(value.kind as string) ? value.kind as Transaction['kind'] : null;
   const status = ['confirmed', 'provisional', 'needs_review'].includes(value.status as string) ? value.status as Transaction['status'] : null;
   const source = ['statement', 'plaid', 'alert', 'manual'].includes(value.source as string) ? value.source as Transaction['source'] : null;
@@ -168,6 +311,184 @@ function mapApiTransaction(value: Record<string, unknown>): Transaction | null {
     fingerprint: value.fingerprint,
     note: typeof value.note === 'string' ? value.note : undefined,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function safeInteger(value: unknown) {
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : null;
+}
+
+function nonNegativeSafeInteger(value: unknown) {
+  const integer = safeInteger(value);
+  return integer !== null && integer >= 0 ? integer : null;
+}
+
+function mapRegisteredCurrency(value: unknown): CurrencyCode | null {
+  return typeof value === 'string' && getCurrencyMeta(value) ? value : null;
+}
+
+function validReportDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function mapConvertedTotals(value: unknown): ConvertedTotals | null {
+  if (!isRecord(value)) return null;
+  const confirmedMinorUnits = safeInteger(value.confirmedMinorUnits);
+  const provisionalMinorUnits = safeInteger(value.provisionalMinorUnits);
+  const confirmedCount = nonNegativeSafeInteger(value.confirmedCount);
+  const provisionalCount = nonNegativeSafeInteger(value.provisionalCount);
+  if (confirmedMinorUnits === null || provisionalMinorUnits === null || confirmedCount === null || provisionalCount === null) return null;
+  return { confirmedMinorUnits, provisionalMinorUnits, confirmedCount, provisionalCount };
+}
+
+function mapConvertedDailyTotals(value: unknown): ConvertedDailyTotal[] | null {
+  if (!Array.isArray(value)) return null;
+  const totals: ConvertedDailyTotal[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || !validReportDate(entry.date)) return null;
+    const confirmedMinorUnits = safeInteger(entry.confirmedMinorUnits);
+    const provisionalMinorUnits = safeInteger(entry.provisionalMinorUnits);
+    if (confirmedMinorUnits === null || provisionalMinorUnits === null) return null;
+    totals.push({ date: entry.date, confirmedMinorUnits, provisionalMinorUnits });
+  }
+  return totals;
+}
+
+function mapReportFx(value: unknown): ReportFx | null {
+  if (!isRecord(value) || value.provider !== 'frankfurter' || typeof value.complete !== 'boolean') return null;
+  if (!Array.isArray(value.unavailableSourceCurrencies)) return null;
+  const unavailableSourceCurrencies: CurrencyCode[] = [];
+  for (const currency of value.unavailableSourceCurrencies) {
+    const code = mapRegisteredCurrency(currency);
+    if (!code) return null;
+    unavailableSourceCurrencies.push(code);
+  }
+  const lockedDateCount = nonNegativeSafeInteger(value.lockedDateCount);
+  if (lockedDateCount === null || !isRecord(value.observedDateRange)) return null;
+  const earliest = value.observedDateRange.earliest;
+  const latest = value.observedDateRange.latest;
+  if (earliest !== null && !validReportDate(earliest)) return null;
+  if (latest !== null && !validReportDate(latest)) return null;
+
+  let chineseBankBand: ChineseBankBand | null = null;
+  if (value.chineseBankBand !== null) {
+    if (!isRecord(value.chineseBankBand) || value.chineseBankBand.eligible !== true) return null;
+    const currency = mapRegisteredCurrency(value.chineseBankBand.currency);
+    const baseMinorUnits = safeInteger(value.chineseBankBand.baseMinorUnits);
+    const lowerMinorUnits = safeInteger(value.chineseBankBand.lowerMinorUnits);
+    const upperMinorUnits = safeInteger(value.chineseBankBand.upperMinorUnits);
+    if (!currency || baseMinorUnits === null || lowerMinorUnits === null || upperMinorUnits === null || value.chineseBankBand.percentageBasisPoints !== 150) return null;
+    chineseBankBand = { eligible: true, currency, baseMinorUnits, lowerMinorUnits, upperMinorUnits, percentageBasisPoints: 150 };
+  }
+
+  return {
+    provider: 'frankfurter',
+    complete: value.complete,
+    unavailableSourceCurrencies,
+    lockedDateCount,
+    observedDateRange: { earliest, latest },
+    chineseBankBand,
+  };
+}
+
+const sourceOnlyReportFx: ReportFx = {
+  provider: 'frankfurter',
+  complete: true,
+  unavailableSourceCurrencies: [],
+  lockedDateCount: 0,
+  observedDateRange: { earliest: null, latest: null },
+  chineseBankBand: null,
+};
+
+export function mapApiReport(value: unknown): OverviewReport | null {
+  if (!isRecord(value)) return null;
+  const report = isRecord(value.report) ? value.report : value;
+  if (!Array.isArray(report.currencyTotals) || !Array.isArray(report.dailyTotals)) return null;
+  const currencyTotals: ReportCurrencyTotal[] = [];
+  for (const entry of report.currencyTotals) {
+    if (!isRecord(entry) || typeof entry.currency !== 'string' || getCurrencyMeta(entry.currency) === null) return null;
+    const confirmedMinorUnits = safeInteger(entry.confirmedMinorUnits);
+    const provisionalMinorUnits = safeInteger(entry.provisionalMinorUnits);
+    const confirmedCount = safeInteger(entry.confirmedCount);
+    const provisionalCount = safeInteger(entry.provisionalCount);
+    if (confirmedMinorUnits === null || provisionalMinorUnits === null || confirmedCount === null || provisionalCount === null) return null;
+    currencyTotals.push({ currency: entry.currency, confirmedMinorUnits, provisionalMinorUnits, confirmedCount, provisionalCount });
+  }
+  const dailyTotals: ReportDailyTotal[] = [];
+  for (const entry of report.dailyTotals) {
+    if (!isRecord(entry) || typeof entry.date !== 'string' || typeof entry.currency !== 'string' || getCurrencyMeta(entry.currency) === null) return null;
+    const confirmedMinorUnits = safeInteger(entry.confirmedMinorUnits);
+    const provisionalMinorUnits = safeInteger(entry.provisionalMinorUnits);
+    if (confirmedMinorUnits === null || provisionalMinorUnits === null) return null;
+    dailyTotals.push({ date: entry.date, currency: entry.currency, confirmedMinorUnits, provisionalMinorUnits });
+  }
+  const reviewCount = safeInteger(report.reviewCount);
+  const excludedCount = safeInteger(report.excludedCount);
+  if (reviewCount === null || excludedCount === null) return null;
+
+  let reportingCurrency: CurrencyCode | null = null;
+  if (report.reportingCurrency !== undefined && report.reportingCurrency !== null) {
+    reportingCurrency = mapRegisteredCurrency(report.reportingCurrency);
+    if (!reportingCurrency) return null;
+  }
+  let convertedTotals: ConvertedTotals | null = null;
+  if (report.convertedTotals !== undefined && report.convertedTotals !== null) {
+    convertedTotals = mapConvertedTotals(report.convertedTotals);
+    if (!convertedTotals || reportingCurrency === null) return null;
+  }
+  let convertedDailyTotals: ConvertedDailyTotal[] = [];
+  if (report.convertedDailyTotals !== undefined) {
+    const mappedDailyTotals = mapConvertedDailyTotals(report.convertedDailyTotals);
+    if (!mappedDailyTotals || (reportingCurrency === null && mappedDailyTotals.length > 0)) return null;
+    convertedDailyTotals = mappedDailyTotals;
+  }
+  let fx = sourceOnlyReportFx;
+  if (report.fx !== undefined) {
+    const mappedFx = mapReportFx(report.fx);
+    if (!mappedFx) return null;
+    fx = mappedFx;
+  }
+  if (reportingCurrency !== null && (convertedTotals === null || report.fx === undefined)) return null;
+  const sourceCoverage = isRecord(report.sourceCoverage)
+    ? Object.fromEntries(Object.entries(report.sourceCoverage).flatMap(([source, count]) => {
+      const safeCount = safeInteger(count);
+      return safeCount === null ? [] : [[source, safeCount]];
+    }))
+    : {};
+  return {
+    ledgerId: typeof report.ledgerId === 'string' ? report.ledgerId : 'personal',
+    asOf: typeof report.asOf === 'string' ? report.asOf : null,
+    timeBasis: typeof report.timeBasis === 'string' ? report.timeBasis : 'accounting_date',
+    timeZone: typeof report.timeZone === 'string' ? report.timeZone : null,
+    from: typeof report.from === 'string' ? report.from : null,
+    to: typeof report.to === 'string' ? report.to : null,
+    includeProvisional: report.includeProvisional === true,
+    currencyTotals,
+    dailyTotals,
+    reportingCurrency,
+    convertedTotals,
+    convertedDailyTotals,
+    fx,
+    reviewCount,
+    excludedCount,
+    sourceCoverage,
+  };
+}
+
+export function reportRequestPath(window: ReportWindow, includeProvisional: boolean, timeZone: ReportingTimezone, reportingCurrency: CurrencyCode | null = null) {
+  const params = new URLSearchParams({
+    from: window.start,
+    to: window.end,
+    includeProvisional: String(includeProvisional),
+    timeZone,
+  });
+  if (reportingCurrency !== null) params.set('reportingCurrency', reportingCurrency);
+  return `/api/reports/summary?${params.toString()}`;
 }
 
 function connectionErrorMessage(error: unknown) {
@@ -197,11 +518,17 @@ function WorkspaceApp() {
   const [reportingNow, setReportingNow] = useState(() => new Date());
   const [reportingTimezone, setReportingTimezone] = useState<ReportingTimezone>('America/Toronto');
   const [weekStartsOn, setWeekStartsOn] = useState<WeekStartsOn>('monday');
+  const [preferredCurrency, setPreferredCurrency] = useState<CurrencyCode | null>(null);
+  const [preferencesRevision, setPreferencesRevision] = useState(0);
+  const [preferencesBusy, setPreferencesBusy] = useState(false);
   const [includeProvisional, setIncludeProvisional] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accounts, setAccounts] = useState<AppAccount[]>([]);
   const [workspaceStatus, setWorkspaceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [reports, setReports] = useState<{ selected: OverviewReport; month: OverviewReport } | null>(null);
+  const [reportStatus, setReportStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [reportError, setReportError] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -223,7 +550,7 @@ function WorkspaceApp() {
         ledgerApi<{ accounts: Array<Record<string, unknown>> }>('/api/accounts'),
         ledgerApi<{ transactions: Array<Record<string, unknown>> }>('/api/transactions'),
       ]);
-      setAccounts((Array.isArray(accountsResponse.accounts) ? accountsResponse.accounts : []).map(mapApiAccount).filter((account): account is Account => account !== null));
+      setAccounts((Array.isArray(accountsResponse.accounts) ? accountsResponse.accounts : []).map(mapApiAccount).filter((account): account is AppAccount => account !== null));
       setTransactions((Array.isArray(transactionsResponse.transactions) ? transactionsResponse.transactions : []).map(mapApiTransaction).filter((transaction): transaction is Transaction => transaction !== null));
       setWorkspaceStatus('ready');
     } catch (error) {
@@ -235,6 +562,101 @@ function WorkspaceApp() {
   };
 
   useEffect(() => { void refreshWorkspace(); }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPreferences = async () => {
+      try {
+        const preferences = mapApiPreferences(await ledgerApi<unknown>('/api/preferences'));
+        if (!preferences || cancelled) return;
+        setReportingTimezone(preferences.reportingTimezone);
+        setWeekStartsOn(preferences.weekStart === 0 ? 'sunday' : 'monday');
+        setPreferredCurrency(preferences.preferredCurrency);
+        setPreferencesRevision(preferences.revision);
+      } catch {
+        // The legacy web surface can still be served without the shared preference route.
+        // Keep the documented defaults until the protected route is available.
+      }
+    };
+    void loadPreferences();
+    return () => { cancelled = true; };
+  }, []);
+
+  const updateReportingPreferences = async (next: {
+    reportingTimezone: ReportingTimezone;
+    weekStartsOn: WeekStartsOn;
+    preferredCurrency: CurrencyCode | null;
+  }) => {
+    setReportingTimezone(next.reportingTimezone);
+    setWeekStartsOn(next.weekStartsOn);
+    setPreferredCurrency(next.preferredCurrency);
+    setPreferencesBusy(true);
+    try {
+      const saved = mapApiPreferences(await ledgerApi<unknown>('/api/preferences', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          expectedRevision: preferencesRevision,
+          reportingTimezone: next.reportingTimezone,
+          weekStart: next.weekStartsOn === 'sunday' ? 0 : 1,
+          preferredCurrency: next.preferredCurrency,
+        }),
+      }));
+      if (!saved) throw new Error('The reporting preferences response was incomplete.');
+      setReportingTimezone(saved.reportingTimezone);
+      setWeekStartsOn(saved.weekStart === 0 ? 'sunday' : 'monday');
+      setPreferredCurrency(saved.preferredCurrency);
+      setPreferencesRevision(saved.revision);
+    } catch (error) {
+      setActionNotice(connectionErrorMessage(error));
+      try {
+        const refreshed = mapApiPreferences(await ledgerApi<unknown>('/api/preferences'));
+        if (refreshed) {
+          setReportingTimezone(refreshed.reportingTimezone);
+          setWeekStartsOn(refreshed.weekStart === 0 ? 'sunday' : 'monday');
+          setPreferredCurrency(refreshed.preferredCurrency);
+          setPreferencesRevision(refreshed.revision);
+        }
+      } catch {
+        // Preserve the optimistic value if the protected route is temporarily unavailable.
+      }
+    } finally {
+      setPreferencesBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (workspaceStatus !== 'ready') return;
+    let cancelled = false;
+    setReports(null);
+    setReportStatus('loading');
+    setReportError(null);
+
+    const loadReports = async () => {
+      try {
+        const selectedRequest = ledgerApi<unknown>(reportRequestPath(selectedWindow, includeProvisional, reportingTimezone, preferredCurrency));
+        const monthRequest = selectedWindow.start === monthWindow.start && selectedWindow.end === monthWindow.end
+          ? selectedRequest
+          : ledgerApi<unknown>(reportRequestPath(monthWindow, includeProvisional, reportingTimezone, preferredCurrency));
+        const [selectedResponse, monthResponse] = await Promise.all([selectedRequest, monthRequest]);
+        const selectedReport = mapApiReport(selectedResponse);
+        const monthReport = mapApiReport(monthResponse);
+        if (!selectedReport || !monthReport) throw new Error('The reporting service returned an incomplete response.');
+        if (!cancelled) {
+          setReports({ selected: selectedReport, month: monthReport });
+          setReportStatus('ready');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setReports(null);
+          setReportStatus('error');
+          setReportError(connectionErrorMessage(error));
+        }
+      }
+    };
+
+    void loadReports();
+    return () => { cancelled = true; };
+  }, [includeProvisional, monthWindow.end, monthWindow.start, preferredCurrency, reportingTimezone, selectedWindow.end, selectedWindow.start, workspaceStatus]);
 
   useEffect(() => {
     const refreshClock = () => setReportingNow(new Date());
@@ -386,20 +808,36 @@ function WorkspaceApp() {
     setActionNotice(message);
   };
 
-  const summary = useMemo(
-    () => calculateSpending(transactions, { includeProvisional, startDate: selectedWindow.start, endDate: selectedWindow.end }),
-    [includeProvisional, selectedWindow, transactions],
-  );
   const provisionalCount = transactions.filter((transaction) => transaction.status === 'provisional').length;
   const reviewCount = transactions.filter((transaction) => transaction.status === 'needs_review').length;
   const alertCount = provisionalCount + reviewCount;
 
-  const handleImport = (imported: Transaction[], errors: string[]) => {
-    if (imported.length > 0) setTransactions((current) => mergeImportedTransactions(current, imported));
-    if (errors.length > 0) {
+  const handleImport = async (imported: Transaction[], errors: string[], fileSha256: string | null, filename: string): Promise<boolean> => {
+    if (errors.length > 0 || imported.length === 0) {
       setImportNotice(`${imported.length} row${imported.length === 1 ? '' : 's'} ready; ${errors.length} row${errors.length === 1 ? '' : 's'} need attention.`);
-    } else {
-      setImportNotice(`${imported.length} row${imported.length === 1 ? '' : 's'} imported into the local review queue.`);
+      return false;
+    }
+    if (!fileSha256) {
+      setImportNotice('The statement could not be identified safely. Choose the file again.');
+      return false;
+    }
+    try {
+      const result = await ledgerApi<{ accepted: number; duplicates: number; needsReview: number }>('/api/imports/commit', {
+        method: 'POST',
+        body: JSON.stringify({
+          accountId: imported[0].accountId,
+          filename,
+          fileSha256,
+          operationId: crypto.randomUUID(),
+          transactions: imported,
+        }),
+      });
+      await refreshWorkspace();
+      setImportNotice(`${result.accepted} row${result.accepted === 1 ? '' : 's'} saved; ${result.duplicates} replay${result.duplicates === 1 ? '' : 's'} skipped${result.needsReview > 0 ? `; ${result.needsReview} need review` : ''}.`);
+      return true;
+    } catch (error) {
+      setImportNotice(connectionErrorMessage(error));
+      return false;
     }
   };
 
@@ -476,6 +914,10 @@ function WorkspaceApp() {
         <div className="page-content">
           {activeView === 'overview' ? workspaceStatus === 'loading' || workspaceStatus === 'error' || transactions.length === 0 ? (
             <WorkspaceStatePanel status={workspaceStatus === 'ready' ? 'empty' : workspaceStatus} error={workspaceError} onRetry={refreshWorkspace} />
+          ) : reportStatus === 'loading' ? (
+            <WorkspaceStatePanel status="loading" error={null} onRetry={refreshWorkspace} />
+          ) : reportStatus === 'error' || !reports ? (
+            <WorkspaceStatePanel status="error" error={reportError} onRetry={refreshWorkspace} />
           ) : (
             <Overview
               selectedWindow={selectedWindow}
@@ -483,7 +925,9 @@ function WorkspaceApp() {
               reportingTimezone={reportingTimezone}
               monthWindow={monthWindow}
               setSelectedWindowKey={setSelectedWindowKey}
-              summary={summary}
+              report={reports.selected}
+              monthReport={reports.month}
+              preferredCurrency={preferredCurrency}
               includeProvisional={includeProvisional}
               setIncludeProvisional={setIncludeProvisional}
               transactions={transactions}
@@ -494,13 +938,14 @@ function WorkspaceApp() {
           {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} /> : null}
           {activeView === 'imports' ? (
             <ImportsView
+              accounts={accounts}
               transactions={transactions}
               notice={importNotice}
               onImport={handleImport}
               onClearNotice={() => setImportNotice(null)}
             />
           ) : null}
-          {activeView === 'accounts' ? <AccountsView accounts={accounts} connectionBusy={plaidBusy} connectionNotice={plaidNotice} connectionNoticeError={plaidNoticeError} pendingConnection={pendingPlaidConnection} reportingTimezone={reportingTimezone} weekStartsOn={weekStartsOn} onReportingTimezoneChange={setReportingTimezone} onWeekStartsOnChange={setWeekStartsOn} onConnect={connectPlaid} onConfirmConnection={confirmPlaidConnection} onCancelConnection={cancelPlaidConnection} onSync={syncPlaid} onDisconnect={disconnectPlaid} onNavigate={setActiveView} onNotice={setActionNotice} /> : null}
+          {activeView === 'accounts' ? <AccountsView accounts={accounts} connectionBusy={plaidBusy} connectionNotice={plaidNotice} connectionNoticeError={plaidNoticeError} pendingConnection={pendingPlaidConnection} reportingTimezone={reportingTimezone} weekStartsOn={weekStartsOn} preferredCurrency={preferredCurrency} preferencesBusy={preferencesBusy} onReportingPreferencesChange={(next) => { void updateReportingPreferences(next); }} onConnect={connectPlaid} onConfirmConnection={confirmPlaidConnection} onCancelConnection={cancelPlaidConnection} onSync={syncPlaid} onDisconnect={disconnectPlaid} onNavigate={setActiveView} onNotice={setActionNotice} /> : null}
         </div>
       </main>
     </div>
@@ -645,7 +1090,7 @@ function LandingLedgerSnapshot({
   includeProvisional: boolean;
   onToggleProvisional: () => void;
   windowTransactions: Transaction[];
-  summary: Record<Currency, number>;
+  summary: CurrencyTotals;
   reviewCount: number;
   pulse: number;
 }) {
@@ -712,7 +1157,9 @@ function Overview({
   reportingTimezone,
   monthWindow,
   setSelectedWindowKey,
-  summary,
+  report,
+  monthReport,
+  preferredCurrency,
   includeProvisional,
   setIncludeProvisional,
   transactions,
@@ -723,18 +1170,48 @@ function Overview({
   reportingTimezone: ReportingTimezone;
   monthWindow: ReportWindow;
   setSelectedWindowKey: (key: ReportWindow['key']) => void;
-  summary: Record<Currency, number>;
+  report: OverviewReport;
+  monthReport: OverviewReport;
+  preferredCurrency: CurrencyCode | null;
   includeProvisional: boolean;
   setIncludeProvisional: (value: boolean) => void;
   transactions: Transaction[];
   onNavigate: (view: View) => void;
 }) {
   const latest = [...transactions].sort((left, right) => right.date.localeCompare(left.date)).filter((transaction) => transaction.kind === 'expense' || transaction.kind === 'refund').slice(0, 5);
-  const monthSummary = calculateSpending(transactions, { startDate: monthWindow.start, endDate: monthWindow.end });
-  const total = Math.abs(summary.CAD) + Math.abs(summary.CNY);
-  const cadShare = total > 0 ? `${Math.round((Math.abs(summary.CAD) / total) * 100)}%` : '—';
-  const cnyShare = total > 0 ? `${Math.round((Math.abs(summary.CNY) / total) * 100)}%` : '—';
+  const summary = reportTotals(report, includeProvisional);
+  const monthSummary = reportTotals(monthReport, includeProvisional);
+  const reportingCurrency = report.reportingCurrency;
+  const conversion = conversionState(report);
+  const convertedTotal = convertedReportTotal(report, includeProvisional);
+  const monthConvertedTotal = convertedReportTotal(monthReport, includeProvisional);
+  const reportCurrencies = orderedCurrencies([
+    ...Object.keys(summary),
+    ...Object.keys(monthSummary),
+    ...report.currencyTotals.map((entry) => entry.currency),
+    ...report.dailyTotals.map((entry) => entry.currency),
+  ], preferredCurrency);
+  const overviewCurrencies = orderedCurrencies([
+    'CAD',
+    'CNY',
+    ...reportCurrencies,
+  ], preferredCurrency);
+  const total = overviewCurrencies.reduce((amount, currency) => amount + Math.abs(summary[currency] ?? 0), 0);
+  const shareFor = (currency: CurrencyCode) => total > 0 ? `${Math.round((Math.abs(summary[currency] ?? 0) / total) * 100)}%` : '—';
+  const primaryCurrency = reportingCurrency
+    ?? (preferredCurrency && (summary[preferredCurrency] ?? 0) !== 0 ? preferredCurrency : null)
+    ?? reportCurrencies.find((currency) => (summary[currency] ?? 0) !== 0)
+    ?? reportCurrencies[0]
+    ?? 'CAD';
+  const insightCurrency = reportingCurrency
+    ?? overviewCurrencies.find((currency) => currency === 'CNY' && (monthSummary[currency] ?? 0) !== 0)
+    ?? overviewCurrencies.find((currency) => (monthSummary[currency] ?? 0) !== 0)
+    ?? 'CAD';
+  const primaryShare = reportingCurrency ? 'All available sources' : shareFor(primaryCurrency);
+  const primaryAmount = reportingCurrency ? convertedTotal : summary[primaryCurrency] ?? 0;
+  const monthAmount = reportingCurrency ? monthConvertedTotal : monthSummary[primaryCurrency] ?? 0;
   const reviewTransactions = transactions.filter((transaction) => transaction.status === 'needs_review' || transaction.status === 'provisional').slice(0, 3);
+  const reviewCount = report.reviewCount;
   const [chartRange, setChartRange] = useState<ChartRange>('daily');
   const [chartRangeOpen, setChartRangeOpen] = useState(false);
 
@@ -743,37 +1220,42 @@ function Overview({
       <PageIntro action={<WindowPicker windows={reportingWindows} selectedWindow={selectedWindow} setSelectedWindow={(window) => setSelectedWindowKey(window.key)} />}>
         <p className="eyebrow">{formatReportingDay(selectedWindow.end, reportingTimezone)}</p>
         <h1>Know where the month is going.</h1>
-        <p className="intro-copy">A clear view across your Canadian and Chinese accounts, with the uncertain bits kept in the margin.</p>
+        <p className="intro-copy">A clear view across every registered source currency, with the uncertain bits kept in the margin.</p>
       </PageIntro>
 
       <section className="hero-grid" aria-label="Spending summary">
         <div className="primary-summary panel ruled-panel">
-          <div className="panel-kicker"><span>CONFIRMED SPENDING</span><span className="period-note">{selectedWindow.label.toUpperCase()}</span></div>
-          <div className="primary-amount">{formatMoney(summary.CAD, 'CAD')}<sup>CAD</sup></div>
-          <div className="summary-meta"><span className="summary-trend positive"><ArrowDownLeft size={14} /> {transactions.length > 0 ? 'Confirmed records only' : 'No posted records yet'}</span><span>•</span><span>after transfers &amp; refunds</span></div>
-          <div className="primary-rail"><span style={{ width: `${total > 0 ? Math.max(8, Math.round((Math.abs(summary.CAD) / total) * 100)) : 0}%` }} /><span style={{ width: `${total > 0 ? Math.max(8, Math.round((Math.abs(summary.CNY) / total) * 100)) : 0}%` }} /></div>
-          <div className="rail-labels"><span>{cadShare} of this window in CAD</span><span>{formatMoney(monthSummary.CAD, 'CAD')} this month</span></div>
+          <div className="panel-kicker"><span>{reportingCurrency ? `CONVERTED SPENDING${conversion === 'partial' ? ' · PARTIAL' : conversion === 'unavailable' ? ' · UNAVAILABLE' : ''}` : 'CONFIRMED SPENDING'}</span><span className="period-note">{selectedWindow.label.toUpperCase()}</span></div>
+          <div className="primary-amount">{primaryAmount === null ? 'Unavailable' : formatMoney(primaryAmount, primaryCurrency)}<sup>{primaryCurrency}</sup></div>
+          <div className="summary-meta"><span className="summary-trend positive"><ArrowDownLeft size={14} /> {includeProvisional ? 'Confirmed + provisional records' : 'Confirmed records only'}</span><span>•</span><span>after transfers &amp; refunds</span></div>
+          {reportingCurrency && conversion ? <div className={`fx-report-status ${conversion}`} role={conversion === 'complete' ? 'status' : 'alert'}>
+            {conversion === 'complete' ? <BadgeCheck size={14} /> : <CircleAlert size={14} />}
+            <span><strong>{conversion === 'complete' ? 'Complete conversion' : conversion === 'partial' ? 'Partial conversion' : 'Converted total unavailable'}</strong>{conversion === 'complete' ? 'Locked to purchase dates · Frankfurter daily rates.' : <>{' '}Source totals remain usable. {report.fx.unavailableSourceCurrencies.length > 0 ? `Unavailable source currencies: ${report.fx.unavailableSourceCurrencies.join(', ')}.` : 'Some source rates were unavailable.'}</>}</span>
+          </div> : null}
+          <div className="primary-rail">{overviewCurrencies.map((currency) => <span key={currency} style={{ width: `${total > 0 ? Math.max(8, Math.round((Math.abs(summary[currency] ?? 0) / total) * 100)) : 0}%` }} />)}</div>
+          <div className="rail-labels"><span>{reportingCurrency ? `${primaryShare} converted to ${primaryCurrency}` : `${primaryShare} of this window in ${primaryCurrency}`}</span><span>{monthAmount === null ? 'Unavailable this month' : `${formatMoney(monthAmount, primaryCurrency)} this month`}</span></div>
         </div>
         <div className="currency-stack">
-          <CurrencyLane currency="CAD" amount={summary.CAD} share={cadShare} detail="Source currency preserved" />
-          <CurrencyLane currency="CNY" amount={summary.CNY} share={cnyShare} detail="Source currency preserved" />
+          {overviewCurrencies.map((currency) => <CurrencyLane key={currency} currency={currency} amount={summary[currency] ?? 0} share={shareFor(currency)} detail={reportingCurrency ? 'Source currency preserved · audit lane' : 'Source currency preserved'} />)}
         </div>
       </section>
 
+      {report.fx.chineseBankBand ? <ChineseBankBandView band={report.fx.chineseBankBand} /> : null}
+
       <div className="summary-toolbar">
-        <div className="toolbar-title"><BarChart3 size={17} /><strong>Reporting lens</strong><span>Source currencies stay separate by default.</span></div>
+        <div className="toolbar-title"><BarChart3 size={17} /><strong>Reporting lens</strong><span>{reportingCurrency ? `Converted total in ${reportingCurrency}; source lanes stay visible.` : 'Source currencies stay separate by default.'}</span></div>
         <label className="switch-label"><input type="checkbox" checked={includeProvisional} onChange={(event) => setIncludeProvisional(event.target.checked)} /><span className="switch" aria-hidden="true" /><span>Include provisional alerts</span></label>
       </div>
 
       <section className="overview-grid">
         <div className="panel chart-panel">
           <div className="section-heading"><div><p className="eyebrow">THE DAILY PULSE</p><h2>Spending rhythm</h2></div><div className="chart-range-control"><button type="button" className="quiet-button" onClick={() => setChartRangeOpen((open) => !open)} aria-expanded={chartRangeOpen} aria-controls="chart-range-menu">{chartRangeLabels[chartRange]} <ChevronDown size={15} /></button>{chartRangeOpen ? <div id="chart-range-menu" className="chart-range-menu" role="region" aria-label="Chart period options">{(Object.keys(chartRangeLabels) as ChartRange[]).map((range) => <button type="button" key={range} className={chartRange === range ? 'is-selected' : undefined} onClick={() => { setChartRange(range); setChartRangeOpen(false); }}>{chartRangeLabels[range]}</button>)}</div> : null}</div></div>
-          <div className="chart-legend"><span><i className="legend-dot cad-dot" /> CAD</span><span><i className="legend-dot cny-dot" /> CNY</span><span className="chart-period">{chartPeriodLabel(chartRange, selectedWindow)}</span></div>
-          <SpendingChart range={chartRange} transactions={transactions} selectedWindow={selectedWindow} />
+          <div className="chart-legend">{chartCurrenciesForReport(report, preferredCurrency).map((currency) => <span key={currency}><i className={`legend-dot ${currency === 'CAD' ? 'cad-dot' : currency === 'CNY' ? 'cny-dot' : ''}`} style={currency === 'CAD' || currency === 'CNY' ? undefined : { backgroundColor: 'var(--muted)' }} /> {currency}</span>)}<span className="chart-period">{chartPeriodLabel(chartRange, selectedWindow)}</span></div>
+          <SpendingChart range={chartRange} report={report} includeProvisional={includeProvisional} selectedWindow={selectedWindow} preferredCurrency={preferredCurrency} />
         </div>
         <div className="panel review-panel">
           <div className="section-heading"><div><p className="eyebrow">RECONCILIATION DESK</p><h2>Needs your eye</h2></div><CircleAlert className="review-icon" size={18} /></div>
-          <div className="review-callout"><span className="review-number">{reviewTransactions.length}</span><div><strong>{reviewTransactions.length === 1 ? 'record is waiting' : 'records are waiting'}</strong><p>Alerts stay provisional until a statement confirms them.</p></div></div>
+          <div className="review-callout"><span className="review-number">{reviewCount}</span><div><strong>{reviewCount === 1 ? 'record needs review' : 'records need review'}</strong><p>Provisional alerts stay outside confirmed totals until a statement confirms them.</p></div></div>
           <div className="review-list">
             {reviewTransactions.length > 0 ? reviewTransactions.map((transaction) => <ReviewRow key={transaction.id} label={transaction.merchant} detail={`${formatMoney(Math.abs(transaction.amountMinor), transaction.currency, { signDisplay: 'never' })} · ${formatDate(transaction.date)}`} provisional={transaction.status === 'provisional'} />) : <div className="review-empty">Nothing is waiting for review.</div>}
           </div>
@@ -788,26 +1270,35 @@ function Overview({
 
       <section className="insight-strip">
         <div className="insight-mark"><Sparkles size={17} /></div>
-        <div><strong>One calm check-in at a time.</strong><p>You have {formatMoney(monthSummary.CNY, 'CNY')} in confirmed CNY spending this month. A future exchange rate will be shown with its date—never silently blended in.</p></div>
+        <div><strong>One calm check-in at a time.</strong><p>{reportingCurrency && monthConvertedTotal !== null ? `You have ${formatMoney(monthConvertedTotal, insightCurrency)} in ${includeProvisional ? 'confirmed and provisional' : 'confirmed'} converted ${insightCurrency} spending this month. ` : reportingCurrency ? `The converted ${insightCurrency} total is unavailable for this month; ` : `You have ${formatMoney(monthSummary[insightCurrency] ?? 0, insightCurrency)} in ${includeProvisional ? 'confirmed and provisional' : 'confirmed'} ${insightCurrency} spending this month. `}A future exchange rate will be shown with its date—never silently blended in.</p></div>
         <button className="text-button" onClick={() => onNavigate('accounts')}>Set reporting rules <Settings2 size={14} /></button>
       </section>
     </>
   );
 }
 
+function ChineseBankBandView({ band }: { band: ChineseBankBand }) {
+  const lower = formatMoney(band.lowerMinorUnits, band.currency, { signDisplay: 'never' });
+  const upper = formatMoney(band.upperMinorUnits, band.currency, { signDisplay: 'never' });
+  const base = formatMoney(band.baseMinorUnits, band.currency, { signDisplay: 'never' });
+  const description = `${lower} to ${upper} ${band.currency}; ±1.5% Chinese bank settlement estimate; CNY spending excluded.`;
+  return <aside className="fx-band" role="note" aria-label={description}><div className="fx-band-heading"><span>CHINESE BANK SETTLEMENT RANGE</span><span>SERVER ESTIMATE</span></div><strong>{lower} – {upper} {band.currency}</strong><p>±1.5% Chinese bank settlement estimate; CNY spending excluded.</p><small>Based on {base} of eligible non-CNY Bank of China spending.</small></aside>;
+}
+
 function WindowPicker({ windows, selectedWindow, setSelectedWindow }: { windows: ReportWindow[]; selectedWindow: ReportWindow; setSelectedWindow: (window: ReportWindow) => void }) {
   return <div className="window-picker" role="group" aria-label="Reporting window">{windows.map((window) => <button key={window.key} type="button" className={selectedWindow.key === window.key ? 'is-selected' : ''} onClick={() => setSelectedWindow(window)} aria-pressed={selectedWindow.key === window.key}>{window.label}</button>)}</div>;
 }
 
-function CurrencyLane({ currency, amount, share, detail }: { currency: Currency; amount: number; share: string; detail: string }) {
-  const meta = currencyLabels[currency];
+function CurrencyLane({ currency, amount, share, detail }: { currency: CurrencyCode; amount: number; share: string; detail: string }) {
+  const meta = currencyPresentation(currency);
   return <div className={`currency-lane ${meta.accent}`}><div className="currency-lane-head"><span className="currency-code"><span className="currency-flag">{meta.flag}</span>{currency}</span><span className="currency-share">{share} of total</span></div><div className="currency-amount">{formatMoney(amount, currency)}</div><div className="currency-lane-foot"><span>{meta.name}</span><span>{detail}</span></div></div>;
 }
 
-function SpendingChart({ range, transactions, selectedWindow }: { range: ChartRange; transactions: Transaction[]; selectedWindow: ReportWindow }) {
-  const entries = chartDataForRange(range, transactions, selectedWindow);
-  const max = Math.max(...entries.map((entry) => entry.CAD + entry.CNY), 1);
-  return <div className="spending-chart" role="img" aria-label={`Bar chart showing ${chartRangeLabels[range].toLowerCase()} spending in CAD and CNY`}><div className="chart-y-labels"><span>$100</span><span>$50</span><span>$0</span></div><div className="chart-bars">{entries.map((entry) => <div className="chart-column" key={entry.day}><div className="bar-track"><span className="bar cny-bar" style={{ height: `${(entry.CNY / max) * 100}%` }} /><span className="bar cad-bar" style={{ height: `${(entry.CAD / max) * 100}%` }} /></div><span className="bar-label">{entry.day}</span></div>)}</div></div>;
+function SpendingChart({ range, report, includeProvisional, selectedWindow, preferredCurrency }: { range: ChartRange; report: OverviewReport; includeProvisional: boolean; selectedWindow: ReportWindow; preferredCurrency: CurrencyCode | null }) {
+  const entries = chartDataForRange(range, report, includeProvisional, selectedWindow);
+  const currencies = chartCurrenciesForReport(report, preferredCurrency);
+  const max = Math.max(...entries.map((entry) => currencies.reduce((total, currency) => total + (entry.totals[currency] ?? 0), 0)), 1);
+  return <div className="spending-chart" role="img" aria-label={`Bar chart showing ${chartRangeLabels[range].toLowerCase()} spending in ${currencies.join(', ')}`}><div className="chart-y-labels"><span>$100</span><span>$50</span><span>$0</span></div><div className="chart-bars">{entries.map((entry) => <div className="chart-column" key={entry.day}><div className="bar-track">{[...currencies].reverse().map((currency) => <span key={currency} className={`bar ${currency === 'CAD' ? 'cad-bar' : currency === 'CNY' ? 'cny-bar' : ''}`} style={{ height: `${((entry.totals[currency] ?? 0) / max) * 100}%`, ...(currency === 'CAD' || currency === 'CNY' ? {} : { backgroundColor: 'var(--muted)', opacity: 0.72 }) }} />)}</div><span className="bar-label">{entry.day}</span></div>)}</div></div>;
 }
 
 function ReviewRow({ label, detail, provisional = false }: { label: string; detail: string; provisional?: boolean }) {
@@ -816,17 +1307,18 @@ function ReviewRow({ label, detail, provisional = false }: { label: string; deta
 
 function TransactionsView({ transactions, onExport }: { transactions: Transaction[]; onExport: () => void }) {
   const [query, setQuery] = useState('');
-  const [currency, setCurrency] = useState<Currency | 'all'>('all');
+  const [currency, setCurrency] = useState<CurrencyCode | 'all'>('all');
   const [category, setCategory] = useState<string | 'all'>('all');
   const [status, setStatus] = useState<Transaction['status'] | 'all'>('all');
   const [source, setSource] = useState<Transaction['source'] | 'all'>('all');
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
   const categories = Array.from(new Set(transactions.map((transaction) => transaction.category))).sort();
+  const currencies = orderedCurrencies(transactions.map((transaction) => transaction.currency));
   const filtered = filterTransactions(transactions, { query, currency, category, status, source });
 
   return <>
     <PageIntro action={<button type="button" className="outline-button" onClick={onExport}><FileCheck2 size={16} /> Export ledger</button>}><p className="eyebrow">THE FULL LEDGER</p><h1>Transactions</h1><p className="intro-copy">Search, sort, and annotate every record without losing its source.</p></PageIntro>
-    <section className="panel filter-panel"><div className="filter-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search merchant, category, or note" aria-label="Search transactions" />{query ? <button type="button" className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button> : null}</div><div className="filter-selects"><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value as Currency | 'all')}><option value="all">All currencies</option><option value="CAD">CAD</option><option value="CNY">CNY</option></select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>State</span><select value={status} onChange={(event) => setStatus(event.target.value as Transaction['status'] | 'all')}><option value="all">All states</option><option value="confirmed">Confirmed</option><option value="provisional">Provisional</option><option value="needs_review">Needs review</option></select></label><button type="button" className="icon-button filter-button" onClick={() => setMoreFiltersOpen((open) => !open)} aria-label="More filters" aria-expanded={moreFiltersOpen} aria-controls="transaction-more-filters"><SlidersHorizontal size={17} /></button></div>{moreFiltersOpen ? <div id="transaction-more-filters" className="more-filters" role="region" aria-label="Additional transaction filters"><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as Transaction['source'] | 'all')} aria-label="Source"><option value="all">All sources</option><option value="plaid">Plaid</option><option value="statement">Statement</option><option value="alert">BOC alert</option><option value="manual">Manual</option></select></label></div> : null}</section>
+    <section className="panel filter-panel"><div className="filter-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search merchant, category, or note" aria-label="Search transactions" />{query ? <button type="button" className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button> : null}</div><div className="filter-selects"><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value as CurrencyCode | 'all')}><option value="all">All currencies</option>{currencies.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>State</span><select value={status} onChange={(event) => setStatus(event.target.value as Transaction['status'] | 'all')}><option value="all">All states</option><option value="confirmed">Confirmed</option><option value="provisional">Provisional</option><option value="needs_review">Needs review</option></select></label><button type="button" className="icon-button filter-button" onClick={() => setMoreFiltersOpen((open) => !open)} aria-label="More filters" aria-expanded={moreFiltersOpen} aria-controls="transaction-more-filters"><SlidersHorizontal size={17} /></button></div>{moreFiltersOpen ? <div id="transaction-more-filters" className="more-filters" role="region" aria-label="Additional transaction filters"><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as Transaction['source'] | 'all')} aria-label="Source"><option value="all">All sources</option><option value="plaid">Plaid</option><option value="statement">Statement</option><option value="alert">BOC alert</option><option value="manual">Manual</option></select></label></div> : null}</section>
     <section className="panel table-panel"><div className="table-toolbar"><span>{filtered.length} records</span><span className="table-toolbar-note"><BadgeCheck size={14} /> Confirmed and provisional states are kept distinct</span></div><TransactionTable transactions={filtered} /></section>
   </>;
 }
@@ -840,29 +1332,61 @@ function StateBadge({ status }: { status: Transaction['status'] }) {
   return <span className={`state-badge ${status}`}><span className="state-dot" />{label}</span>;
 }
 
-function ImportsView({ transactions, notice, onImport, onClearNotice }: { transactions: Transaction[]; notice: string | null; onImport: (transactions: Transaction[], errors: string[]) => void; onClearNotice: () => void }) {
+async function sha256File(file: File) {
+  if (!crypto.subtle) return null;
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function ImportsView({ accounts, transactions, notice, onImport, onClearNotice }: { accounts: AppAccount[]; transactions: Transaction[]; notice: string | null; onImport: (transactions: Transaction[], errors: string[], fileSha256: string | null, filename: string) => Promise<boolean>; onClearNotice: () => void }) {
   const [dragActive, setDragActive] = useState(false);
   const [preview, setPreview] = useState<Transaction[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
-  const [selectedAccount, setSelectedAccount] = useState('boc-cny');
+  const [selectedAccount, setSelectedAccount] = useState('');
+  const [fileSha256, setFileSha256] = useState<string | null>(null);
+  const [filename, setFilename] = useState('statement.csv');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (accounts.length > 0) setSelectedAccount((current) => accounts.some((account) => account.id === current) ? current : accounts[0].id);
+  }, [accounts]);
+
+  const selectedCurrency = accounts.find((account) => account.id === selectedAccount)?.currency;
 
   const loadFile = async (file: File) => {
-    const result = parseStatementCsv(await file.text(), { accountId: selectedAccount, source: 'statement' });
+    if (file.size > 10 * 1024 * 1024) {
+      setPreview([]);
+      setFileSha256(null);
+      setErrors(['Statement files are limited to 10 MiB.']);
+      return;
+    }
+    const hash = await sha256File(file);
+    const result = parseStatementCsv(await file.text(), { accountId: selectedAccount, source: 'statement', defaultCurrency: selectedCurrency, fileSha256: hash ?? undefined });
     setPreview(result.transactions);
     setErrors(result.errors);
+    setFileSha256(hash);
+    setFilename(file.name || 'statement.csv');
     onClearNotice();
   };
 
-  const commitPreview = () => {
-    onImport(preview, errors);
-    setPreview([]);
-    setErrors([]);
+  const commitPreview = async () => {
+    setBusy(true);
+    try {
+      const committed = await onImport(preview, errors, fileSha256, filename);
+      if (committed) {
+        setPreview([]);
+        setErrors([]);
+        setFileSha256(null);
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   return <>
     <PageIntro action={<div className="import-trust"><ShieldCheck size={15} /> Preview before saving</div>}><p className="eyebrow">SOURCE CONTROL</p><h1>Import &amp; review</h1><p className="intro-copy">Bring in a statement, see exactly what will change, and keep uncertain alerts visible until they match.</p></PageIntro>
     {notice ? <div className="notice-banner"><BadgeCheck size={17} /><span>{notice}</span><button className="icon-button" onClick={onClearNotice} aria-label="Dismiss notification"><X size={16} /></button></div> : null}
-    <section className="import-layout"><div className="panel import-panel"><div className="section-heading"><div><p className="eyebrow">STEP 01</p><h2>Choose a statement</h2></div><FileUp size={18} className="section-icon" /></div><label className="account-select"><span>Import into</span><select value={selectedAccount} onChange={(event) => setSelectedAccount(event.target.value)}><option value="boc-cny">Bank of China · CNY</option><option value="rbc-chequing">RBC Everyday chequing · CAD</option></select></label><label className={`dropzone ${dragActive ? 'is-dragging' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); const file = event.dataTransfer.files[0]; if (file) void loadFile(file); }}><input type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFile(file); }} /><span className="dropzone-icon"><UploadCloud size={23} /></span><strong>Drop a CSV statement here</strong><span>or browse your files · CSV up to 10 MB</span></label><div className="import-format"><BookOpen size={14} /><span>Required columns: Date, Description, Amount. Currency and Category are optional.</span></div></div><div className="panel import-side-panel"><div className="section-heading"><div><p className="eyebrow">STEP 02</p><h2>Review queue</h2></div><span className="queue-count">{preview.length || transactions.filter((transaction) => transaction.status === 'needs_review').length}</span></div><div className="queue-summary"><div><strong>{preview.length || transactions.filter((transaction) => transaction.status === 'needs_review').length}</strong><span>rows ready</span></div><div><strong>{errors.length}</strong><span>row errors</span></div><div><strong>0</strong><span>duplicates</span></div></div>{errors.length > 0 ? <div className="error-list">{errors.slice(0, 3).map((error) => <span key={error}><CircleAlert size={14} />{error}</span>)}</div> : <div className="queue-empty"><FileCheck2 size={20} /><strong>{preview.length > 0 ? 'Preview is ready.' : 'Nothing waiting yet.'}</strong><span>{preview.length > 0 ? 'Check the rows below before committing.' : 'A statement preview will appear here.'}</span></div>}{preview.length > 0 ? <button className="primary-button full-width" onClick={commitPreview} disabled={preview.length === 0}>Commit {preview.length} rows <ArrowUpRight size={15} /></button> : null}</div></section>
+    <section className="import-layout"><div className="panel import-panel"><div className="section-heading"><div><p className="eyebrow">STEP 01</p><h2>Choose a statement</h2></div><FileUp size={18} className="section-icon" /></div><label className="account-select"><span>Import into</span><select value={selectedAccount} onChange={(event) => setSelectedAccount(event.target.value)} disabled={accounts.length === 0}>{accounts.length === 0 ? <option value="">No accounts available</option> : accounts.map((account) => <option key={account.id} value={account.id}>{account.institution} · {account.name} · {account.currency}</option>)}</select></label><label className={`dropzone ${dragActive ? 'is-dragging' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); const file = event.dataTransfer.files[0]; if (file) void loadFile(file); }}><input type="file" accept=".csv,text/csv,.pdf,application/pdf" disabled={accounts.length === 0} onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFile(file); }} /><span className="dropzone-icon"><UploadCloud size={23} /></span><strong>Drop a CSV or verified text statement here</strong><span>or browse your files · up to 10 MB</span></label><div className="import-format"><BookOpen size={14} /><span>Required CSV columns: Date, Description, and Amount. Currency is optional when the selected account has a registered default.</span></div></div><div className="panel import-side-panel"><div className="section-heading"><div><p className="eyebrow">STEP 02</p><h2>Review queue</h2></div><span className="queue-count">{preview.length || transactions.filter((transaction) => transaction.status === 'needs_review').length}</span></div><div className="queue-summary"><div><strong>{preview.length || transactions.filter((transaction) => transaction.status === 'needs_review').length}</strong><span>rows ready</span></div><div><strong>{errors.length}</strong><span>row errors</span></div><div><strong>0</strong><span>duplicates</span></div></div>{errors.length > 0 ? <div className="error-list">{errors.slice(0, 3).map((error) => <span key={error}><CircleAlert size={14} />{error}</span>)}</div> : <div className="queue-empty"><FileCheck2 size={20} /><strong>{preview.length > 0 ? 'Preview is ready.' : 'Nothing waiting yet.'}</strong><span>{preview.length > 0 ? 'Check the rows below before committing.' : 'A statement preview will appear here.'}</span></div>}{preview.length > 0 ? <button className="primary-button full-width" onClick={() => { void commitPreview(); }} disabled={preview.length === 0 || busy}>{busy ? 'Saving securely…' : `Commit ${preview.length} rows`} <ArrowUpRight size={15} /></button> : null}</div></section>
     {preview.length > 0 ? <section className="panel table-panel"><div className="section-heading table-heading"><div><p className="eyebrow">STEP 03</p><h2>Statement preview</h2></div><button className="quiet-button" onClick={() => { setPreview([]); setErrors([]); }}>Clear <X size={14} /></button></div><TransactionTable transactions={preview} compact /></section> : null}
   </>;
 }
@@ -904,8 +1428,9 @@ function AccountsView({
   pendingConnection,
   reportingTimezone,
   weekStartsOn,
-  onReportingTimezoneChange,
-  onWeekStartsOnChange,
+  preferredCurrency,
+  preferencesBusy,
+  onReportingPreferencesChange,
   onConnect,
   onConfirmConnection,
   onCancelConnection,
@@ -914,15 +1439,16 @@ function AccountsView({
   onNavigate,
   onNotice,
 }: {
-  accounts: Account[];
+  accounts: AppAccount[];
   connectionBusy: boolean;
   connectionNotice: string | null;
   connectionNoticeError: boolean;
   pendingConnection: PendingPlaidConnection | null;
   reportingTimezone: ReportingTimezone;
   weekStartsOn: WeekStartsOn;
-  onReportingTimezoneChange: (timezone: ReportingTimezone) => void;
-  onWeekStartsOnChange: (weekStartsOn: WeekStartsOn) => void;
+  preferredCurrency: CurrencyCode | null;
+  preferencesBusy: boolean;
+  onReportingPreferencesChange: (next: { reportingTimezone: ReportingTimezone; weekStartsOn: WeekStartsOn; preferredCurrency: CurrencyCode | null }) => void;
   onConnect: () => void;
   onConfirmConnection: (accountIds: string[]) => void;
   onCancelConnection: () => void;
@@ -938,11 +1464,11 @@ function AccountsView({
     {connectionNotice ? <div className={`connection-notice ${connectionNoticeError ? 'is-error' : ''}`} role="status"><BadgeCheck size={17} /><span>{connectionNotice}</span><span className="connection-notice-mark" aria-hidden="true"><CircleHelp size={16} /></span></div> : null}
     {pendingConnection ? <PlaidAccountSelectionDialog connection={pendingConnection} busy={connectionBusy} onConfirm={onConfirmConnection} onCancel={onCancelConnection} /> : null}
     <section className="account-grid">{accounts.map((account) => <AccountCard key={account.id} account={account} connectionBusy={connectionBusy} onSync={onSync} onDisconnect={onDisconnect} onNavigate={onNavigate} />)}<div className="panel add-account-card"><div className="add-account-icon"><Link2 size={19} /></div><h2>Connect another source</h2><p>Connect RBC through Plaid or keep a statement-only account. Credentials stay outside the browser.</p><button className="outline-button" onClick={onConnect} disabled={connectionBusy}><Landmark size={16} />{connectionBusy ? 'Opening secure link…' : 'Start bank connection'} <ArrowUpRight size={15} /></button><small className="connection-helper">Plaid environment is controlled by the Worker; account access is explicit.</small></div></section>
-    <section className="settings-layout"><div id="reporting-settings" className="panel settings-panel" tabIndex={-1}><div className="section-heading"><div><p className="eyebrow">REPORTING SETTINGS</p><h2>How totals should read</h2></div><SlidersHorizontal size={18} className="section-icon" /></div><div className="settings-row"><div><strong>Default reporting currency</strong><span>Converted views will show the rate date beside the total.</span></div><select defaultValue="CAD" aria-label="Default reporting currency"><option>CAD — Canadian dollar</option><option>CNY — Chinese yuan</option></select></div><div className="settings-row"><div><strong>Reporting timezone</strong><span>Dates are preserved from the source; this zone scopes the reporting window.</span></div><select value={reportingTimezone} onChange={(event) => onReportingTimezoneChange(event.target.value as ReportingTimezone)} aria-label="Reporting timezone"><option value="America/Toronto">America/Toronto</option><option value="Asia/Shanghai">Asia/Shanghai</option></select></div><div className="settings-row"><div><strong>Week starts on</strong><span>Used by the “This week” window.</span></div><select value={weekStartsOn} onChange={(event) => onWeekStartsOnChange(event.target.value.toLowerCase() as WeekStartsOn)} aria-label="Week start"><option value="monday">Monday</option><option value="sunday">Sunday</option></select></div></div><div className="panel privacy-panel"><div className="privacy-seal"><ShieldCheck size={22} /></div><p className="eyebrow">PRIVATE BY DEFAULT</p><h2>The ledger keeps its boundaries.</h2><ul><li><Check size={14} />Bank passwords never touch this app.</li><li><Check size={14} />Provisional alerts never hide in confirmed totals.</li><li><Check size={14} />Exports and backups are explicit actions.</li></ul><button type="button" className="text-button" onClick={() => setPolicyOpen((open) => !open)} aria-expanded={policyOpen} aria-controls="data-policy">{policyOpen ? 'Hide the data policy' : 'Read the data policy'} <ArrowUpRight size={14} /></button>{policyOpen ? <div id="data-policy" className="policy-details" role="region" aria-label="Data policy"><strong>This browser never receives bank passwords.</strong><span>Statements are parsed locally before review, while saved connections stay behind the protected Worker boundary.</span></div> : null}</div></section>
+    <section className="settings-layout"><div id="reporting-settings" className="panel settings-panel" tabIndex={-1}><div className="section-heading"><div><p className="eyebrow">REPORTING SETTINGS</p><h2>How totals should read</h2></div><SlidersHorizontal size={18} className="section-icon" /></div><div className="settings-row"><div><strong>Total spending currency</strong><span>Choose a registered target for converted totals; original source currencies and amounts remain visible below.</span></div><select value={preferredCurrency ?? ''} disabled={preferencesBusy} onChange={(event) => onReportingPreferencesChange({ reportingTimezone, weekStartsOn, preferredCurrency: event.target.value ? event.target.value as CurrencyCode : null })} aria-label="Preferred reporting currency"><option value="">Source currencies (no conversion)</option>{supportedCurrencyCodes.map((code) => <option key={code} value={code}>{code} — reporting target</option>)}</select></div><div className="settings-row"><div><strong>Reporting timezone</strong><span>Dates are preserved from the source; this zone scopes the reporting window.</span></div><select value={reportingTimezone} disabled={preferencesBusy} onChange={(event) => onReportingPreferencesChange({ reportingTimezone: event.target.value as ReportingTimezone, weekStartsOn, preferredCurrency })} aria-label="Reporting timezone"><option value="America/Toronto">America/Toronto</option><option value="Asia/Shanghai">Asia/Shanghai</option></select></div><div className="settings-row"><div><strong>Week starts on</strong><span>Used by the “This week” window.</span></div><select value={weekStartsOn} disabled={preferencesBusy} onChange={(event) => onReportingPreferencesChange({ reportingTimezone, weekStartsOn: event.target.value.toLowerCase() as WeekStartsOn, preferredCurrency })} aria-label="Week start"><option value="monday">Monday</option><option value="sunday">Sunday</option></select></div></div><div className="panel privacy-panel"><div className="privacy-seal"><ShieldCheck size={22} /></div><p className="eyebrow">PRIVATE BY DEFAULT</p><h2>The ledger keeps its boundaries.</h2><ul><li><Check size={14} />Bank passwords never touch this app.</li><li><Check size={14} />Provisional alerts never hide in confirmed totals.</li><li><Check size={14} />Exports and backups are explicit actions.</li></ul><button type="button" className="text-button" onClick={() => setPolicyOpen((open) => !open)} aria-expanded={policyOpen} aria-controls="data-policy">{policyOpen ? 'Hide the data policy' : 'Read the data policy'} <ArrowUpRight size={14} /></button>{policyOpen ? <div id="data-policy" className="policy-details" role="region" aria-label="Data policy"><strong>This browser never receives bank passwords.</strong><span>Statements are parsed locally before review, while saved connections stay behind the protected Worker boundary.</span></div> : null}</div></section>
   </>;
 }
 
-function AccountCard({ account, connectionBusy, onSync, onDisconnect, onNavigate }: { account: Account; connectionBusy: boolean; onSync: () => void; onDisconnect: (itemId: string, institution: string) => void; onNavigate: (view: View) => void }) {
+function AccountCard({ account, connectionBusy, onSync, onDisconnect, onNavigate }: { account: AppAccount; connectionBusy: boolean; onSync: () => void; onDisconnect: (itemId: string, institution: string) => void; onNavigate: (view: View) => void }) {
   const isConnected = account.status === 'connected';
   const [optionsOpen, setOptionsOpen] = useState(false);
   const optionsId = useId();

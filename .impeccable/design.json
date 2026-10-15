@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "mode": "operate",
+  "direction": "Border Ledger",
+  "platform": "web",
+  "tokens": {
+    "canvas": "#f3efe6",
+    "ink": "#18201f",
+    "cad": "#1b6b5b",
+    "cny": "#b04e36",
+    "review": "#996b1f"
+  }
+}

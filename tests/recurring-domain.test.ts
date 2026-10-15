@@ -57,9 +57,9 @@ describe('recurring estimate rules', () => {
       }),
       stream({ id: 'day-30', predictedNextDate: '2026-11-12' }),
     ], '2026-10-13');
-    expect(result.monthlyByCurrency).toEqual({ CAD: -2400, CNY: -2167 });
-    expect(result.yearlyByCurrency).toEqual({ CAD: -28800, CNY: -26000 });
-    expect(result.subscriptionByCurrency).toEqual({ CAD: -2400, CNY: -2167 });
+    expect(result.monthlyByCurrency).toMatchObject({ CAD: -2400, CNY: -2167, HKD: 0, USD: 0 });
+    expect(result.yearlyByCurrency).toMatchObject({ CAD: -28800, CNY: -26000, HKD: 0, USD: 0 });
+    expect(result.subscriptionByCurrency).toMatchObject({ CAD: -2400, CNY: -2167, HKD: 0, USD: 0 });
     expect(result.upcoming.map((item) => [item.id, item.nextExpectedAmountMinor])).toEqual([['stream-1', -1200], ['stream-cny', -2500]]);
   });
 

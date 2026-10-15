@@ -1,0 +1,88 @@
+name: App validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - android/**
+      - src/**
+      - index.html
+      - contracts/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - vite.config.ts
+      - public/**
+      - .github/workflows/app-build.yml
+  push:
+    paths:
+      - android/**
+      - src/**
+      - index.html
+      - contracts/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - vite.config.ts
+      - public/**
+      - .github/workflows/app-build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  android-toolchain:
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.availability.outputs.available }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect Gradle wrapper availability
+        id: availability
+        shell: pwsh
+        run: |
+          $wrapper = Test-Path -LiteralPath 'android/gradlew.bat' -PathType Leaf
+          $jar = Test-Path -LiteralPath 'android/gradle/wrapper/gradle-wrapper.jar' -PathType Leaf
+          if ($wrapper -and $jar) {
+            'available=true' >> $env:GITHUB_OUTPUT
+            Write-Output 'Gradle wrapper script and JAR are present; Android lint and unit tests are enabled.'
+          } else {
+            'available=false' >> $env:GITHUB_OUTPUT
+            Write-Output '::notice::Android lint/unit validation is gated because the checked-in Gradle wrapper JAR is unavailable.'
+          }
+
+  android-checks:
+    needs: android-toolchain
+    if: needs.android-toolchain.outputs.available == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Run Android lint and unit tests
+        working-directory: android
+        shell: pwsh
+        run: .\gradlew.bat lintDebug testDebugUnitTest --no-daemon
+
+  android-checks-gated:
+    needs: android-toolchain
+    if: needs.android-toolchain.outputs.available != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report unavailable Android build prerequisites
+        run: echo '::notice::Android lint/unit validation was intentionally gated; no Android build or test is claimed.'

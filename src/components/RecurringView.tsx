@@ -4,6 +4,7 @@ import { formatDate, formatMoney } from '../domain/format';
 import { ledgerApi, LedgerApiError } from '../domain/api';
 import type { RecurringClassification, RecurringPage, RecurringStream, RecurringSummary } from '../domain/recurring';
 import type { Currency } from '../domain/types';
+import { supportedCurrencyCodes } from '../domain/currencies';
 import RecurringDetails from './RecurringDetails';
 
 interface RecurringViewProps {
@@ -30,7 +31,7 @@ function stateCopy(state: RecurringPage['state']) {
   if (state === 'stale') return { title: 'Showing the last good snapshot', body: 'The recurring source is more than a day old. New data will replace it after the next successful refresh.' };
   if (state === 'incomplete') return { title: 'Recurring history is still maturing', body: 'The provider has returned a partial history. Estimates remain separate from confirmed ledger cost.' };
   if (state === 'error') return { title: 'The recurring refresh needs attention', body: 'The last good snapshot remains visible while the source reports an error.' };
-  if (state === 'unavailable') return { title: 'Connect a source to see recurring payments', body: 'Recurring analysis appears after a permitted CAD or CNY account completes its first source sync.' };
+  if (state === 'unavailable') return { title: 'Connect a source to see recurring payments', body: 'Recurring analysis appears after a permitted registered-currency account completes its first source sync.' };
   return null;
 }
 
@@ -116,6 +117,20 @@ export function RecurringView({ today, startDate, endDate }: RecurringViewProps)
   const changes = summary?.latestPaymentChanges ?? [];
   const lastGoodLabel = page?.checkedAt ? `Last good snapshot ${formatDate(page.checkedAt.slice(0, 10))}` : 'No successful snapshot yet';
   const selectedStream = useMemo(() => page?.streams.find((stream) => stream.id === selectedId) ?? null, [page, selectedId]);
+  const summaryCurrencies = useMemo(() => {
+    const observed = new Set<Currency>([
+      ...Object.keys(summary?.monthlyByCurrency ?? {}),
+      ...Object.keys(summary?.actualCostByCurrency ?? {}),
+      ...(page?.streams ?? []).map((stream) => stream.currency),
+    ]);
+    const nonZero = supportedCurrencyCodes.filter((code) => observed.has(code) && (
+      (summary?.monthlyByCurrency[code] ?? 0) !== 0 ||
+      (summary?.actualCostByCurrency[code] ?? 0) !== 0
+    ));
+    if (nonZero.length > 0) return nonZero;
+    return supportedCurrencyCodes.filter((code) => code === 'CAD' || code === 'CNY');
+  }, [page?.streams, summary]);
+  const primaryCurrency = summaryCurrencies[0] ?? 'CAD';
 
   return <>
     <div className="page-intro recurring-page-intro"><div><p className="eyebrow">THE RECURRING LEDGER</p><h1>Make the repeatable visible.</h1><p className="intro-copy">Provider-detected streams, source currencies kept apart, and actual posted cost grounded in the ledger.</p></div><button type="button" className="outline-button" onClick={load} disabled={status === 'loading'}><RefreshCw size={16} className={status === 'loading' ? 'is-spinning' : undefined} /> Refresh recurring feed</button></div>
@@ -125,11 +140,14 @@ export function RecurringView({ today, startDate, endDate }: RecurringViewProps)
 
     {status === 'ready' && (summary || page) ? <>
       <section className="recurring-summary-grid" aria-label="Recurring payment summary">
-        <div className="panel recurring-summary-lead"><div className="section-heading"><div><p className="eyebrow">RUN-RATE VIEW</p><h2>Monthly run-rate</h2></div><TrendingUp size={18} className="section-icon" /></div><div className="recurring-summary-total"><strong>{formatMoney(Math.abs(currencyTotal(summary, 'monthlyByCurrency', 'CAD')), 'CAD', { signDisplay: 'never' })}</strong><span>CAD source estimate · {streamCount} stream{streamCount === 1 ? '' : 's'}</span></div><div className="recurring-summary-meta"><span><span className="live-dot" /> {lastGoodLabel}</span><span>{state === 'incomplete' ? 'History incomplete' : 'Provider history'}</span></div></div>
-        <div className="panel recurring-summary-cells"><SummaryCell currency="CAD" label="monthly" value={currencyTotal(summary, 'monthlyByCurrency', 'CAD')} /><SummaryCell currency="CNY" label="monthly" value={currencyTotal(summary, 'monthlyByCurrency', 'CNY')} /><SummaryCell currency="CAD" label="actual" value={currencyTotal(summary, 'actualCostByCurrency', 'CAD')} tone="actual" /><SummaryCell currency="CNY" label="actual" value={currencyTotal(summary, 'actualCostByCurrency', 'CNY')} tone="actual" /></div>
+        <div className="panel recurring-summary-lead"><div className="section-heading"><div><p className="eyebrow">RUN-RATE VIEW</p><h2>Monthly run-rate</h2></div><TrendingUp size={18} className="section-icon" /></div><div className="recurring-summary-total"><strong>{formatMoney(Math.abs(currencyTotal(summary, 'monthlyByCurrency', primaryCurrency)), primaryCurrency, { signDisplay: 'never' })}</strong><span>{primaryCurrency} source estimate · {streamCount} stream{streamCount === 1 ? '' : 's'}</span></div><div className="recurring-summary-meta"><span><span className="live-dot" /> {lastGoodLabel}</span><span>{state === 'incomplete' ? 'History incomplete' : 'Provider history'}</span></div></div>
+        <div className="panel recurring-summary-cells">{summaryCurrencies.flatMap((code) => [
+          <SummaryCell key={`${code}-monthly`} currency={code} label="monthly" value={currencyTotal(summary, 'monthlyByCurrency', code)} />,
+          <SummaryCell key={`${code}-actual`} currency={code} label="actual" value={currencyTotal(summary, 'actualCostByCurrency', code)} tone="actual" />,
+        ])}</div>
       </section>
 
-      <div className="recurring-toolbar"><div className="toolbar-title"><Filter size={17} /><strong>Filter the source map</strong><span>Classification changes stay local to this stream.</span></div><div className="recurring-filters"><label><span>Currency</span><select aria-label="Recurring currency" value={currency} onChange={(event) => setCurrency(event.target.value as Currency | 'all')}><option value="all">All currencies</option><option value="CAD">CAD</option><option value="CNY">CNY</option></select></label><label><span>Classification</span><select aria-label="Recurring classification" value={classification} onChange={(event) => setClassification(event.target.value as RecurringClassification | 'all')}><option value="all">All classifications</option><option value="unclassified">Unclassified</option><option value="subscription">Subscription</option><option value="bill">Bill</option><option value="other">Other</option><option value="excluded">Excluded</option></select></label></div></div>
+      <div className="recurring-toolbar"><div className="toolbar-title"><Filter size={17} /><strong>Filter the source map</strong><span>Classification changes stay local to this stream.</span></div><div className="recurring-filters"><label><span>Currency</span><select aria-label="Recurring currency" value={currency} onChange={(event) => setCurrency(event.target.value as Currency | 'all')}><option value="all">All currencies</option>{supportedCurrencyCodes.map((code) => <option key={code} value={code}>{code}</option>)}</select></label><label><span>Classification</span><select aria-label="Recurring classification" value={classification} onChange={(event) => setClassification(event.target.value as RecurringClassification | 'all')}><option value="all">All classifications</option><option value="unclassified">Unclassified</option><option value="subscription">Subscription</option><option value="bill">Bill</option><option value="other">Other</option><option value="excluded">Excluded</option></select></label></div></div>
 
       {page?.coverageWarnings?.length ? <div className="recurring-warning-line" role="status"><CircleAlert size={14} /><span>{page.coverageWarnings.join(' · ')}</span></div> : null}
       <section className="panel recurring-stream-panel" aria-labelledby="recurring-streams-title"><div className="section-heading recurring-list-heading"><div><p className="eyebrow">SOURCE MAP</p><h2 id="recurring-streams-title">Recurring streams</h2></div><span>{page?.streams.length ?? 0} shown · {lastGoodLabel}</span></div>{page?.streams.length ? <div className="recurring-stream-list">{page.streams.map((stream) => <StreamRow key={stream.id} stream={stream} onOpen={setSelectedId} />)}</div> : <div className="recurring-empty-state"><Tag size={20} /><strong>{notice?.title ?? 'No recurring streams in this view'}</strong><span>{notice?.body ?? 'Adjust the filters or wait for the next successful source snapshot.'}</span></div>}{page?.nextCursor ? <div className="recurring-load-more"><button type="button" className="outline-button" onClick={() => void loadMore()} disabled={loadingMore}>{loadingMore ? <RefreshCw size={15} className="is-spinning" /> : null}{loadingMore ? 'Loading streams…' : 'Load more streams'}</button>{loadMoreError ? <span role="alert">{loadMoreError}</span> : null}</div> : null}</section>

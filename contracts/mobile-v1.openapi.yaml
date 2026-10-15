@@ -1,0 +1,1576 @@
+openapi: 3.1.0
+info:
+  title: Border Ledger Mobile API
+  version: 1.0.0
+  description: >-
+    HTTPS mobile contract for the server-owned personal ledger. All JSON responses
+    use Cache-Control no-store. Browser Access credentials and device credentials
+    are separate. Only approved normalized alert fields cross the capture boundary;
+    raw notification or chat text is never an API field.
+x-response-header-policy: 'Cache-Control: no-store on every response, including CSV and errors'
+servers:
+  - url: https://ledger.example.com
+    description: Replace with the configured canonical HTTPS origin.
+tags:
+  - name: Pairing
+  - name: Capture
+  - name: Auth
+  - name: Ledger
+  - name: Review
+  - name: Imports
+  - name: Connections
+  - name: Devices
+security: []
+paths:
+  /api/mobile/v1/pairings:
+    post:
+      tags: [Pairing]
+      summary: Start a ten-minute device pairing session
+      description: Public and rate limited. The verifier is held by the device.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [deviceName, verifierChallenge]
+              properties:
+                deviceName: { type: string, minLength: 1, maxLength: 80 }
+                verifierChallenge: { type: string, pattern: '^[A-Za-z0-9_-]{43}$', description: Base64url SHA-256 challenge }
+      responses:
+        '201':
+          description: Pairing awaits explicit owner approval.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [pairingId, userCode, expiresAt, minPollSeconds]
+                properties:
+                  pairingId: { type: string, format: uuid }
+                  userCode: { type: string, pattern: '^[A-HJ-NP-Z2-9]{8}$' }
+                  expiresAt: { type: string, format: date-time }
+                  minPollSeconds: { type: integer, minimum: 5 }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/pairings/{id}/claim:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Pairing]
+      summary: Claim an approved capture credential binding
+      description: >-
+        Minimum five seconds between polls. A device generates and retains a random
+        32-byte secret locally, submits only its SHA-256 hash, and retries with the
+        same hash. A different hash cannot claim an already bound pairing.
+      security: [{ pairVerifier: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [credentialHash]
+              properties:
+                credentialHash: { type: string, pattern: '^[A-Fa-f0-9]{64}$' }
+      responses:
+        '200':
+          description: Stable binding acknowledgement; no bearer secret is returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PairingClaim' }
+        '202':
+          description: Still awaiting owner approval.
+          headers:
+            Retry-After: { schema: { type: integer, minimum: 5 } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PairingClaim' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/status:
+    get:
+      tags: [Capture]
+      summary: Read this device's limited health and receipt status
+      security: [{ captureBearer: [] }]
+      x-required-scope: alerts:write
+      parameters:
+        - name: eventId
+          in: query
+          schema: { $ref: '#/components/schemas/EventId' }
+          description: Optional own-device receipt lookup after a lost response.
+      responses:
+        '200':
+          description: No ledger data or other device information.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CaptureStatus' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/auth/requests:
+    post:
+      tags: [Auth]
+      summary: Begin challenge and state bound owner login
+      description: Public, bounded and rate limited; returns only the fixed Access authorization URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [codeChallenge, state]
+              properties:
+                codeChallenge: { type: string, pattern: '^[A-Za-z0-9_-]{43}$' }
+                state: { type: string, minLength: 32, maxLength: 128 }
+      responses:
+        '201':
+          description: Login request created.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [requestId, authorizationUrl, expiresAt]
+                properties:
+                  requestId: { type: string, format: uuid }
+                  authorizationUrl: { type: string, format: uri }
+                  expiresAt: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/auth/exchanges:
+    post:
+      tags: [Auth]
+      summary: Exchange one-use owner approval code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId, code, verifier, state]
+              properties:
+                requestId: { type: string, format: uuid }
+                code: { type: string, minLength: 1, maxLength: 256 }
+                verifier: { type: string, minLength: 43, maxLength: 128 }
+                state: { type: string, minLength: 32, maxLength: 128 }
+      responses:
+        '200': { $ref: '#/components/responses/OwnerSession' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate an owner session refresh generation
+      security: [{ refreshBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '200': { $ref: '#/components/responses/OwnerSession' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke owner family and this device's capture grant
+      security: [{ ownerBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '204': { description: Revocation committed; encrypted unsent local events remain on the phone. }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/auth/revocations:
+    post:
+      tags: [Auth]
+      summary: Complete a previously queued offline logout
+      description: Revocation-only capability cannot refresh or read data.
+      security: [{ revocationBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '204': { description: Grant revoked. }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/accounts:
+    get:
+      tags: [Ledger]
+      summary: List ledger accounts and allowed currencies
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { $ref: '#/components/responses/AccountsPage' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/ledger/snapshot:
+    get:
+      tags: [Ledger]
+      summary: Read a bounded owner snapshot with full-window report aggregates
+      description: >-
+        The response is an encrypted-cache input for the native shell. Activity,
+        recurring and review arrays are bounded render data; Overview totals and
+        chart points come from the full-window report object and do not inherit
+        the Activity list bound.
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      responses:
+        '200': { $ref: '#/components/responses/LedgerSnapshot' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/transactions:
+    get:
+      tags: [Ledger]
+      summary: Search and filter canonical transactions
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: query, in: query, schema: { type: string, maxLength: 120 } }
+        - { name: currency, in: query, schema: { $ref: '#/components/schemas/CurrencyCode' } }
+        - { name: status, in: query, schema: { type: string, enum: [confirmed, provisional, needs_review] } }
+        - { name: source, in: query, schema: { type: string, enum: [statement, plaid, alert, manual] } }
+        - { name: category, in: query, schema: { type: string, maxLength: 80 } }
+      responses:
+        '200': { $ref: '#/components/responses/TransactionsPage' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/reports/summary:
+    get:
+      tags: [Ledger]
+      summary: Aggregate all selected ledger records independent of list pagination
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      parameters:
+        - { name: startDate, in: query, required: true, schema: { type: string, format: date } }
+        - { name: endDate, in: query, required: true, schema: { type: string, format: date } }
+        - { name: includeProvisional, in: query, schema: { type: boolean, default: false } }
+        - { name: currency, in: query, schema: { $ref: '#/components/schemas/CurrencyCode' } }
+        - { name: reportingCurrency, in: query, schema: { $ref: '#/components/schemas/CurrencyCode' } }
+        - { name: timeZone, in: query, schema: { type: string, maxLength: 64, default: America/Toronto } }
+      responses:
+        '200': { $ref: '#/components/responses/ReportSummary' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/alerts:
+    get:
+      tags: [Ledger]
+      summary: List normalized alert projections for owner review
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { $ref: '#/components/responses/AlertsPage' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Capture]
+      summary: Atomically ingest a bounded batch of normalized events
+      description: Maximum 50 events and 128 KiB JSON. Acks follow durable commit; identical retries return the same receipt.
+      security: [{ captureBearer: [] }]
+      x-required-scope: alerts:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [events]
+              properties:
+                events: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/BankAlertEventInput' } }
+      responses:
+        '200': { $ref: '#/components/responses/IngestAcks' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/alerts/{id}/review:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Review]
+      summary: Resolve an alert interpretation against its revision
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, decision]
+              properties:
+                expectedRevision: { type: integer, minimum: 0 }
+                decision: { type: string, enum: [keep_separate, ignore, link, classify] }
+                targetId: { type: [string, 'null'], maxLength: 128 }
+                candidateTransactionId: { type: [string, 'null'], maxLength: 128 }
+                relation: { type: [string, 'null'], enum: [cancels, partially_reverses, replaces_authorization, refund_of, confirms, possible_duplicate, null] }
+                allocatedMoney: { anyOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+      responses:
+        '200': { $ref: '#/components/responses/RevisionAck' }
+        '409': { $ref: '#/components/responses/RevisionConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/transactions/{id}/annotation:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Review]
+      summary: Edit category and note without changing source evidence
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, category, note]
+              properties:
+                expectedRevision: { type: integer, minimum: 0 }
+                category: { type: string, maxLength: 80 }
+                note: { type: [string, 'null'], maxLength: 1000 }
+      responses:
+        '200': { $ref: '#/components/responses/RevisionAck' }
+        '409': { $ref: '#/components/responses/RevisionConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/recurring:
+    get:
+      tags: [Ledger]
+      summary: Page through recurring streams and source health
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: currency, in: query, schema: { $ref: '#/components/schemas/CurrencyCode' } }
+        - { name: classification, in: query, schema: { $ref: '#/components/schemas/RecurringClassification' } }
+      responses:
+        '200': { $ref: '#/components/responses/RecurringPage' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/recurring/summary:
+    get:
+      tags: [Ledger]
+      summary: Per-currency estimates and posted actual cost
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      parameters:
+        - { name: startDate, in: query, required: true, schema: { type: string, format: date } }
+        - { name: endDate, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200': { $ref: '#/components/responses/RecurringSummary' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/recurring/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Ledger]
+      summary: Recurring stream details and posted member history
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { $ref: '#/components/responses/RecurringDetail' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/recurring/{id}/classification:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Review]
+      summary: Classify a recurring stream with optimistic revision
+      security: [{ ownerBearer: [] }]
+      x-required-scope: recurring:classify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, classification]
+              properties:
+                expectedRevision: { type: integer, minimum: 0 }
+                classification: { $ref: '#/components/schemas/RecurringClassification' }
+      responses:
+        '200': { $ref: '#/components/responses/RevisionAck' }
+        '409': { $ref: '#/components/responses/RevisionConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/imports/previews:
+    post:
+      tags: [Imports]
+      summary: Open a 24-hour staged import preview
+      description: File bytes are uploaded in bounded chunks; maximum complete file size is 10 MiB.
+      security: [{ ownerBearer: [] }]
+      x-required-scope: imports:write
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [accountId, fileName, fileSizeBytes, fileSha256, format, rowCount]
+              properties:
+                accountId: { type: string, maxLength: 128 }
+                fileName: { type: string, maxLength: 255 }
+                fileSizeBytes: { type: integer, minimum: 1, maximum: 10485760 }
+                fileSha256: { type: string, pattern: '^[A-Fa-f0-9]{64}$' }
+                format: { type: string, enum: [csv, verified_boc] }
+                rowCount: { type: integer, minimum: 1, maximum: 10000 }
+      responses:
+        '201': { $ref: '#/components/responses/ImportPreview' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/imports/{id}/chunks/{index}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: index
+        in: path
+        required: true
+        schema: { type: integer, minimum: 0, maximum: 159 }
+    put:
+      tags: [Imports]
+      summary: Upload or replay a bounded staged file chunk
+      security: [{ ownerBearer: [] }]
+      x-required-scope: imports:write
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        description: JSON rowStart/rows envelope bounded to 128 KiB by the Worker.
+        x-max-body-bytes: 131072
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportChunk'
+      responses:
+        '200': { $ref: '#/components/responses/ImportPreview' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Imports]
+      summary: Upload or replay a bounded staged row chunk
+      security: [{ ownerBearer: [] }]
+      x-required-scope: imports:write
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        description: JSON rowStart/rows envelope bounded to 128 KiB by the Worker.
+        x-max-body-bytes: 131072
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportChunk'
+      responses:
+        '200': { $ref: '#/components/responses/ImportPreview' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/imports/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    delete:
+      tags: [Imports]
+      summary: Cancel an unpublished staged import and clear its chunks
+      security: [{ ownerBearer: [] }]
+      x-required-scope: imports:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision]
+              properties:
+                expectedRevision: { type: integer, minimum: 0 }
+      responses:
+        '200': { $ref: '#/components/responses/ImportPreview' }
+        '409': { $ref: '#/components/responses/RevisionConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/imports/{id}/commit:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Imports]
+      summary: Publish selected validated rows behind one visibility barrier
+      security: [{ ownerBearer: [] }]
+      x-required-scope: imports:write
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, rowIds]
+              properties:
+                expectedRevision: { type: integer, minimum: 0 }
+                rowIds: { type: array, minItems: 1, maxItems: 500, uniqueItems: true, items: { type: string, maxLength: 160 } }
+      responses:
+        '200': { $ref: '#/components/responses/ImportCommit' }
+        '409': { $ref: '#/components/responses/RevisionConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/imports/{id}/duplicates/{candidateId}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: candidateId
+        in: path
+        required: true
+        schema: { type: string, maxLength: 256 }
+    patch:
+      tags: [Imports]
+      summary: Resolve or keep a bounded duplicate candidate separate before commit
+      description: Owner-scoped candidate decisions are durable and revision-checked; neither decision silently merges transactions.
+      security: [{ ownerBearer: [] }]
+      x-required-scope: imports:write
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, decision]
+              properties:
+                expectedRevision: { type: integer, minimum: 0 }
+                decision: { type: string, enum: [resolve, keep_separate] }
+      responses:
+        '200': { $ref: '#/components/responses/ImportPreview' }
+        '409': { $ref: '#/components/responses/RevisionConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/exports/transactions:
+    get:
+      tags: [Ledger]
+      summary: Stream all or filter-scoped canonical CSV records
+      description: All-record export requires owner approval within ten minutes; no list page limit applies.
+      security: [{ ownerBearer: [] }]
+      x-required-scope: exports:read
+      parameters:
+        - { name: selection, in: query, required: true, schema: { type: string, enum: [all, current_filter] } }
+        - { name: currency, in: query, schema: { $ref: '#/components/schemas/CurrencyCode' } }
+        - { name: startDate, in: query, schema: { type: string, format: date } }
+        - { name: endDate, in: query, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: Full canonical CSV stream with source currencies and scale.
+          headers:
+            X-Worker-Receipt-Id:
+              description: Opaque durable receipt identifying this completed export stream.
+              schema: { type: string, minLength: 1, maxLength: 256 }
+            X-Worker-Exported-Rows:
+              description: Number of data rows represented by the CSV stream, excluding the header.
+              schema: { type: integer, minimum: 0 }
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/connections/link-tokens:
+    post:
+      tags: [Connections]
+      summary: Create an Android Plaid Link token
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      parameters:
+        - name: mode
+          in: query
+          schema: { type: string, enum: [create, update], default: create }
+          description: Use update when reconnecting an existing connection.
+        - name: connectionId
+          in: query
+          schema: { type: string, maxLength: 128 }
+          description: Existing connection required when mode is update.
+      responses:
+        '200': { $ref: '#/components/responses/ConnectionOperation' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/connections:
+    get:
+      tags: [Connections]
+      summary: List this owner's provider connection status
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      responses:
+        '200': { $ref: '#/components/responses/Connections' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/connections/exchanges:
+    post:
+      tags: [Connections]
+      summary: Exchange temporary public token into a pending connection
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - name: X-Connection-Mode
+          in: header
+          required: false
+          schema: { type: string, enum: [create, update] }
+          description: Use update when exchanging a reconnect Link token.
+        - name: X-Connection-Id
+          in: header
+          required: false
+          schema: { type: string, maxLength: 128 }
+          description: Existing connection required when X-Connection-Mode is update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [publicToken]
+              properties:
+                publicToken: { type: string, minLength: 1, maxLength: 4096 }
+      responses:
+        '200': { $ref: '#/components/responses/ConnectionOperation' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/connections/sync:
+    post:
+      tags: [Connections]
+      summary: Request provider refresh through the shared service
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '202': { $ref: '#/components/responses/ConnectionOperation' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/connections/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    delete:
+      tags: [Connections]
+      summary: Disconnect a confirmed provider connection
+      description: Requires Access-backed owner approval within ten minutes; ledger history is retained.
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      parameters:
+        - name: X-Confirm-Disconnect
+          in: header
+          required: true
+          schema: { type: string, enum: ['true'] }
+          description: Explicit confirmation required before provider access is revoked.
+      responses:
+        '204': { description: Provider access revoked. }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/connections/pending/{id}/account-selection:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Connections]
+      summary: Confirm authoritative selected provider accounts
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [accountIds]
+              properties:
+                accountIds: { type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: { type: string, maxLength: 128 } }
+      responses:
+        '200': { $ref: '#/components/responses/ConnectionOperation' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/connections/pending/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    delete:
+      tags: [Connections]
+      summary: Cancel pending connection and clean up temporary provider Item
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      responses:
+        '204': { description: Pending connection canceled. }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/preferences:
+    get:
+      tags: [Ledger]
+      summary: Read shared reporting preferences
+      security: [{ ownerBearer: [] }]
+      x-required-scope: ledger:read
+      responses:
+        '200': { $ref: '#/components/responses/Preferences' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Ledger]
+      summary: Update shared preferences with revision
+      security: [{ ownerBearer: [] }]
+      x-required-scope: preferences:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Preferences' }
+      responses:
+        '200': { $ref: '#/components/responses/Preferences' }
+        '409': { $ref: '#/components/responses/RevisionConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/devices:
+    get:
+      tags: [Devices]
+      summary: List devices owned by the personal ledger
+      security: [{ ownerBearer: [] }]
+      x-required-scope: devices:manage
+      responses:
+        '200': { $ref: '#/components/responses/Devices' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/devices/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Devices]
+      summary: Read one approved device and source scope
+      security: [{ ownerBearer: [] }]
+      x-required-scope: devices:manage
+      responses:
+        '200': { $ref: '#/components/responses/Device' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Devices]
+      summary: Revoke a device
+      description: Revoking another device requires recent Access-backed approval.
+      security: [{ ownerBearer: [] }]
+      x-required-scope: devices:manage
+      responses:
+        '204': { description: Device grant revoked. }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/devices/self/capture-authorization:
+    post:
+      tags: [Devices]
+      summary: Explicitly consent to capture scope or renew this device's grant
+      security: [{ ownerBearer: [] }]
+      x-required-scope: devices:manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CaptureAuthorization' }
+      responses:
+        '200': { $ref: '#/components/responses/CaptureAuthorization' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/devices/self/source-config:
+    put:
+      tags: [Devices]
+      summary: Replace approved source and instrument mappings
+      security: [{ ownerBearer: [] }]
+      x-required-scope: devices:manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceConfig' }
+      responses:
+        '200': { $ref: '#/components/responses/Device' }
+        '409': { $ref: '#/components/responses/RevisionConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/device-pairings/{id}/approval:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Pairing]
+      summary: Browser owner approves displayed device and bounded scope
+      description: Existing Access JWT and same-origin mutation guard apply; this is not a mobile bearer route.
+      security: [{ browserAccess: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceConfig' }
+      responses:
+        '200': { $ref: '#/components/responses/Device' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile-auth/requests/{id}/approval:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Auth]
+      summary: Browser owner approves a one-use native owner grant
+      description: Existing Access JWT and same-origin mutation guard apply.
+      security: [{ browserAccess: [] }]
+      responses:
+        '200':
+          description: One-use code is delivered to the registered native return flow.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [approved, expiresAt]
+                properties:
+                  approved: { type: boolean, const: true }
+                  expiresAt: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    captureBearer: { type: http, scheme: bearer, description: Narrow revocable device secret; its hash is never a bearer token. }
+    ownerBearer: { type: http, scheme: bearer, description: Short-lived interactive owner session. }
+    refreshBearer: { type: http, scheme: bearer, description: Rotating owner refresh proof. }
+    revocationBearer: { type: http, scheme: bearer, description: Revocation-only offline logout capability. }
+    pairVerifier: { type: http, scheme: bearer, description: Pairing verifier only; cannot access ledger data. }
+    browserAccess: { type: http, scheme: bearer, description: Existing browser Access JWT with same-origin mutation enforcement. }
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, maxLength: 512 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    EventId:
+      type: string
+      pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+      description: Canonical RFC 4122 version 4 UUID matching the Worker ALERT_EVENT_ID validator; uppercase and lowercase hexadecimal are accepted.
+    CurrencyCode:
+      type: string
+      pattern: '^[A-Z]{3}$'
+      description: Must be present in the server's validated ISO currency registry. Account, recurring, alert, event, import, and source-configuration paths may carry any registered code.
+    CurrencyMeta:
+      type: object
+      additionalProperties: false
+      required: [code, minorUnitDigits]
+      properties:
+        code: { $ref: '#/components/schemas/CurrencyCode' }
+        minorUnitDigits: { type: integer, minimum: 0, maximum: 3 }
+    Money:
+      type: object
+      additionalProperties: false
+      required: [currency, amountMinor]
+      properties:
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        amountMinor: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991, description: Positive event magnitude in registered minor units. }
+    SignedMoney:
+      type: object
+      additionalProperties: false
+      required: [currency, amountMinor]
+      properties:
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        amountMinor: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+    MoneyComponent:
+      type: object
+      additionalProperties: false
+      required: [currency, amountMinor, role]
+      properties:
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        amountMinor: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        role: { type: string, enum: [transaction, authorization, billing, fee] }
+      description: Balances and available limits are excluded; included fees do not create a second expense.
+    InstrumentHint:
+      type: object
+      additionalProperties: false
+      required: [kind, value]
+      properties:
+        kind: { type: string, enum: [card_suffix, account_hint, source_reference] }
+        value: { type: string, minLength: 1, maxLength: 128 }
+    BankDisplayedTime:
+      type: object
+      additionalProperties: false
+      required: [localDateTime, zone, precision, yearProvenance]
+      properties:
+        localDateTime: { type: [string, 'null'], minLength: 1, maxLength: 40 }
+        zone: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        precision: { type: string, enum: [minute, second, date, unknown] }
+        yearProvenance: { type: string, enum: [explicit, inferred, two_digit, missing] }
+      description: Audit field only; never replaces live notification reporting time.
+    EventCompleteness:
+      type: object
+      additionalProperties: false
+      required: [individualTimestamp, supportedSource, labeledMoney]
+      properties:
+        individualTimestamp: { type: boolean }
+        supportedSource: { type: boolean }
+        labeledMoney: { type: boolean }
+    BankAlertEventInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        Immutable normalized evidence. The server assigns device/account scope,
+        projection and confirmation. No raw notification, chat or message text,
+        screenshot, device-supplied ledger ID or confirmed flag is accepted.
+      required: [schemaVersion, eventId, observationId, sourceProfileId, parserVersion, notificationPostedAt, capturedAt, eventTimeBasis, eventType, direction, eventMoney, primaryMoneyRole, amounts, feeTreatment, bankDisplayedTime, completeness]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        eventId: { $ref: '#/components/schemas/EventId' }
+        observationId: { type: string, minLength: 1, maxLength: 128 }
+        sourceProfileId: { type: string, minLength: 1, maxLength: 128 }
+        parserVersion: { type: string, minLength: 1, maxLength: 64 }
+        notificationPostedAt: { type: [string, 'null'], format: date-time }
+        capturedAt: { type: string, format: date-time }
+        eventTimeBasis: { type: string, enum: [notification_posted, bank_transaction_date, statement_posting_date, unresolved] }
+        eventType: { type: string, enum: [purchase_notice, authorization_reversal, declined, refund_notice, hold_notice, adjustment_notice, repayment_notice, transfer_notice, fee_notice, unknown] }
+        direction: { type: string, enum: [outflow, inflow, none, unknown] }
+        instrumentHint: { anyOf: [{ $ref: '#/components/schemas/InstrumentHint' }, { type: 'null' }] }
+        eventMoney: { anyOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        primaryMoneyRole: { type: [string, 'null'], enum: [transaction, authorization, billing, fee, null] }
+        amounts: { type: array, maxItems: 16, items: { $ref: '#/components/schemas/MoneyComponent' } }
+        feeTreatment: { type: string, enum: [included, separate, unknown] }
+        bankReference: { type: [string, 'null'], maxLength: 128 }
+        bankDisplayedTime: { anyOf: [{ $ref: '#/components/schemas/BankDisplayedTime' }, { type: 'null' }] }
+        merchant: { type: [string, 'null'], maxLength: 160 }
+        completeness: { $ref: '#/components/schemas/EventCompleteness' }
+    EventAck:
+      type: object
+      additionalProperties: false
+      required: [eventId, status, receiptId, revision, projectionState, reasonCodes, error]
+      properties:
+        eventId: { $ref: '#/components/schemas/EventId' }
+        status: { type: string, enum: [accepted, replayed, rejected, conflict] }
+        receiptId: { type: [string, 'null'], format: uuid }
+        revision: { type: [integer, 'null'], minimum: 0 }
+        projectionState: { type: [string, 'null'], enum: [provisional, non_spending, needs_review, voided, superseded, rejected, null] }
+        reasonCodes: { type: array, maxItems: 8, items: { type: string, maxLength: 64 } }
+        error:
+          anyOf:
+            - type: object
+              additionalProperties: false
+              required: [code, message, retryable]
+              properties:
+                code: { type: string, maxLength: 64 }
+                message: { type: string, maxLength: 240 }
+                retryable: { type: boolean }
+            - type: 'null'
+    CaptureStatus:
+      type: object
+      additionalProperties: false
+      required: [deviceId, credentialExpiresAt, ingestionState, lastAcceptedAt, receipt]
+      properties:
+        deviceId: { type: string, format: uuid }
+        credentialExpiresAt: { type: string, format: date-time }
+        ingestionState: { type: string, enum: [ready, paused, revoked, expired] }
+        lastAcceptedAt: { type: [string, 'null'], format: date-time }
+        receipt: { anyOf: [{ $ref: '#/components/schemas/EventAck' }, { type: 'null' }] }
+    PairingClaim:
+      type: object
+      additionalProperties: false
+      required: [state, deviceId, credentialExpiresAt]
+      properties:
+        state: { type: string, enum: [pending, approved, claimed, expired] }
+        deviceId: { type: [string, 'null'], format: uuid }
+        credentialExpiresAt: { type: [string, 'null'], format: date-time }
+        revocationCapability: { type: string }
+    OwnerSession:
+      type: object
+      additionalProperties: false
+      required: [accessToken, refreshToken, expiresAt, scopes, revision, revocationCapability]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        expiresAt: { type: string, format: date-time }
+        scopes:
+          type: array
+          uniqueItems: true
+          items: { type: string, enum: ['ledger:read', 'ledger:review', 'imports:write', 'exports:read', 'recurring:classify', 'connections:manage', 'preferences:write', 'devices:manage'] }
+        revision: { type: integer, minimum: 1 }
+        revocationCapability: { type: string }
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId, retryable]
+      properties:
+        code: { type: string, maxLength: 64, description: Stable machine-readable route/service error code. }
+        message: { type: string, maxLength: 240 }
+        requestId: { type: string, maxLength: 128 }
+        retryable: { type: boolean }
+        retryAfterSeconds: { type: integer, minimum: 1 }
+        currentRevision: { type: integer, minimum: 0 }
+    PageInfo:
+      type: object
+      additionalProperties: false
+      required: [nextCursor, limit]
+      properties:
+        nextCursor: { type: [string, 'null'], maxLength: 512 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+    Account:
+      type: object
+      additionalProperties: false
+      required: [id, name, institution, kind, status, defaultCurrency, allowedCurrencies, lastSyncedAt]
+      properties:
+        id: { type: string, maxLength: 128 }
+        name: { type: string, maxLength: 160 }
+        institution: { type: string, maxLength: 160 }
+        kind: { type: string, enum: [chequing, savings, credit] }
+        status: { type: string, enum: [connected, import_only, needs_attention] }
+        defaultCurrency: { $ref: '#/components/schemas/CurrencyCode' }
+        allowedCurrencies: { type: array, minItems: 1, maxItems: 162, uniqueItems: true, items: { $ref: '#/components/schemas/CurrencyCode' }, description: Up to the complete shared ISO registry; the current registry contains 162 codes. }
+        lastSyncedAt: { type: [string, 'null'], format: date-time }
+    Transaction:
+      type: object
+      additionalProperties: false
+      required: [id, accountId, date, merchant, amountMinor, currency, category, kind, status, source, revision]
+      properties:
+        id: { type: string, maxLength: 128 }
+        accountId: { type: string, maxLength: 128 }
+        date: { type: string, format: date }
+        merchant: { type: string, maxLength: 160 }
+        amountMinor: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        category: { type: string, maxLength: 80 }
+        kind: { type: string, enum: [expense, income, transfer, refund, fee] }
+        status: { type: string, enum: [confirmed, provisional, needs_review] }
+        source: { type: string, enum: [statement, plaid, alert, manual] }
+        note: { type: [string, 'null'], maxLength: 1000 }
+        revision: { type: integer, minimum: 0 }
+    ImportRow:
+      type: object
+      additionalProperties: false
+      required: [rowId, rowIndex, accountId, date, merchant, amountMinor, currency, category, kind, status, source, fingerprint]
+      properties:
+        rowId: { type: string, minLength: 1, maxLength: 160 }
+        rowIndex: { type: integer, minimum: 0, maximum: 1000000 }
+        accountId: { type: string, minLength: 1, maxLength: 128 }
+        date: { type: string, format: date }
+        merchant: { type: string, minLength: 1, maxLength: 200 }
+        amountMinor: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        category: { type: string, minLength: 1, maxLength: 120 }
+        kind: { type: string, enum: [expense, income, transfer, refund, fee] }
+        status: { type: string, enum: [confirmed, provisional, needs_review] }
+        source: { type: string, const: statement }
+        fingerprint: { type: string, minLength: 1, maxLength: 256 }
+        note: { type: [string, 'null'], maxLength: 4096 }
+        bankReference: { type: [string, 'null'], maxLength: 256 }
+        sourceIdentity:
+          type: object
+          additionalProperties: false
+          properties:
+            bankSourceId: { type: [string, 'null'], maxLength: 256 }
+            bankRowId: { type: [string, 'null'], maxLength: 256 }
+    ImportChunk:
+      type: object
+      additionalProperties: false
+      required: [rowStart, rows]
+      description: JSON-encoded row chunk; the complete request body is bounded to 128 KiB by the Worker.
+      properties:
+        rowStart: { type: integer, minimum: 0, maximum: 1000000 }
+        rows: { type: array, minItems: 1, maxItems: 1000, items: { $ref: '#/components/schemas/ImportRow' } }
+    LedgerReportCurrencyTotal:
+      type: object
+      additionalProperties: false
+      required: [currency, confirmedMinorUnits, provisionalMinorUnits, confirmedCount, provisionalCount]
+      properties:
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        confirmedMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        provisionalMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        confirmedCount: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        provisionalCount: { type: integer, minimum: 0, maximum: 9007199254740991 }
+    LedgerReportDailyTotal:
+      type: object
+      additionalProperties: false
+      required: [date, currency, confirmedMinorUnits, provisionalMinorUnits]
+      properties:
+        date: { type: string, format: date }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        confirmedMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        provisionalMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+    LedgerReportConvertedTotals:
+      type: object
+      additionalProperties: false
+      required: [confirmedMinorUnits, provisionalMinorUnits, confirmedCount, provisionalCount]
+      properties:
+        confirmedMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        provisionalMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        confirmedCount: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        provisionalCount: { type: integer, minimum: 0, maximum: 9007199254740991 }
+    LedgerReportConvertedDailyTotal:
+      type: object
+      additionalProperties: false
+      required: [date, confirmedMinorUnits, provisionalMinorUnits]
+      properties:
+        date: { type: string, format: date }
+        confirmedMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        provisionalMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+    ChineseBankBand:
+      type: object
+      additionalProperties: false
+      required: [eligible, currency, baseMinorUnits, lowerMinorUnits, upperMinorUnits, percentageBasisPoints]
+      properties:
+        eligible: { type: boolean, const: true }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        baseMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        lowerMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        upperMinorUnits: { type: integer, format: int64, minimum: -9007199254740991, maximum: 9007199254740991 }
+        percentageBasisPoints: { type: integer, const: 150 }
+    LedgerReportFx:
+      type: object
+      additionalProperties: false
+      required: [provider, complete, unavailableSourceCurrencies, lockedDateCount, observedDateRange, chineseBankBand]
+      properties:
+        provider: { type: string, const: frankfurter }
+        complete: { type: boolean }
+        unavailableSourceCurrencies: { type: array, uniqueItems: true, items: { $ref: '#/components/schemas/CurrencyCode' } }
+        lockedDateCount: { type: integer, minimum: 0 }
+        observedDateRange:
+          type: object
+          additionalProperties: false
+          required: [earliest, latest]
+          properties:
+            earliest: { type: [string, 'null'], format: date }
+            latest: { type: [string, 'null'], format: date }
+        chineseBankBand:
+          anyOf:
+            - { $ref: '#/components/schemas/ChineseBankBand' }
+            - { type: 'null' }
+    LedgerReport:
+      type: object
+      additionalProperties: false
+      required: [ledgerId, asOf, timeBasis, timeZone, from, to, includeProvisional, currencyTotals, dailyTotals, reportingCurrency, convertedTotals, convertedDailyTotals, fx, reviewCount, excludedCount, sourceCoverage]
+      properties:
+        ledgerId: { type: string, const: personal }
+        asOf: { type: string, format: date-time }
+        timeBasis: { type: string, const: accounting_date }
+        timeZone: { type: string, maxLength: 64 }
+        from: { type: [string, 'null'], format: date }
+        to: { type: [string, 'null'], format: date }
+        includeProvisional: { type: boolean }
+        currencyTotals: { type: array, items: { $ref: '#/components/schemas/LedgerReportCurrencyTotal' } }
+        dailyTotals: { type: array, items: { $ref: '#/components/schemas/LedgerReportDailyTotal' } }
+        reportingCurrency:
+          anyOf:
+            - { $ref: '#/components/schemas/CurrencyCode' }
+            - { type: 'null' }
+        convertedTotals:
+          anyOf:
+            - { $ref: '#/components/schemas/LedgerReportConvertedTotals' }
+            - { type: 'null' }
+        convertedDailyTotals: { type: array, items: { $ref: '#/components/schemas/LedgerReportConvertedDailyTotal' } }
+        fx: { $ref: '#/components/schemas/LedgerReportFx' }
+        reviewCount: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        excludedCount: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        sourceCoverage: { type: object, additionalProperties: { type: integer, minimum: 0, maximum: 9007199254740991 } }
+    LedgerSnapshot:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, snapshotAt, timeZone, accounts, transactions, recurring, reviews, report]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        snapshotAt: { type: string, format: date-time }
+        timeZone: { type: string, maxLength: 64 }
+        accounts: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/SnapshotAccount' } }
+        transactions: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/SnapshotTransaction' } }
+        recurring: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/SnapshotRecurring' } }
+        reviews: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/SnapshotReview' } }
+        report: { $ref: '#/components/schemas/LedgerReport' }
+    SnapshotAccount:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, institution, instrument, currencies, lastSuccessfulSyncAt]
+      properties:
+        id: { type: string, maxLength: 128 }
+        displayName: { type: string, maxLength: 160 }
+        institution: { type: [string, 'null'], maxLength: 160 }
+        instrument: { type: [string, 'null'], maxLength: 80 }
+        currencies: { type: array, maxItems: 16, items: { $ref: '#/components/schemas/CurrencyCode' } }
+        lastSuccessfulSyncAt: { type: [string, 'null'], format: date-time }
+    SnapshotTransaction:
+      type: object
+      additionalProperties: false
+      required: [id, occurredAt, currency, signedMinorUnits, merchant, accountLabel, status, sourceLabel, category, note]
+      properties:
+        id: { type: string, maxLength: 128 }
+        occurredAt: { type: string, maxLength: 64 }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        signedMinorUnits: { type: integer, format: int64 }
+        merchant: { type: [string, 'null'], maxLength: 160 }
+        accountLabel: { type: [string, 'null'], maxLength: 160 }
+        status: { type: string, maxLength: 32 }
+        sourceLabel: { type: [string, 'null'], maxLength: 64 }
+        category: { type: [string, 'null'], maxLength: 80 }
+        note: { type: [string, 'null'], maxLength: 1000 }
+    SnapshotRecurring:
+      type: object
+      additionalProperties: false
+      required: [id, label, currency, monthlyMinorUnits, classification, nextDueAt]
+      properties:
+        id: { type: string, maxLength: 128 }
+        label: { type: string, maxLength: 160 }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        monthlyMinorUnits: { type: [integer, 'null'], format: int64 }
+        classification: { type: [string, 'null'], maxLength: 32 }
+        nextDueAt: { type: [string, 'null'], format: date }
+    SnapshotReview:
+      type: object
+      additionalProperties: false
+      required: [id, reason, currency, affectedMinorUnits, candidateLabel, status]
+      properties:
+        id: { type: string, maxLength: 128 }
+        reason: { type: string, maxLength: 240 }
+        currency: { type: [string, 'null'], maxLength: 3 }
+        affectedMinorUnits: { type: [integer, 'null'], format: int64 }
+        candidateLabel: { type: [string, 'null'], maxLength: 160 }
+        status: { type: string, maxLength: 32 }
+    AlertView:
+      type: object
+      additionalProperties: false
+      required: [eventId, eventType, state, countedMoney, reportingDate, revision, transactionId, annotation, annotationDisabledReason]
+      properties:
+        eventId: { $ref: '#/components/schemas/EventId' }
+        eventType: { type: string, enum: [purchase_notice, authorization_reversal, declined, refund_notice, hold_notice, adjustment_notice, repayment_notice, transfer_notice, fee_notice, unknown] }
+        state: { type: string, enum: [provisional, non_spending, needs_review, voided, superseded] }
+        countedMoney: { anyOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        reportingDate: { type: [string, 'null'], format: date }
+        revision: { type: integer, minimum: 0 }
+        transactionId: { type: [string, 'null'], maxLength: 128 }
+        annotation: { anyOf: [{ $ref: '#/components/schemas/ReviewAnnotation' }, { type: 'null' }] }
+        annotationDisabledReason: { type: [string, 'null'], maxLength: 240 }
+    ReviewAnnotation:
+      type: object
+      additionalProperties: false
+      required: [transactionId, expectedRevision, category, note]
+      properties:
+        transactionId: { type: string, maxLength: 128 }
+        expectedRevision: { type: integer, minimum: 0 }
+        category: { type: string, minLength: 1, maxLength: 80 }
+        note: { type: [string, 'null'], maxLength: 1000 }
+    RecurringClassification:
+      type: string
+      enum: [unclassified, subscription, bill, other, excluded]
+    RecurringStream:
+      type: object
+      additionalProperties: false
+      required: [id, accountId, currency, merchantName, frequency, classification, sourceStatus, averageAmountMinor, predictedNextDate, revision]
+      properties:
+        id: { type: string, maxLength: 128 }
+        accountId: { type: string, maxLength: 128 }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        merchantName: { type: [string, 'null'], maxLength: 160 }
+        merchantEntityId: { type: [string, 'null'], maxLength: 160 }
+        frequency: { type: string, enum: [WEEKLY, BIWEEKLY, SEMI_MONTHLY, MONTHLY, ANNUALLY, UNKNOWN] }
+        sourceFrequency: { type: string, maxLength: 64 }
+        classification: { $ref: '#/components/schemas/RecurringClassification' }
+        sourceStatus: { type: string, maxLength: 64 }
+        isOutflow: { type: boolean }
+        firstDate: { type: [string, 'null'], format: date }
+        lastDate: { type: [string, 'null'], format: date }
+        averageAmountMinor: { type: [integer, 'null'], minimum: -9007199254740991, maximum: 9007199254740991 }
+        lastAmountMinor: { type: [integer, 'null'], minimum: -9007199254740991, maximum: 9007199254740991 }
+        predictedAmountMinor: { type: [integer, 'null'], minimum: -9007199254740991, maximum: 9007199254740991 }
+        predictedNextDate: { type: [string, 'null'], format: date }
+        sourceUpdatedAt: { type: [string, 'null'], format: date-time }
+        nextExpectedAmountMinor: { type: [integer, 'null'], minimum: -9007199254740991, maximum: 9007199254740991 }
+        revision: { type: integer, minimum: 0 }
+    Preferences:
+      type: object
+      additionalProperties: false
+      required: [reportingTimezone, weekStart, preferredCurrency, revision]
+      properties:
+        reportingTimezone: { type: string, minLength: 1, maxLength: 64, default: America/Toronto }
+        weekStart: { type: integer, minimum: 0, maximum: 6, default: 1, description: ISO weekday index where Monday is 1 and Sunday is 0. }
+        preferredCurrency: { anyOf: [{ $ref: '#/components/schemas/CurrencyCode' }, { type: 'null' }] }
+        revision: { type: integer, minimum: 0 }
+      description: preferredCurrency is the reporting target; null keeps source-currency mode.
+    SourceMapping:
+      type: object
+      additionalProperties: false
+      required: [sourceProfileId, accountId, allowedCurrencies]
+      properties:
+        sourceProfileId: { type: string, maxLength: 128 }
+        accountId: { type: string, maxLength: 128 }
+        instrumentHint: { anyOf: [{ $ref: '#/components/schemas/InstrumentHint' }, { type: 'null' }] }
+        allowedCurrencies: { type: array, minItems: 1, maxItems: 162, uniqueItems: true, items: { $ref: '#/components/schemas/CurrencyCode' }, description: Up to the complete shared ISO registry; the current registry contains 162 codes. }
+    SourceConfig:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, mappings]
+      properties:
+        expectedRevision: { type: integer, minimum: 0 }
+        mappings: { type: array, minItems: 1, maxItems: 100, items: { $ref: '#/components/schemas/SourceMapping' } }
+    CaptureAuthorization:
+      type: object
+      additionalProperties: false
+      required: [credentialHash, consent, sourceConfig]
+      properties:
+        credentialHash: { type: string, pattern: '^[A-Fa-f0-9]{64}$' }
+        consent: { type: boolean, const: true }
+        sourceConfig: { $ref: '#/components/schemas/SourceConfig' }
+    ConnectionStatus:
+      type: object
+      additionalProperties: false
+      required: [connectionId, itemId, institution, state, expiresAt, cleanupState, lastSyncedAt, lastError]
+      properties:
+        connectionId: { type: string, maxLength: 128 }
+        itemId: { type: [string, 'null'], maxLength: 128 }
+        institution: { type: [string, 'null'], maxLength: 160 }
+        state: { type: string, enum: [pending, ready, syncing, connected, canceled, failed, disconnecting] }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        cleanupState: { type: string, enum: [not_required, pending, succeeded, uncertain] }
+        lastSyncedAt: { type: [string, 'null'], format: date-time }
+        lastError: { type: [string, 'null'], maxLength: 240 }
+    Device:
+      type: object
+      additionalProperties: false
+      required: [id, name, platform, status, credentialExpiresAt, revokedAt, sourceConfig, revision]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 80 }
+        platform: { type: string, maxLength: 64 }
+        status: { type: string, enum: [pairing, paired, paused, revoked] }
+        credentialExpiresAt: { type: string, format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        sourceConfig: { $ref: '#/components/schemas/SourceConfig' }
+        revision: { type: integer, minimum: 0 }
+    # Candidate identity and ranking are shared by import previews and commit receipts.
+    ImportDuplicateCandidate:
+      type: object
+      additionalProperties: false
+      required: [id, statementTransactionId, candidateTransactionId, score, reasonCodes, status]
+      properties:
+        id: { type: string, maxLength: 256 }
+        statementTransactionId: { type: string, maxLength: 256 }
+        candidateTransactionId: { type: string, maxLength: 256 }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        reasonCodes: { type: array, minItems: 1, maxItems: 20, items: { type: string, maxLength: 64 } }
+        status: { type: string, enum: [open, accepted, dismissed] }
+  responses:
+    Error:
+      description: Structured failure. 401/403 protect credentials and scope; 413 rejects oversized envelopes; 429 may include Retry-After.
+      headers:
+        Cache-Control: { schema: { type: string, const: no-store } }
+        Retry-After: { schema: { type: integer, minimum: 1 } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    RevisionConflict:
+      description: Current revision is supplied for refresh and retry; submitted changes were not applied.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    OwnerSession:
+      description: Owner session issued or rotated.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/OwnerSession' }
+    IngestAcks:
+      description: Per-event durable receipts, including replays and stable validation errors.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [acks]
+            properties:
+              acks: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/EventAck' } }
+    RevisionAck:
+      description: Mutation accepted at a new revision.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [id, revision, updatedAt]
+            properties:
+              id: { type: string, maxLength: 128 }
+              revision: { type: integer, minimum: 1 }
+              updatedAt: { type: string, format: date-time }
+    AccountsPage:
+      description: Bounded account page.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [items, page]
+            properties:
+              items: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/Account' } }
+              page: { $ref: '#/components/schemas/PageInfo' }
+    TransactionsPage:
+      description: Bounded transaction page.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [items, page]
+            properties:
+              items: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/Transaction' } }
+              page: { $ref: '#/components/schemas/PageInfo' }
+    AlertsPage:
+      description: Bounded normalized alert page.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [items, page]
+            properties:
+              items: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/AlertView' } }
+              page: { $ref: '#/components/schemas/PageInfo' }
+    ReportSummary:
+      description: Full-window source-currency totals with freshness and coverage.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [startDate, endDate, confirmedByCurrency, provisionalByCurrency, checkedAt, timeBasis, timeZone, dailyTotals, reviewCount, excludedCount, sourceCoverage, reportingCurrency, convertedTotals, convertedDailyTotals, fx, coverageWarnings, report]
+            properties:
+              startDate: { type: string, format: date }
+              endDate: { type: string, format: date }
+              confirmedByCurrency: { type: object, propertyNames: { $ref: '#/components/schemas/CurrencyCode' }, additionalProperties: { type: integer, minimum: -9007199254740991, maximum: 9007199254740991 } }
+              provisionalByCurrency: { type: object, propertyNames: { $ref: '#/components/schemas/CurrencyCode' }, additionalProperties: { type: integer, minimum: -9007199254740991, maximum: 9007199254740991 } }
+              checkedAt: { type: string, format: date-time }
+              timeBasis: { type: string, const: accounting_date }
+              timeZone: { type: string, maxLength: 64 }
+              dailyTotals: { type: array, items: { $ref: '#/components/schemas/LedgerReportDailyTotal' } }
+              reviewCount: { type: integer, minimum: 0, maximum: 9007199254740991 }
+              excludedCount: { type: integer, minimum: 0, maximum: 9007199254740991 }
+              sourceCoverage: { type: object, additionalProperties: { type: integer, minimum: 0, maximum: 9007199254740991 } }
+              reportingCurrency:
+                anyOf:
+                  - { $ref: '#/components/schemas/CurrencyCode' }
+                  - { type: 'null' }
+              convertedTotals:
+                anyOf:
+                  - { $ref: '#/components/schemas/LedgerReportConvertedTotals' }
+                  - { type: 'null' }
+              convertedDailyTotals: { type: array, items: { $ref: '#/components/schemas/LedgerReportConvertedDailyTotal' } }
+              fx: { $ref: '#/components/schemas/LedgerReportFx' }
+              coverageWarnings: { type: array, maxItems: 100, items: { type: string, maxLength: 240 } }
+              report: { $ref: '#/components/schemas/LedgerReport' }
+    LedgerSnapshot:
+      description: Owner-authorized encrypted-cache input with bounded render rows and full-window report aggregates.
+      headers:
+        Cache-Control: { schema: { type: string, const: no-store } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/LedgerSnapshot' }
+    RecurringPage:
+      description: Bounded recurring stream page with source state.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [items, page, state, coverageWarnings]
+            properties:
+              items: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/RecurringStream' } }
+              page: { $ref: '#/components/schemas/PageInfo' }
+              state: { type: string, enum: [ready, waiting, empty, stale, error, unavailable, incomplete] }
+              coverageWarnings: { type: array, maxItems: 100, items: { type: string, maxLength: 240 } }
+    RecurringSummary:
+      description: Per-currency estimates and posted actual cost; estimates are not transactions.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [monthlyByCurrency, yearlyByCurrency, subscriptionByCurrency, actualCostByCurrency, upcoming, latestPaymentChanges, streamCount, coverageWarnings, state, checkedAt, sourceUpdatedAt, lastError]
+            properties:
+              monthlyByCurrency: { type: object, propertyNames: { $ref: '#/components/schemas/CurrencyCode' }, additionalProperties: { type: integer } }
+              yearlyByCurrency: { type: object, propertyNames: { $ref: '#/components/schemas/CurrencyCode' }, additionalProperties: { type: integer } }
+              subscriptionByCurrency: { type: object, propertyNames: { $ref: '#/components/schemas/CurrencyCode' }, additionalProperties: { type: integer } }
+              actualCostByCurrency: { type: object, propertyNames: { $ref: '#/components/schemas/CurrencyCode' }, additionalProperties: { type: integer } }
+              upcoming: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/RecurringStream' } }
+              latestPaymentChanges: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/RecurringStream' } }
+              streamCount: { type: integer, minimum: 0 }
+              coverageWarnings: { type: array, maxItems: 100, items: { type: string, maxLength: 240 } }
+              state: { type: string, enum: [ready, waiting, empty, stale, error, unavailable, incomplete] }
+              checkedAt: { type: [string, 'null'], format: date-time }
+              sourceUpdatedAt: { type: [string, 'null'], format: date-time }
+              lastError: { type: [string, 'null'], maxLength: 240 }
+    RecurringDetail:
+      description: Recurring stream and bounded history page.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [stream, history, page]
+            properties:
+              stream: { $ref: '#/components/schemas/RecurringStream' }
+              history: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/Transaction' } }
+              page: { $ref: '#/components/schemas/PageInfo' }
+    ImportPreview:
+      description: Staged validation status, row errors and duplicate candidates; no ledger publication yet.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [id, revision, expiresAt, state, accountId, fileSizeBytes, fileSha256, rowCount, receivedRowCount, validRowCount, errors, duplicateCandidates]
+            properties:
+              id: { type: string, maxLength: 128 }
+              revision: { type: integer, minimum: 0 }
+              expiresAt: { type: string, format: date-time }
+              state: { type: string, enum: [staged, ready, publishing, published, cancelled, expired, error] }
+              accountId: { type: string, maxLength: 128 }
+              fileSizeBytes: { type: integer, minimum: 1, maximum: 10485760 }
+              fileSha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+              rowCount: { type: integer, minimum: 0, maximum: 10000 }
+              receivedRowCount: { type: integer, minimum: 0, maximum: 10000 }
+              validRowCount: { type: integer, minimum: 0, maximum: 10000 }
+              errors:
+                type: array
+                maxItems: 100
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [code, message]
+                  properties:
+                    code: { type: string, maxLength: 64 }
+                    message: { type: string, maxLength: 240 }
+              duplicateCandidates: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/ImportDuplicateCandidate' } }
+    ImportCommit:
+      description: Stable publication receipt; retrying the same operation returns the same result.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [receiptId, importId, publishedRows, duplicateRows, needsReview, revision, committedAt, duplicateCandidates]
+            properties:
+              receiptId: { type: string, maxLength: 256 }
+              importId: { type: string, maxLength: 128 }
+              publishedRows: { type: integer, minimum: 0, maximum: 10000 }
+              duplicateRows: { type: integer, minimum: 0, maximum: 10000 }
+              needsReview: { type: integer, minimum: 0, maximum: 10000 }
+              revision: { type: integer, minimum: 1 }
+              committedAt: { type: string, format: date-time }
+              duplicateCandidates: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/ImportDuplicateCandidate' } }
+    ConnectionOperation:
+      description: Provider operation or pending connection status.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [operationId, state]
+            properties:
+              operationId: { type: string, maxLength: 128 }
+              state: { type: string, enum: [pending, ready, syncing, connected, canceled, failed] }
+              linkToken: { type: string }
+              pendingConnectionId: { type: [string, 'null'], maxLength: 128 }
+    Connections:
+      description: Owner-scoped provider connection status.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [connections]
+            properties:
+              connections:
+                type: array
+                maxItems: 100
+                items: { $ref: '#/components/schemas/ConnectionStatus' }
+    Preferences:
+      description: Shared reporting preferences.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Preferences' }
+    Device:
+      description: Device scope and revision.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Device' }
+    Devices:
+      description: Devices owned by the personal ledger.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [devices]
+            properties:
+              devices:
+                type: array
+                items: { $ref: '#/components/schemas/Device' }
+    CaptureAuthorization:
+      description: Device metadata and a separately expiring capture grant.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Device'
+              - type: object
+                required: [deviceId, generation, revocationCapability]
+                properties:
+                  deviceId: { type: string, maxLength: 128 }
+                  generation: { type: integer, minimum: 1 }
+                  revocationCapability: { type: string, minLength: 1 }

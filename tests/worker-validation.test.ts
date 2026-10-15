@@ -3,6 +3,8 @@ import {
   selectPlaidAccounts,
   validateImportPayload,
   validatePlaidExchangeInput,
+  validateRecurringListQuery,
+  validateRecurringSummaryQuery,
 } from '../worker/validation';
 
 describe('Worker input validation', () => {
@@ -19,6 +21,18 @@ describe('Worker input validation', () => {
     const accounts = [{ account_id: 'acct-1' }, { account_id: 'acct-2' }];
     expect(selectPlaidAccounts(accounts, ['acct-2'])).toEqual([{ account_id: 'acct-2' }]);
     expect(selectPlaidAccounts(accounts, ['acct-3'])).toBeNull();
+  });
+
+  it('accepts every registered currency in recurring list and summary filters while rejecting unknown codes', () => {
+    expect(validateRecurringListQuery(new URLSearchParams('currency=USD'))).toEqual({ currency: 'USD' });
+    expect(validateRecurringSummaryQuery(new URLSearchParams('start=2026-10-01&end=2026-10-31&today=2026-10-13&currency=HKD'))).toEqual({
+      startDate: '2026-10-01',
+      endDate: '2026-10-31',
+      today: '2026-10-13',
+      currency: 'HKD',
+    });
+    expect(validateRecurringListQuery(new URLSearchParams('currency=XYZ'))).toEqual({ error: 'The recurring currency filter is not valid.' });
+    expect(validateRecurringSummaryQuery(new URLSearchParams('start=2026-10-01&end=2026-10-31&today=2026-10-13&currency=XYZ'))).toEqual({ error: 'The recurring currency filter is not valid.' });
   });
 
   it('rejects malformed imported transactions before persistence', () => {

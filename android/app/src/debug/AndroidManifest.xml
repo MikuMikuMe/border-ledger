@@ -1,0 +1,29 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application android:label="Border Ledger Probe" tools:replace="android:label">
+        <activity android:name="com.lofuyu.borderledger.MainActivity" tools:node="remove" />
+        <activity android:name="com.lofuyu.borderledger.auth.AuthCallbackActivity" tools:node="remove" />
+        <service android:name="com.lofuyu.borderledger.capture.BankNotificationListenerService" tools:node="remove" />
+        <activity android:name="com.lofuyu.borderledger.debug.ProbeActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name="com.lofuyu.borderledger.debug.FxReportPreviewActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="com.lofuyu.borderledger.debug.FX_REPORT_PREVIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <service android:name="com.lofuyu.borderledger.debug.ProbeNotificationListener"
+            android:label="Border Ledger Probe"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

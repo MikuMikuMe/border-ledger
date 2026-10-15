@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, CircleAlert, CircleCheck, Clock3, RefreshCw, X } from 'lucide-react';
 import { formatDate, formatMoney } from '../domain/format';
+import type { CurrencyCode } from '../domain/currencies';
 import { ledgerApi, LedgerApiError } from '../domain/api';
 import type { RecurringClassification, RecurringDetailPage } from '../domain/recurring';
 
@@ -18,7 +19,7 @@ const classifications: Array<{ value: RecurringClassification; label: string }> 
   { value: 'excluded', label: 'Exclude from totals' },
 ];
 
-function displayAmount(amountMinor: number, currency: 'CAD' | 'CNY') {
+function displayAmount(amountMinor: number, currency: CurrencyCode) {
   return formatMoney(Math.abs(amountMinor), currency, { signDisplay: 'never' });
 }
 

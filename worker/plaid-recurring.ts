@@ -4,6 +4,7 @@ import type {
   RecurringStream,
 } from '../src/domain/recurring';
 import type { Currency } from '../src/domain/types';
+import { getCurrencyMeta } from '../src/domain/currencies';
 
 export interface PlaidRecurringAmount {
   amount: number;
@@ -89,8 +90,7 @@ function validTimestamp(value: unknown) {
 function amountCurrency(value: PlaidRecurringAmount, field: string): Currency | null {
   if (!isRecord(value)) throw new Error(`Recurring ${field} must be an amount object.`);
   const currency = String(value.iso_currency_code ?? value.unofficial_currency_code ?? '').toUpperCase();
-  if (currency === 'CAD' || currency === 'CNY') return currency;
-  return null;
+  return getCurrencyMeta(currency)?.code ?? null;
 }
 
 function signedMinor(value: PlaidRecurringAmount, field: string, isOutflow: boolean, expectedCurrency?: Currency) {
@@ -98,7 +98,9 @@ function signedMinor(value: PlaidRecurringAmount, field: string, isOutflow: bool
   const currency = amountCurrency(value, field);
   if (!currency) return { currency: null, amountMinor: null };
   if (expectedCurrency && currency !== expectedCurrency) throw new Error(`Recurring ${field} currency does not match the stream currency.`);
-  const scaled = -value.amount * 100;
+  const metadata = getCurrencyMeta(currency);
+  if (!metadata) return { currency: null, amountMinor: null };
+  const scaled = -value.amount * (10 ** metadata.minorUnitDigits);
   if (!Number.isSafeInteger(Math.round(scaled))) throw new Error(`Recurring ${field}.amount is outside the safe integer range.`);
   if (isOutflow && value.amount < 0) throw new Error(`Recurring ${field}.amount has an incompatible outflow sign.`);
   if (!isOutflow && value.amount > 0) throw new Error(`Recurring ${field}.amount has an incompatible inflow sign.`);

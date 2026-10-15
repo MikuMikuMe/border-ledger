@@ -122,3 +122,8 @@ The account options menu includes Disconnect Plaid connection. That action calls
 
 Use Plaid’s Sandbox test institution and credentials while `PLAID_ENV=sandbox`. Sandbox transactions are simulated; test an actual RBC Item only after enabling the appropriate Plaid production access. The Bank of China/WeChat path remains statement or Android-companion work and is not changed by this integration.
 
+## Android Task 17 release and recovery notes
+
+Android parity is tracked as F01–F18 in [`docs/android-validation.md`](docs/android-validation.md). Each row requires a native workflow and owner-captured acceptance evidence; linking to a website page, using a placeholder, or relying on source inspection does not close the row. The release runbook also defines the owner/capture credential boundary, offline/logout/cache behavior, populated migration and restore gate, backup exclusions, signing custody, and future Gradle/APK verification commands.
+
+The current checkout intentionally makes no signed-APK, Pixel, Gradle, `apksigner`, checksum, or CI-success claim. The Android Gradle wrapper JAR is absent, so `.github/workflows/android-ci.yml` reports and gates the Android build explicitly. `.github/workflows/android-release.yml` requires the wrapper, Android SDK tooling, and protected signing secrets before it can assemble, sign, verify, and checksum an artifact. CMB remains explicitly unsupported and statement-import-only until independent source evidence exists.

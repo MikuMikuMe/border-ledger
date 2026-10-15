@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   MAX_PLAID_SYNC_PAGES,
   buildPlaidRequest,
@@ -6,10 +6,17 @@ import {
   encryptAccessToken,
   fetchAllPlaidTransactions,
   mapPlaidTransaction,
+  upsertPlaidTransaction,
 } from '../worker/plaid';
 import { buildPlaidLinkTokenPayload } from '../worker/index';
+import { createD1Fixture, task18MigrationNames } from './helpers/d1';
 
 const key = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const fixtures: Array<{ dispose(): Promise<void> }> = [];
+
+afterEach(async () => {
+  while (fixtures.length > 0) await fixtures.pop()?.dispose();
+});
 
 describe('Plaid integration primitives', () => {
   it('maps a CAD debit into a confirmed ledger expense', () => {
@@ -36,6 +43,52 @@ describe('Plaid integration primitives', () => {
       source: 'plaid',
       fingerprint: 'plaid:account-rbc:txn-1',
     });
+  });
+
+  it('maps registered non-CAD/CNY currencies using each currency minor-unit scale', () => {
+    const euro = mapPlaidTransaction({
+      transaction_id: 'txn-eur',
+      account_id: 'plaid-account-1',
+      amount: 12.34,
+      iso_currency_code: 'EUR',
+      date: '2026-10-09',
+      name: 'Euro merchant',
+      pending: false,
+    }, 'account-eur');
+    const yen = mapPlaidTransaction({
+      transaction_id: 'txn-jpy',
+      account_id: 'plaid-account-1',
+      amount: 123,
+      iso_currency_code: 'JPY',
+      date: '2026-10-09',
+      name: 'Yen merchant',
+      pending: false,
+    }, 'account-jpy');
+    const dinar = mapPlaidTransaction({
+      transaction_id: 'txn-tnd',
+      account_id: 'plaid-account-1',
+      amount: 1.234,
+      iso_currency_code: 'TND',
+      date: '2026-10-09',
+      name: 'Dinar merchant',
+      pending: false,
+    }, 'account-tnd');
+
+    expect(euro).toMatchObject({ currency: 'EUR', amountMinor: -1234 });
+    expect(yen).toMatchObject({ currency: 'JPY', amountMinor: -123 });
+    expect(dinar).toMatchObject({ currency: 'TND', amountMinor: -1234 });
+  });
+
+  it('rejects an unknown Plaid currency code', () => {
+    expect(mapPlaidTransaction({
+      transaction_id: 'txn-unknown',
+      account_id: 'plaid-account-1',
+      amount: 12.34,
+      iso_currency_code: 'XYZ',
+      date: '2026-10-09',
+      name: 'Unknown currency merchant',
+      pending: false,
+    }, 'account-unknown')).toBeNull();
   });
 
   it('uses the pending transaction id so a posted transaction updates the same record', () => {
@@ -66,6 +119,50 @@ describe('Plaid integration primitives', () => {
     expect(posted?.id).toBe(pending?.id);
     expect(posted?.fingerprint).toBe(pending?.fingerprint);
     expect(posted?.status).toBe('confirmed');
+  });
+
+  it('locks a Plaid row on its pending date and preserves that lock when the posted date changes', async () => {
+    const fixture = await createD1Fixture(task18MigrationNames);
+    fixtures.push(fixture);
+    await fixture.db.batch([
+      fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
+        VALUES ('account-rbc', 'Synthetic RBC', 'RBC', 'CAD', 'single', 'chequing', 'connected')`),
+      fixture.db.prepare(`INSERT INTO plaid_items (item_id, access_token_ciphertext, access_token_iv)
+        VALUES ('item-rbc', 'ciphertext-fixture', 'iv-fixture')`),
+    ]);
+    await fixture.db.prepare('DROP TRIGGER transactions_fx_lock_date_default').run();
+
+    const pending = mapPlaidTransaction({
+      transaction_id: 'pending-lock-1',
+      account_id: 'plaid-account-rbc',
+      amount: 20,
+      iso_currency_code: 'CAD',
+      date: '2026-10-09',
+      merchant_name: 'Cafe',
+      name: 'Cafe',
+      pending: true,
+    }, 'account-rbc', 'item-rbc');
+    const posted = mapPlaidTransaction({
+      transaction_id: 'posted-lock-1',
+      pending_transaction_id: 'pending-lock-1',
+      account_id: 'plaid-account-rbc',
+      amount: 20,
+      iso_currency_code: 'CAD',
+      date: '2026-10-11',
+      merchant_name: 'Cafe posted',
+      name: 'Cafe posted',
+      pending: false,
+    }, 'account-rbc', 'item-rbc');
+    expect(pending).not.toBeNull();
+    expect(posted).not.toBeNull();
+
+    await upsertPlaidTransaction(fixture.db, pending!);
+    await upsertPlaidTransaction(fixture.db, posted!);
+
+    await expect(fixture.db.prepare(`SELECT date, fx_lock_date, status, COUNT(*) AS count
+      FROM transactions WHERE id = ?`).bind(pending!.id).all()).resolves.toMatchObject({
+      results: [{ date: '2026-10-11', fx_lock_date: '2026-10-09', status: 'confirmed', count: 1 }],
+    });
   });
 
   it('collects every sync page before returning the cursor', async () => {

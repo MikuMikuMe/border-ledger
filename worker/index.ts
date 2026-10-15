@@ -34,9 +34,18 @@ import {
   validateRecurringClassification,
   validateRecurringListQuery,
   validateRecurringSummaryQuery,
+  validateAlertReviewPayload,
   validateImportPayload,
   validatePlaidExchangeInput,
 } from './validation';
+import { handleMobileRequest } from './mobile';
+import type { AccessIdentity } from './mobile-auth';
+import { applyAlertReview, commitStatementRows, ReconciliationConflictError, ReconciliationReviewError } from './reconciliation-store';
+import type { ValidatedImportPayload } from './validation';
+import { readLedgerReport, warmFxSnapshot } from './ledger-reports';
+import { isFxProviderError } from './fx-rates';
+import { getCurrencyMeta, type CurrencyCode } from '../src/domain/currencies';
+import { readPreferences, updatePreferences, PreferenceRevisionConflictError } from './preferences-store';
 
 interface Queue {
   send(message: unknown): Promise<void>;
@@ -58,11 +67,20 @@ interface Env {
   PLAID_ENV?: string;
   PLAID_ENCRYPTION_KEY?: string;
   PLAID_CLIENT_USER_ID?: string;
+  PLAID_ANDROID_PACKAGE_NAME?: string;
+  PLAID_ANDROID_REDIRECT_URI?: string;
   LEDGER_APP_ORIGIN?: string;
   PLAID_WEBHOOK_URL?: string;
+  MOBILE_ENVIRONMENT?: string;
+  MOBILE_CALLBACK_URL?: string;
+  MOBILE_ACCESS_AUTHORIZATION_URL?: string;
+  MOBILE_SESSION_ENCRYPTION_KEY?: string;
+  MOBILE_APPROVED_ACCESS_ISSUERS?: string;
+  MOBILE_APPROVED_ACCESS_AUDIENCES?: string;
+  MOBILE_APPROVED_ACCESS_SUBJECTS?: string;
 }
 
-type Currency = 'CAD' | 'CNY';
+type Currency = CurrencyCode;
 type TransactionKind = 'expense' | 'income' | 'transfer' | 'refund' | 'fee';
 type TransactionStatus = 'confirmed' | 'provisional' | 'needs_review';
 
@@ -72,7 +90,7 @@ interface StoredTransaction {
   date: string;
   merchant: string;
   amount_minor: number;
-  currency: Currency;
+  currency: string;
   category: string;
   kind: TransactionKind;
   status: TransactionStatus;
@@ -212,21 +230,35 @@ function accessVerifier(env: Env) {
   return cachedAccessVerifier;
 }
 
-async function hasValidAccessJwt(request: Request, env: Env) {
+async function verifiedAccessJwt(request: Request, env: Env) {
   const assertion = request.headers.get('Cf-Access-Jwt-Assertion');
   const verifier = accessVerifier(env);
-  if (!assertion || !verifier) return false;
+  if (!assertion || !verifier) return null;
 
   try {
-    await jwtVerify(assertion, verifier.jwks, {
+    const verified = await jwtVerify(assertion, verifier.jwks, {
       issuer: verifier.issuer,
       audience: verifier.audience,
     });
-    return true;
+    return { ...verified, issuer: verifier.issuer };
   } catch (error) {
     console.warn('access_jwt_rejected', error instanceof Error ? error.name : 'unknown');
-    return false;
+    return null;
   }
+}
+
+async function accessIdentity(request: Request, env: Env): Promise<AccessIdentity | null> {
+  const verified = await verifiedAccessJwt(request, env);
+  if (!verified) return null;
+  const audience = Array.isArray(verified.payload.aud) ? verified.payload.aud[0] : verified.payload.aud;
+  const subject = typeof verified.payload.sub === 'string' ? verified.payload.sub : '';
+  if (!subject || typeof audience !== 'string') return null;
+  const email = typeof verified.payload.email === 'string' ? verified.payload.email : null;
+  return { subject, issuer: verified.issuer, audience, email };
+}
+
+async function hasValidAccessJwt(request: Request, env: Env) {
+  return Boolean(await verifiedAccessJwt(request, env));
 }
 
 async function isAuthorized(request: Request, env: Env) {
@@ -317,7 +349,7 @@ function fetchablePlaidRequest(
 
 function plaidAccountCurrency(account: PlaidAccount): Currency | null {
   const raw = (account.balances?.iso_currency_code ?? account.balances?.unofficial_currency_code ?? '').toUpperCase();
-  return raw === 'CAD' || raw === 'CNY' ? raw : null;
+  return getCurrencyMeta(raw)?.code ?? null;
 }
 
 function localAccountKind(account: PlaidAccount): 'chequing' | 'savings' | 'credit' {
@@ -406,7 +438,7 @@ async function handlePlaidExchange(request: Request, env: Env) {
   const supportedAccounts = selectedAccounts.filter((account) => plaidAccountCurrency(account));
   if (supportedAccounts.length === 0) {
     await revokePlaidAccessToken(env, exchange.access_token);
-    return json({ error: 'Choose at least one CAD or CNY account.' }, { status: 400 });
+    return json({ error: 'Choose at least one registered currency account.' }, { status: 400 });
   }
   const item = itemResponse.item;
   const itemId = exchange.item_id || item?.item_id;
@@ -568,6 +600,8 @@ async function syncPlaidItem(env: Env, itemId: string) {
     changes = await fetchPlaidChanges(env, token, cursor);
   } catch (error) {
     await recordSyncError(env, itemId, error);
+    await env.DB.prepare(`UPDATE mobile_connections SET state = 'failed', updated_at = CURRENT_TIMESTAMP
+      WHERE item_id = ? AND state = 'syncing'`).bind(itemId).run();
     throw error;
   }
 
@@ -599,6 +633,8 @@ async function syncPlaidItem(env: Env, itemId: string) {
       last_success_at = excluded.last_success_at,
       last_error = NULL,
       updated_at = CURRENT_TIMESTAMP`).bind(`${PLAID_SYNC_CONNECTION_PREFIX}${itemId}`, changes.nextCursor));
+  statements.push(env.DB.prepare(`UPDATE mobile_connections SET state = 'connected', updated_at = CURRENT_TIMESTAMP
+    WHERE item_id = ? AND state = 'syncing'`).bind(itemId));
   await env.DB.batch(statements);
   if (env.SYNC_QUEUE) await enqueuePlaidRecurringSync(env, itemId);
   return { added: changes.added.length, modified: changes.modified.length, removed: changes.removed.length, nextCursor: changes.nextCursor };
@@ -711,17 +747,34 @@ function counted(transaction: StoredTransaction, includeProvisional: boolean) {
   return statusOkay && kindOkay;
 }
 
-function summarize(transactions: StoredTransaction[], includeProvisional: boolean) {
+async function registeredCurrencyCodes(env: Env) {
+  const result = await env.DB.prepare('SELECT code FROM currencies ORDER BY code').all<{ code: string }>();
+  return result.results.map((row) => row.code);
+}
+
+function summarize(transactions: StoredTransaction[], includeProvisional: boolean, currencyCodes: readonly string[]) {
+  const totals = Object.fromEntries(currencyCodes.map((code) => [code, 0])) as Record<string, number>;
   return transactions.reduce((result, transaction) => {
     if (!counted(transaction, includeProvisional)) return result;
     const amount = Math.abs(transaction.amount_minor) * (transaction.kind === 'refund' ? -1 : 1);
-    result[transaction.currency] += amount;
+    result[transaction.currency] = (result[transaction.currency] ?? 0) + amount;
     return result;
-  }, { CAD: 0, CNY: 0 } as Record<Currency, number>);
+  }, totals);
 }
 
 async function readTransactions(env: Env, url: URL) {
-  const clauses: string[] = [];
+  const clauses: string[] = [`NOT (t.source = 'alert' AND EXISTS (
+    SELECT 1
+    FROM alert_projections superseded_alert
+    WHERE superseded_alert.state = 'superseded'
+      AND (superseded_alert.transaction_id = t.id OR EXISTS (
+        SELECT 1
+        FROM transaction_source_records alert_source
+        WHERE alert_source.transaction_id = t.id
+          AND alert_source.source_kind = 'alert'
+          AND alert_source.event_id = superseded_alert.event_id
+      ))
+  ))`];
   const bindings: string[] = [];
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
@@ -734,12 +787,13 @@ async function readTransactions(env: Env, url: URL) {
   if (from && !validDate(from)) throw new RequestValidationError('The from date is not valid.');
   if (to && !validDate(to)) throw new RequestValidationError('The to date is not valid.');
   if (from && to && from > to) throw new RequestValidationError('The transaction date range is not valid.');
-  if (currency && currency !== 'all' && currency !== 'CAD' && currency !== 'CNY') throw new RequestValidationError('The currency filter is not valid.');
-  if (from) { clauses.push('date >= ?'); bindings.push(from); }
-  if (to) { clauses.push('date <= ?'); bindings.push(to); }
+  const currencyCodes = await registeredCurrencyCodes(env);
+  if (currency && currency !== 'all' && !currencyCodes.includes(currency)) throw new RequestValidationError('The currency filter is not valid.');
+  if (from) { clauses.push('t.date >= ?'); bindings.push(from); }
+  if (to) { clauses.push('t.date <= ?'); bindings.push(to); }
   if (currency && currency !== 'all') { clauses.push('currency = ?'); bindings.push(currency); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const statement = env.DB.prepare(`SELECT * FROM transactions ${where} ORDER BY date DESC, created_at DESC LIMIT 500`).bind(...bindings);
+  const statement = env.DB.prepare(`SELECT t.* FROM transactions t ${where} ORDER BY t.date DESC, t.created_at DESC LIMIT 500`).bind(...bindings);
   const result = await statement.all<StoredTransaction>();
   return result.results;
 }
@@ -748,15 +802,58 @@ async function handleImportCommit(request: Request, env: Env) {
   const body = await readJsonBody<unknown>(request, MAX_JSON_BODY_BYTES);
   const input = validateImportPayload(body);
   if ('error' in input) return json({ error: input.error }, { status: 400 });
-  const account = await env.DB.prepare('SELECT id FROM accounts WHERE id = ?').bind(input.accountId).all<{ id: string }>();
-  if (account.results.length === 0) return json({ error: 'The selected account was not found.' }, { status: 404 });
+  const fileSha256 = input.fileSha256 ?? await derivedImportFileHash(input);
+  const importId = input.operationId ?? `statement-import:${fileSha256}`;
+  let result: Awaited<ReturnType<typeof commitStatementRows>>;
+  try {
+    result = await commitStatementRows(env.DB, {
+      importId,
+      operationId: input.operationId,
+      accountId: input.accountId,
+      filename: input.filename,
+      fileSha256,
+      rows: input.transactions.map((transaction, rowIndex) => ({
+        ...transaction,
+        accountId: input.accountId,
+        sourceIdentity: {
+          accountId: input.accountId,
+          fileSha256,
+          rowIndex: transaction.sourceIdentity?.rowIndex ?? rowIndex,
+          bankSourceId: transaction.sourceIdentity?.bankSourceId ?? null,
+          bankRowId: transaction.sourceIdentity?.bankRowId ?? null,
+        },
+      })),
+    });
+  } catch (error) {
+    if (error instanceof RangeError) return json({ error: error.message }, { status: 400 });
+    if (error instanceof ReconciliationConflictError) return json({ code: error.code, error: error.message }, { status: 409 });
+    throw error;
+  }
+  return json(result, { status: result.duplicates === input.transactions.length ? 200 : 201 });
+}
 
-  const statements = input.transactions.map((transaction) => env.DB.prepare(`INSERT OR IGNORE INTO transactions (id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(transaction.id, input.accountId, transaction.date, transaction.merchant, transaction.amountMinor, transaction.currency, transaction.category, transaction.kind, transaction.status, transaction.source, transaction.fingerprint, transaction.note));
-  await env.DB.batch(statements);
-  const importId = crypto.randomUUID();
-  await env.DB.prepare('INSERT INTO imports (id, account_id, filename, row_count, accepted_count, error_count, status) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(importId, input.accountId, input.filename, input.transactions.length, input.transactions.length, 0, 'committed').run();
-  return json({ importId, accepted: input.transactions.length });
+async function handleImportReview(request: Request, env: Env) {
+  const body = await readJsonBody<unknown>(request, 16 * 1024);
+  const input = validateAlertReviewPayload(body);
+  if ('error' in input) return json({ error: input.error }, { status: 400 });
+  try {
+    const result = await applyAlertReview(env.DB, input);
+    return json(result, { status: result.replayed ? 200 : 201 });
+  } catch (error) {
+    if (error instanceof RangeError) return json({ error: error.message }, { status: 400 });
+    if (error instanceof ReconciliationConflictError || error instanceof ReconciliationReviewError) return json({ code: error.code, error: error.message }, { status: 409 });
+    throw error;
+  }
+}
+
+async function derivedImportFileHash(input: ValidatedImportPayload) {
+  const canonical = JSON.stringify({
+    accountId: input.accountId,
+    filename: input.filename,
+    transactions: input.transactions,
+  });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
 async function handleRecurringListRequest(env: Env, url: URL) {
@@ -803,10 +900,39 @@ function errorResponse(error: unknown) {
   if (error instanceof BodyTooLargeError) return json({ error: 'The request body is too large.' }, { status: 413 });
   if (error instanceof InvalidJsonBodyError) return json({ error: 'The request body must be valid JSON.' }, { status: 400 });
   if (error instanceof RequestValidationError) return json({ error: error.message }, { status: 400 });
+  if (error instanceof PreferenceRevisionConflictError) return json({ error: error.message, currentRevision: error.currentRevision }, { status: 409 });
+  if (error instanceof RangeError) return json({ error: error.message }, { status: 400 });
   if (error instanceof ConfigurationError) return json({ error: 'Plaid is not fully configured on the Worker yet.' }, { status: 503 });
   if (error instanceof PlaidApiError && error.status >= 400 && error.status < 500) return json({ error: 'Plaid rejected the request. Check the connection and try again.' }, { status: 400 });
   console.error('api_error', error instanceof Error ? error.name : 'unknown');
   return json({ error: 'The ledger could not complete that request.' }, { status: 500 });
+}
+
+function preferencesInput(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new RequestValidationError('The request body is not valid.');
+  const body = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number) < 0) {
+    throw new RequestValidationError('The expectedRevision is not valid.');
+  }
+  return {
+    expectedRevision: body.expectedRevision as number,
+    reportingTimezone: body.reportingTimezone as string,
+    weekStart: body.weekStart as number,
+    preferredCurrency: body.preferredCurrency as CurrencyCode | null,
+  };
+}
+
+async function handlePreferencesRequest(request: Request, env: Env) {
+  if (request.method === 'GET') return json(await readPreferences(env.DB));
+  if (request.method === 'PATCH') {
+    const body = preferencesInput(await readJsonBody<unknown>(request, 16 * 1024));
+    return json(await updatePreferences(env.DB, body.expectedRevision, {
+      reportingTimezone: body.reportingTimezone,
+      weekStart: body.weekStart,
+      preferredCurrency: body.preferredCurrency,
+    }));
+  }
+  return json({ error: 'Not found' }, { status: 404 });
 }
 
 export default {
@@ -834,6 +960,15 @@ export default {
         return errorResponse(error);
       }
     }
+    if (url.pathname.startsWith('/api/mobile/v1/')) {
+      return (await handleMobileRequest(request, env)) ?? json({ error: 'Not found' }, { status: 404 });
+    }
+    if (url.pathname.startsWith('/api/mobile-auth/') || url.pathname.startsWith('/api/device-pairings/')) {
+      if (request.method !== 'GET' && request.method !== 'HEAD' && !isSameOriginMutation(request, env.LEDGER_APP_ORIGIN)) {
+        return json({ error: 'A same-origin request is required.' }, { status: 403 });
+      }
+      return (await handleMobileRequest(request, env, await accessIdentity(request, env))) ?? json({ error: 'Not found' }, { status: 404 });
+    }
     if (request.method !== 'GET' && request.method !== 'HEAD' && !isSameOriginMutation(request, env.LEDGER_APP_ORIGIN)) {
       return json({ error: 'A same-origin request is required.' }, { status: 403 });
     }
@@ -846,10 +981,26 @@ export default {
           FROM accounts ORDER BY institution, name`).all();
         return json({ accounts: result.results });
       }
+      if (url.pathname === '/api/preferences' && (request.method === 'GET' || request.method === 'PATCH')) return await handlePreferencesRequest(request, env);
       if (url.pathname === '/api/transactions' && request.method === 'GET') return json({ transactions: await readTransactions(env, url) });
       if (url.pathname === '/api/reports/summary' && request.method === 'GET') {
-        const transactions = await readTransactions(env, url);
-        return json({ summary: summarize(transactions, url.searchParams.get('includeProvisional') === 'true'), transactionCount: transactions.length });
+        const requestedCurrency = url.searchParams.get('currency');
+        const reportingCurrency = url.searchParams.get('reportingCurrency');
+        const currencyCodes = await registeredCurrencyCodes(env);
+        if (requestedCurrency && requestedCurrency !== 'all' && !currencyCodes.includes(requestedCurrency)) throw new RequestValidationError('The currency filter is not valid.');
+        if (reportingCurrency !== null && getCurrencyMeta(reportingCurrency) === null) throw new RequestValidationError('The reporting currency is not valid.');
+        const report = await readLedgerReport(env.DB, {
+          from: url.searchParams.get('from'),
+          to: url.searchParams.get('to'),
+          currency: requestedCurrency && requestedCurrency !== 'all' ? requestedCurrency : null,
+          reportingCurrency,
+          includeProvisional: url.searchParams.get('includeProvisional') === 'true',
+          timeZone: url.searchParams.get('timeZone') ?? undefined,
+        });
+        const summary = Object.fromEntries(currencyCodes.map((code) => [code, 0])) as Record<string, number>;
+        for (const total of report.currencyTotals) summary[total.currency] = total.confirmedMinorUnits + (report.includeProvisional ? total.provisionalMinorUnits : 0);
+        const transactionCount = Object.values(report.sourceCoverage).reduce((count, sourceCount) => count + sourceCount, 0);
+        return json({ ...report, summary, transactionCount });
       }
       if (url.pathname === '/api/recurring' && request.method === 'GET') return handleRecurringListRequest(env, url);
       if (url.pathname === '/api/recurring/summary' && request.method === 'GET') return handleRecurringSummaryRequest(env, url);
@@ -862,6 +1013,7 @@ export default {
         return id ? handleRecurringDetailRequest(env, url, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
       }
       if (url.pathname === '/api/imports/commit' && request.method === 'POST') return handleImportCommit(request, env);
+      if (url.pathname === '/api/imports/review' && request.method === 'POST') return handleImportReview(request, env);
       if (url.pathname === '/api/plaid/link-token' && request.method === 'POST') return await handleCreateLinkToken(request, env);
       if (url.pathname === '/api/plaid/exchange' && request.method === 'POST') return await handlePlaidExchange(request, env);
       if (url.pathname === '/api/plaid/sync' && request.method === 'POST') return await handlePlaidSyncRequest(request, env);
@@ -869,6 +1021,16 @@ export default {
       return json({ error: 'Not found' }, { status: 404 });
     } catch (error) {
       return errorResponse(error);
+    }
+  },
+
+  async scheduled(controller: { scheduledTime: number }, env: Env) {
+    const requestedDate = new Date(controller.scheduledTime).toISOString().slice(0, 10);
+    try {
+      await warmFxSnapshot(env.DB, requestedDate, { now: () => new Date(controller.scheduledTime) });
+    } catch (error) {
+      if (!isFxProviderError(error)) throw error;
+      console.error('fx_snapshot_refresh_failed', error.name);
     }
   },
 
