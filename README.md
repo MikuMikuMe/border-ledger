@@ -63,7 +63,9 @@ npm run build
    $bytes = [byte[]]::new(32); [Security.Cryptography.RandomNumberGenerator]::Fill($bytes); [Convert]::ToBase64String($bytes)
    ```
 
-6. Keep the public welcome page at `/` outside the Access login wall, and protect the private workspace at `/app/*` plus the financial API routes. The front page links into `/app`, so Access can return an invited user to the workspace after sign-in. Add the Access team domain (for example `https://your-team.cloudflareaccess.com`) as `ACCESS_TEAM_DOMAIN` and the private Access application AUD tag as `ACCESS_AUDIENCE` in the Worker variables. The browser sends the Access session cookie; it never receives `LEDGER_API_KEY`.
+   Mobile owner sign-in uses one additional production secret and one non-secret runtime variable. `MOBILE_ACCESS_AUTHORIZATION_URL` is declared in the production Wrangler variables as the app URL `https://pf.lofuyu.com/mobile/authorize`; it is not a Cloudflare-generated OAuth URL. `MOBILE_SESSION_ENCRYPTION_KEY` is a separate random Worker-only secret used for short-lived replay protection; generate at least 32 random bytes and never reuse the Plaid encryption key.
+
+6. Keep the public welcome page at `/` outside the Access login wall, and protect `/mobile/authorize`, `/app/*`, `/api/mobile-auth/*`, plus the financial API routes. The front page links into `/app`, so Access can return an invited user to the workspace after sign-in. Add the Access team domain (for example `https://your-team.cloudflareaccess.com`) as `ACCESS_TEAM_DOMAIN` and the private Access application AUD tag as `ACCESS_AUDIENCE` in the Worker variables. The browser sends the Access session cookie; it never receives `LEDGER_API_KEY`.
 7. Add an Access Bypass policy for exactly `/api/webhooks/plaid`, because Plaid cannot present your browser session. The Worker verifies Plaid’s signed `Plaid-Verification` header before enqueueing a sync.
 8. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to the GitHub repository Actions secrets.
 
@@ -83,9 +85,10 @@ Before a real bank connection, complete these steps in order:
    npx wrangler secret put PLAID_ENCRYPTION_KEY --env production
    npx wrangler secret put ACCESS_TEAM_DOMAIN --env production
    npx wrangler secret put ACCESS_AUDIENCE --env production
+   npx wrangler secret put MOBILE_SESSION_ENCRYPTION_KEY --env production
    ```
 
-   `PLAID_ENCRYPTION_KEY` must be a fresh base64 or hex encoding of exactly 32 random bytes. Do not copy Sandbox secrets into production unless that is intentional.
+   `MOBILE_ACCESS_AUTHORIZATION_URL` is the deployed, Access-protected SPA page that receives `request_id` and PKCE `state`; keep it as the production runtime variable declared in `wrangler.jsonc`, not as a secret. Generate `MOBILE_SESSION_ENCRYPTION_KEY` independently as a fresh random value, for example with the PowerShell command above, and keep it out of the repository. `PLAID_ENCRYPTION_KEY` must also be a fresh base64 or hex encoding of exactly 32 random bytes. Do not copy Sandbox secrets into production unless that is intentional.
 3. Apply all versioned migrations to the production D1 database:
 
    ```bash

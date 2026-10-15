@@ -24,7 +24,6 @@ import {
 } from './mobile-auth';
 
 const TEN_MINUTES = 10 * 60 * 1000;
-const TWO_MINUTES = 2 * 60 * 1000;
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
 const THIRTY_DAYS = 30 * DAY;
@@ -170,11 +169,11 @@ function responseFromJson<T>(value: string) {
   }
 }
 
-async function readReplay(db: D1Database, requestKind: string, digest: string, at: Date, config: MobileAuthConfig) {
+async function readReplay<T>(db: D1Database, requestKind: string, digest: string, at: Date, config: MobileAuthConfig) {
   const row = await db.prepare(`SELECT response_ciphertext, response_iv, expires_at
     FROM owner_replay_records WHERE ledger_id = 'personal' AND request_kind = ? AND request_digest = ? AND expires_at > ?`).bind(requestKind, digest, at.toISOString()).first<ReplayRow>();
   if (!row) return null;
-  return decryptReplayResponse<OwnerTokenResponse>({ ciphertext: row.response_ciphertext, iv: row.response_iv }, config);
+  return decryptReplayResponse<T>({ ciphertext: row.response_ciphertext, iv: row.response_iv }, config);
 }
 
 async function readAuthRequest(db: D1Database, requestId: string) {
@@ -220,33 +219,43 @@ export async function startOwnerLogin(db: D1Database, input: OwnerLoginStart, co
   ).run();
   const authorization = new URL(config.accessAuthorizationUrl);
   authorization.searchParams.set('request_id', requestId);
+  authorization.searchParams.set('state', input.state);
   return { requestId, authorizationUrl: authorization.toString(), expiresAt, deviceId: input.deviceId ?? null };
 }
 
 export async function approveOwnerLogin(db: D1Database, input: OwnerApprovalInput, config: MobileAuthConfig): Promise<OwnerApproval> {
   if (input.consent !== true) throw new MobileAuthError('consent_required', 'Explicit owner approval is required.', 403);
   assertAccessIdentity(input.identity, config);
+  const requestId = bounded(input.requestId, 'request id', 128);
   const environmentHash = await assertEnvironment(input.environment ?? config.environment, config);
   const callback = assertHttpsCallback(input.callbackUrl ?? config.callbackUrl, config);
   const at = current(config);
-  const request = await readAuthRequest(db, bounded(input.requestId, 'request id', 128));
+  const subjectHash = await hashSecret(input.identity.subject);
+  const digest = await requestDigest({
+    flow: 'owner-approval',
+    requestId,
+    subjectHash,
+    issuer: input.identity.issuer,
+    audience: input.identity.audience,
+    environmentHash,
+    callback,
+  });
+  const replay = await readReplay<OwnerApproval>(db, 'owner-approval', digest, at, config);
+  if (replay) return replay;
+  const request = await readAuthRequest(db, requestId);
   if (!request || request.ledger_id !== 'personal' || request.revoked_at || request.consumed_at) throw new MobileAuthError('invalid_request', 'The owner login request is not available.', 400);
   expiresOrThrow(request.expires_at, at, 'The owner login request has expired.');
   if (request.environment_hash !== environmentHash || request.callback_origin !== callback.origin || request.callback_path !== callback.path) throw new MobileAuthError('environment_mismatch', 'The owner login request does not match this environment.', 400);
   const code = bytesToBase64Url(randomBytes(32));
   const codeHash = await hashSecret(code);
-  const codeExpiresAt = isoAfter(at, TWO_MINUTES);
-  const result = await db.prepare(`UPDATE mobile_auth_requests SET code_hash = ?, code_expires_at = ?, approved_subject_hash = ?, approved_at = ?
-    WHERE id = ? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).bind(
-    codeHash,
-    codeExpiresAt,
-    await hashSecret(input.identity.subject),
-    at.toISOString(),
-    request.id,
-    at.toISOString(),
-  ).run();
-  if ((result.meta?.changes ?? 0) !== 1) throw new MobileAuthError('invalid_request', 'The owner login request is no longer available.', 409);
-  return { requestId: request.id, code, callbackUrl: config.callbackUrl, expiresAt: codeExpiresAt };
+  // Keep the authorization code lifetime aligned with its encrypted retry record.
+  const codeExpiresAt = isoAfter(at, REPLAY_TTL);
+  const response = { requestId: request.id, code, callbackUrl: config.callbackUrl, expiresAt: codeExpiresAt };
+  const committed = await atomicApproval(db, request, digest, response, codeHash, subjectHash, at, config);
+  if (committed) return response;
+  const recovered = await readReplay<OwnerApproval>(db, 'owner-approval', digest, at, config);
+  if (recovered) return recovered;
+  throw new MobileAuthError('invalid_request', 'The owner login request is no longer available.', 409);
 }
 
 function randomBytes(length: number) {
@@ -259,6 +268,27 @@ function bytesToBase64Url(bytes: Uint8Array) {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+async function atomicApproval(db: D1Database, request: AuthRequestRow, digest: string, response: OwnerApproval, codeHash: string, subjectHash: string, at: Date, config: MobileAuthConfig) {
+  const sealed = await encryptReplayResponse(response, config);
+  const results = await db.batch([
+    db.prepare(`UPDATE mobile_auth_requests SET code_hash = ?, code_expires_at = ?, approved_subject_hash = ?, approved_at = ?
+      WHERE id = ? AND code_hash IS NULL AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).bind(
+      codeHash,
+      response.expiresAt,
+      subjectHash,
+      at.toISOString(),
+      request.id,
+      at.toISOString(),
+    ),
+    db.prepare(`INSERT INTO owner_replay_records
+      (id, ledger_id, request_kind, request_digest, response_ciphertext, response_iv, ttl_seconds, expires_at)
+      SELECT ?, 'personal', 'owner-approval', ?, ?, ?, 60, ? WHERE changes() = 1`).bind(
+      crypto.randomUUID(), digest, sealed.ciphertext, sealed.iv, isoAfter(at, REPLAY_TTL),
+    ),
+  ]);
+  return (results[0]?.meta?.changes ?? 0) === 1;
 }
 
 async function ownerResponse(config: MobileAuthConfig, familyId: string, generation: number, subjectHash: string, deviceId: string | null, refreshExpiresAt: string, accessExpiresAt: string, revocationCapability: string, revision: number): Promise<OwnerTokenResponse> {
@@ -305,7 +335,7 @@ export async function exchangeOwnerCode(db: D1Database, input: OwnerCodeExchange
   const stateHash = await hashSecret(input.state);
   const verifierHash = await hashSecret(input.verifier);
   const digest = await requestDigest({ flow: 'owner-exchange', requestId: input.requestId, codeHash: await hashSecret(input.code), verifierHash, stateHash, deviceId: input.deviceId ?? null, environmentHash, callback, idempotencyKey: input.idempotencyKey ?? null, staySignedIn: input.staySignedIn === true });
-  const replay = await readReplay(db, 'owner-exchange', digest, at, config);
+  const replay = await readReplay<OwnerTokenResponse>(db, 'owner-exchange', digest, at, config);
   if (replay) return replay;
   const request = await readAuthRequest(db, bounded(input.requestId, 'request id', 128));
   if (!request || request.ledger_id !== 'personal') throw new MobileAuthError('invalid_request', 'The owner login request is not valid.', 400);
@@ -330,7 +360,7 @@ export async function exchangeOwnerCode(db: D1Database, input: OwnerCodeExchange
   const exactRefreshHash = await hashSecret(response.refreshToken);
   const committed = await atomicExchange(db, request, input, digest, response, config, at, familyId, request.approved_subject_hash, exactRefreshHash, revocationHash, accessExpiresAt, refreshExpiresAt, input.staySignedIn === true ? refreshExpiresAt : null);
   if (committed) return response;
-  const recovered = await readReplay(db, 'owner-exchange', digest, at, config);
+  const recovered = await readReplay<OwnerTokenResponse>(db, 'owner-exchange', digest, at, config);
   if (recovered) return recovered;
   throw new MobileAuthError('consumed', 'The owner authorization code has already been consumed.', 409);
 }
@@ -375,7 +405,7 @@ export async function refreshOwnerSession(db: D1Database, input: OwnerRefreshInp
   const at = current(config);
   const tokenHash = await hashSecret(input.refreshToken);
   const digest = await requestDigest({ flow: 'owner-refresh', tokenHash, environmentHash, idempotencyKey: input.idempotencyKey });
-  const replay = await readReplay(db, 'owner-refresh', digest, at, config);
+  const replay = await readReplay<OwnerTokenResponse>(db, 'owner-refresh', digest, at, config);
   if (replay) return replay;
   const payload = await readOpaqueCredential<{ kind?: unknown; familyId?: unknown; generation?: unknown; expiresAt?: unknown; environmentHash?: unknown }>(input.refreshToken, config);
   if (payload.kind !== 'owner-refresh' || typeof payload.familyId !== 'string' || typeof payload.generation !== 'number' || typeof payload.expiresAt !== 'string' || payload.environmentHash !== environmentHash) throw new MobileAuthError('wrong_credential_type', 'A refresh credential is required.', 401);
@@ -397,7 +427,7 @@ export async function refreshOwnerSession(db: D1Database, input: OwnerRefreshInp
   const response = await ownerResponse(config, family.id, nextGeneration, family.subject_hash, family.device_id, refreshExpiresAt, accessExpiresAt, nextCapability, nextAccessGeneration);
   const committed = await atomicRefresh(db, family, input, digest, payload.generation, nextGeneration, nextAccessGeneration, accessExpiresAt, refreshExpiresAt, await hashSecret(response.refreshToken), await hashSecret(nextCapability), response, config, at, refreshExpiresAt);
   if (committed) return response;
-  const recovered = await readReplay(db, 'owner-refresh', digest, at, config);
+  const recovered = await readReplay<OwnerTokenResponse>(db, 'owner-refresh', digest, at, config);
   if (recovered) return recovered;
   await db.prepare(`UPDATE owner_session_families SET revoked_at = COALESCE(revoked_at, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(at.toISOString(), family.id).run();
   throw new MobileAuthError('refresh_reuse', 'The refresh credential was reused.', 409);

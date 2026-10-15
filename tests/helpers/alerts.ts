@@ -72,7 +72,7 @@ export function mobileEnv(db: Awaited<ReturnType<typeof createAlertFixture>>['db
     DB: db,
     LEDGER_APP_ORIGIN: ALERT_ORIGIN,
     MOBILE_ENVIRONMENT: ALERT_ENVIRONMENT,
-    MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+    MOBILE_ACCESS_AUTHORIZATION_URL: `${ALERT_ORIGIN}/mobile/authorize`,
     MOBILE_SESSION_ENCRYPTION_KEY: ALERT_SESSION_KEY,
     ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
     LEDGER_API_KEY: 'legacy-key',

@@ -57,7 +57,7 @@ jobs:
           SECRETS_JSON="$secrets_json" node - <<'NODE'
           const secrets = JSON.parse(process.env.SECRETS_JSON);
           const names = new Set(secrets.map((secret) => secret.name));
-          for (const name of ['MOBILE_ACCESS_AUTHORIZATION_URL', 'MOBILE_SESSION_ENCRYPTION_KEY']) {
+          for (const name of ['MOBILE_SESSION_ENCRYPTION_KEY']) {
             if (!names.has(name)) {
               console.error(`::error::Missing required production Worker secret: ${name}`);
               process.exit(1);

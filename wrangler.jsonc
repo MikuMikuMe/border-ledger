@@ -51,7 +51,8 @@
         "PLAID_ENV": "production",
         "LEDGER_APP_ORIGIN": "https://pf.lofuyu.com",
         "PLAID_WEBHOOK_URL": "https://pf.lofuyu.com/api/webhooks/plaid",
-        "PLAID_ANDROID_PACKAGE_NAME": "com.lofuyu.borderledger"
+        "PLAID_ANDROID_PACKAGE_NAME": "com.lofuyu.borderledger",
+        "MOBILE_ACCESS_AUTHORIZATION_URL": "https://pf.lofuyu.com/mobile/authorize"
       },
       "d1_databases": [
         {

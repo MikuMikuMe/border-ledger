@@ -4,7 +4,7 @@ import worker from '../worker/index';
 const baseEnvironment = {
   LEDGER_APP_ORIGIN: 'https://pf.example.com',
   MOBILE_ENVIRONMENT: 'production',
-  MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+  MOBILE_ACCESS_AUTHORIZATION_URL: 'https://pf.example.com/mobile/authorize',
   MOBILE_SESSION_ENCRYPTION_KEY: 'a-valid-session-key',
   ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
 };
@@ -29,6 +29,38 @@ describe('production health mobile-auth configuration signal', () => {
       {
         ...baseEnvironment,
         MOBILE_ACCESS_AUTHORIZATION_URL: 'not-an-https-url',
+      } as never,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      mobileAuthConfigured: false,
+    });
+  });
+
+  it('reports an authorization URL outside the app route as unavailable', async () => {
+    const response = await worker.fetch(
+      new Request('https://pf.example.com/api/health'),
+      {
+        ...baseEnvironment,
+        MOBILE_ACCESS_AUTHORIZATION_URL: 'https://access.example.com/authorize',
+      } as never,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      mobileAuthConfigured: false,
+    });
+  });
+
+  it('reports a non-canonical Android callback as unavailable', async () => {
+    const response = await worker.fetch(
+      new Request('https://pf.example.com/api/health'),
+      {
+        ...baseEnvironment,
+        MOBILE_CALLBACK_URL: 'https://pf.example.com/android/auth/other',
       } as never,
     );
 
