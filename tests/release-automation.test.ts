@@ -55,6 +55,10 @@ describe('release automation contract', () => {
     expect(deployWorkflow).toContain('MOBILE_APPROVED_ACCESS_AUDIENCES');
     expect(deployWorkflow).toContain('MOBILE_APPROVED_ACCESS_SUBJECTS');
     expect(deployWorkflow).toContain('Missing required production Worker secret');
+    expect(deployWorkflow).toContain('CLOUDFLARE_ACCESS_CLIENT_ID');
+    expect(deployWorkflow).toContain('CLOUDFLARE_ACCESS_CLIENT_SECRET');
+    expect(deployWorkflow).toContain('CF-Access-Client-Id');
+    expect(deployWorkflow).toContain('CF-Access-Client-Secret');
     expect(deployWorkflow).toContain('command: deploy --env production --keep-vars --var');
     expect(deployWorkflow).toContain('deploymentRevision');
     expect(deployWorkflow).toContain('mobileAuthConfigured');
