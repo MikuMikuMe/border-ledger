@@ -30,6 +30,10 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # Keep release setup aligned with CI; the historical `tools`
+          # package no longer exists in the Android repository.
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
       - name: Decode owner-controlled keystore outside the repository
         shell: pwsh
         env:
