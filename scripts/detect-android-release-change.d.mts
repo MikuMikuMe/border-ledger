@@ -4,6 +4,8 @@ export interface AndroidReleaseChangeInput {
   packageDiff?: string;
   packageBefore?: string;
   packageCurrent?: string;
+  packageLockBefore?: string;
+  packageLockCurrent?: string;
   frontendSource?: string;
 }
 

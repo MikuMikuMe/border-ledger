@@ -23,7 +23,7 @@ function readFrontendSource(root) {
 function dependencyIsFrontend(name, frontendSource) {
   if (FRONTEND_BUILD_DEPENDENCIES.has(name)) return true;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:from|import|require\\s*\\()\\s*["']${escaped}(?:/|["'])`).test(frontendSource);
+  return new RegExp(`(?:from\\s+|import\\s*\\(|require\\s*\\()\\s*["']${escaped}(?:/|["'])`).test(frontendSource);
 }
 
 function parsePackageJson(value) {
@@ -34,7 +34,23 @@ function parsePackageJson(value) {
   }
 }
 
-function packageAffectsFrontend(beforeValue, currentValue, frontendSource) {
+function lockfileAffectsFrontend(beforeValue, currentValue, frontendSource) {
+  const before = parsePackageJson(beforeValue);
+  const current = parsePackageJson(currentValue);
+  const beforePackages = before.packages ?? {};
+  const currentPackages = current.packages ?? {};
+  const packagePaths = new Set([...Object.keys(beforePackages), ...Object.keys(currentPackages)]);
+  return [...packagePaths].some((path) => {
+    if (!path.startsWith('node_modules/')) return false;
+    const beforePackage = beforePackages[path] ?? null;
+    const currentPackage = currentPackages[path] ?? null;
+    if (JSON.stringify(beforePackage) === JSON.stringify(currentPackage)) return false;
+    const name = path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length);
+    return dependencyIsFrontend(name, frontendSource);
+  });
+}
+
+function packageAffectsFrontend(beforeValue, currentValue, lockBeforeValue, lockCurrentValue, frontendSource) {
   const before = parsePackageJson(beforeValue);
   const current = parsePackageJson(currentValue);
   if (JSON.stringify(before.scripts ?? {}) !== JSON.stringify(current.scripts ?? {})) return true;
@@ -42,10 +58,11 @@ function packageAffectsFrontend(beforeValue, currentValue, frontendSource) {
   const beforeDependencies = { ...(before.dependencies ?? {}), ...(before.devDependencies ?? {}) };
   const currentDependencies = { ...(current.dependencies ?? {}), ...(current.devDependencies ?? {}) };
   const names = new Set([...Object.keys(beforeDependencies), ...Object.keys(currentDependencies)]);
-  return [...names].some((name) => beforeDependencies[name] !== currentDependencies[name] && dependencyIsFrontend(name, frontendSource));
+  return [...names].some((name) => beforeDependencies[name] !== currentDependencies[name] && dependencyIsFrontend(name, frontendSource))
+    || lockfileAffectsFrontend(lockBeforeValue, lockCurrentValue, frontendSource);
 }
 
-export function shouldPublishAndroidRelease({ eventName, changedPaths, packageDiff = '', packageBefore = '', packageCurrent = '', frontendSource = readFrontendSource(process.cwd()) }) {
+export function shouldPublishAndroidRelease({ eventName, changedPaths, packageDiff = '', packageBefore = '', packageCurrent = '', packageLockBefore = '', packageLockCurrent = '', frontendSource = readFrontendSource(process.cwd()) }) {
   if (eventName === 'workflow_dispatch') return true;
   if (changedPaths.length === 0) return true;
 
@@ -53,7 +70,7 @@ export function shouldPublishAndroidRelease({ eventName, changedPaths, packageDi
   if (!packageChanged) return true;
 
   const nonPackagePaths = changedPaths.filter((path) => path !== 'package.json' && path !== 'package-lock.json');
-  const frontendPackageChanged = packageAffectsFrontend(packageBefore, packageCurrent, frontendSource);
+  const frontendPackageChanged = packageAffectsFrontend(packageBefore, packageCurrent, packageLockBefore, packageLockCurrent, frontendSource);
   if (frontendPackageChanged) return true;
   if (nonPackagePaths.length === 0) return false;
 
@@ -68,6 +85,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     packageDiff: process.env.PACKAGE_DIFF ?? '',
     packageBefore: process.env.PACKAGE_BEFORE ?? '',
     packageCurrent: process.env.PACKAGE_CURRENT ?? '',
+    packageLockBefore: process.env.PACKAGE_LOCK_BEFORE ?? '',
+    packageLockCurrent: process.env.PACKAGE_LOCK_CURRENT ?? '',
   });
   process.stdout.write(`app_changed=${appChanged}\n`);
 }

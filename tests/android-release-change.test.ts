@@ -7,6 +7,10 @@ describe('Android release change detector', () => {
   const frontendBefore = JSON.stringify({ dependencies: { react: '18.3.0' } });
   const frontendCurrent = JSON.stringify({ dependencies: { react: '18.3.1' } });
   const frontendSource = "import React from 'react';";
+  const reactLockBefore = JSON.stringify({ packages: { '': { dependencies: { react: '18.3.1' } }, 'node_modules/react': { version: '18.3.1' } } });
+  const reactLockCurrent = JSON.stringify({ packages: { '': { dependencies: { react: '18.3.1' } }, 'node_modules/react': { version: '18.3.2' } } });
+  const joseLockBefore = JSON.stringify({ packages: { 'node_modules/jose': { version: '6.2.11' } } });
+  const joseLockCurrent = JSON.stringify({ packages: { 'node_modules/jose': { version: '6.2.12' } } });
 
   it('publishes for a frontend dependency-only manifest change', () => {
     expect(shouldPublishAndroidRelease({
@@ -24,6 +28,8 @@ describe('Android release change detector', () => {
       changedPaths: ['package.json', 'package-lock.json'],
       packageBefore: backendOnlyBefore,
       packageCurrent: backendOnlyCurrent,
+      packageLockBefore: joseLockBefore,
+      packageLockCurrent: joseLockCurrent,
       frontendSource,
     })).toBe(false);
   });
@@ -55,8 +61,32 @@ describe('Android release change detector', () => {
       packageBefore: backendOnlyBefore,
       packageCurrent: backendOnlyBefore,
       packageDiff: '+  "version": "6.2.12",',
+      packageLockBefore: joseLockBefore,
+      packageLockCurrent: joseLockCurrent,
       frontendSource,
     })).toBe(false);
+  });
+
+  it('publishes for a lockfile-only frontend resolution change', () => {
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: ['package-lock.json'],
+      packageBefore: frontendBefore,
+      packageCurrent: frontendBefore,
+      packageLockBefore: reactLockBefore,
+      packageLockCurrent: reactLockCurrent,
+      frontendSource,
+    })).toBe(true);
+  });
+
+  it('recognizes dynamic frontend imports', () => {
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: ['package.json'],
+      packageBefore: JSON.stringify({ dependencies: {} }),
+      packageCurrent: JSON.stringify({ dependencies: { 'new-ui-kit': '1.0.0' } }),
+      frontendSource: "const ui = import('new-ui-kit');",
+    })).toBe(true);
   });
 
   it('publishes when a backend package change also changes app source', () => {
