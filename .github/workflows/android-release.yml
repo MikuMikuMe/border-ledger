@@ -145,7 +145,7 @@ jobs:
         env:
           RELEASE_VERSION_CODE: ${{ steps.release-version.outputs.version_code }}
           RELEASE_VERSION_NAME: ${{ steps.release-version.outputs.version_name }}
-        run: .\gradlew.bat assembleRelease --no-daemon "-PreleaseVersionCode=$env:RELEASE_VERSION_CODE" "-PreleaseVersionName=$env:RELEASE_VERSION_NAME"
+        run: .\gradlew.bat assembleRelease --no-daemon "-PreleaseVersionCode=$env:RELEASE_VERSION_CODE" "-PreleaseVersionName=$env:RELEASE_VERSION_NAME" "-PmobileEnvironment=production"
 
       - name: Sign, verify, inspect, and checksum the APK
         shell: pwsh
