@@ -147,6 +147,12 @@ function configFromEnv(env: MobileRouteEnv): MobileAuthConfig {
     throw new MobileAuthError('configuration', 'Mobile authorization is not configured.', 503);
   }
   const callbackUrl = env.MOBILE_CALLBACK_URL ?? `${canonicalOrigin}/android/auth/callback`;
+  const approvedAccessIssuers = splitEnv(env.MOBILE_APPROVED_ACCESS_ISSUERS);
+  const approvedAccessAudiences = splitEnv(env.MOBILE_APPROVED_ACCESS_AUDIENCES);
+  const approvedAccessSubjects = splitEnv(env.MOBILE_APPROVED_ACCESS_SUBJECTS);
+  if (!approvedAccessIssuers.length || !approvedAccessAudiences.length || !approvedAccessSubjects.length) {
+    throw new MobileAuthError('configuration', 'Mobile authorization identity allowlists are not configured.', 503);
+  }
   assertMobileCallbackUrl(callbackUrl, canonicalOrigin);
   assertHttpsCallback(callbackUrl, { canonicalOrigin, callbackUrl, environment: env.MOBILE_ENVIRONMENT ?? '', accessAuthorizationUrl: env.MOBILE_ACCESS_AUTHORIZATION_URL, sessionEncryptionKey: env.MOBILE_SESSION_ENCRYPTION_KEY });
   return {
@@ -155,9 +161,9 @@ function configFromEnv(env: MobileRouteEnv): MobileAuthConfig {
     environment: env.MOBILE_ENVIRONMENT ?? 'production',
     accessAuthorizationUrl: env.MOBILE_ACCESS_AUTHORIZATION_URL,
     sessionEncryptionKey: env.MOBILE_SESSION_ENCRYPTION_KEY,
-    approvedAccessIssuers: splitEnv(env.MOBILE_APPROVED_ACCESS_ISSUERS),
-    approvedAccessAudiences: splitEnv(env.MOBILE_APPROVED_ACCESS_AUDIENCES),
-    approvedAccessSubjects: splitEnv(env.MOBILE_APPROVED_ACCESS_SUBJECTS),
+    approvedAccessIssuers,
+    approvedAccessAudiences,
+    approvedAccessSubjects,
     now: env.now,
   };
 }
