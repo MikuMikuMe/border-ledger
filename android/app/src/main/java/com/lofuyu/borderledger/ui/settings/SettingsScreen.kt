@@ -15,6 +15,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,6 +24,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.lofuyu.borderledger.ui.theme.AppearanceMode
 
@@ -109,5 +113,25 @@ fun SettingsScreen(
             }
         }
         item { Text("Theme, filter and motion are stored only on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Reduce motion")
+                    Text("Disable the animated login backdrop and continuous motion.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(
+                    checked = devicePreferences.reducedMotion,
+                    onCheckedChange = { onDevicePreferencesChanged(devicePreferences.copy(reducedMotion = it)) },
+                    modifier = Modifier.semantics {
+                        contentDescription = "Reduce motion"
+                        stateDescription = if (devicePreferences.reducedMotion) "On" else "Off"
+                    },
+                )
+            }
+        }
     }
 }
+
