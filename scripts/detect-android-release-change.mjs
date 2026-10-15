@@ -23,7 +23,7 @@ function readFrontendSource(root) {
 function dependencyIsFrontend(name, frontendSource) {
   if (FRONTEND_BUILD_DEPENDENCIES.has(name)) return true;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:from\\s+|import\\s*\\(|require\\s*\\()\\s*["']${escaped}(?:/|["'])`).test(frontendSource);
+  return new RegExp(`(?:from\\s+|import\\s*(?:\\(\\s*)?|require\\s*\\()\\s*["']${escaped}(?:/|["'])`).test(frontendSource);
 }
 
 function parsePackageJson(value) {
@@ -34,19 +34,59 @@ function parsePackageJson(value) {
   }
 }
 
+function resolvePackagePath(parentPath, dependencyName, packages) {
+  let base = parentPath;
+  while (true) {
+    const candidate = base ? `${base}/node_modules/${dependencyName}` : `node_modules/${dependencyName}`;
+    if (packages[candidate]) return candidate;
+    if (!base) return null;
+    const nested = base.lastIndexOf('/node_modules/');
+    base = nested < 0 ? '' : base.slice(0, nested);
+  }
+}
+
+function dependencyClosure(lockfile, rootNames) {
+  const packages = lockfile.packages ?? {};
+  const queue = [...rootNames]
+    .map((name) => resolvePackagePath('', name, packages))
+    .filter(Boolean);
+  const visited = new Set(queue);
+  while (queue.length > 0) {
+    const packagePath = queue.shift();
+    for (const dependencyName of Object.keys(packages[packagePath]?.dependencies ?? {})) {
+      const dependencyPath = resolvePackagePath(packagePath, dependencyName, packages);
+      if (dependencyPath && !visited.has(dependencyPath)) {
+        visited.add(dependencyPath);
+        queue.push(dependencyPath);
+      }
+    }
+  }
+  return visited;
+}
+
 function lockfileAffectsFrontend(beforeValue, currentValue, frontendSource) {
   const before = parsePackageJson(beforeValue);
   const current = parsePackageJson(currentValue);
   const beforePackages = before.packages ?? {};
   const currentPackages = current.packages ?? {};
+  const rootDependencies = new Set([
+    ...Object.keys(beforePackages['']?.dependencies ?? {}),
+    ...Object.keys(beforePackages['']?.devDependencies ?? {}),
+    ...Object.keys(currentPackages['']?.dependencies ?? {}),
+    ...Object.keys(currentPackages['']?.devDependencies ?? {}),
+  ]);
+  const frontendRoots = [...rootDependencies].filter((name) => dependencyIsFrontend(name, frontendSource));
+  const frontendPackagePaths = new Set([
+    ...dependencyClosure(before, frontendRoots),
+    ...dependencyClosure(current, frontendRoots),
+  ]);
   const packagePaths = new Set([...Object.keys(beforePackages), ...Object.keys(currentPackages)]);
   return [...packagePaths].some((path) => {
     if (!path.startsWith('node_modules/')) return false;
     const beforePackage = beforePackages[path] ?? null;
     const currentPackage = currentPackages[path] ?? null;
     if (JSON.stringify(beforePackage) === JSON.stringify(currentPackage)) return false;
-    const name = path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length);
-    return dependencyIsFrontend(name, frontendSource);
+    return frontendPackagePaths.has(path);
   });
 }
 

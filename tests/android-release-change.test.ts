@@ -11,6 +11,16 @@ describe('Android release change detector', () => {
   const reactLockCurrent = JSON.stringify({ packages: { '': { dependencies: { react: '18.3.1' } }, 'node_modules/react': { version: '18.3.2' } } });
   const joseLockBefore = JSON.stringify({ packages: { 'node_modules/jose': { version: '6.2.11' } } });
   const joseLockCurrent = JSON.stringify({ packages: { 'node_modules/jose': { version: '6.2.12' } } });
+  const uiGraphBefore = JSON.stringify({ packages: {
+    '': { dependencies: { 'new-ui-kit': '1.0.0' } },
+    'node_modules/new-ui-kit': { version: '1.0.0', dependencies: { 'ui-helper': '1.0.0' } },
+    'node_modules/ui-helper': { version: '1.0.0' },
+  } });
+  const uiGraphCurrent = JSON.stringify({ packages: {
+    '': { dependencies: { 'new-ui-kit': '1.0.0' } },
+    'node_modules/new-ui-kit': { version: '1.0.0', dependencies: { 'ui-helper': '1.0.0' } },
+    'node_modules/ui-helper': { version: '1.0.1' },
+  } });
 
   it('publishes for a frontend dependency-only manifest change', () => {
     expect(shouldPublishAndroidRelease({
@@ -86,6 +96,28 @@ describe('Android release change detector', () => {
       packageBefore: JSON.stringify({ dependencies: {} }),
       packageCurrent: JSON.stringify({ dependencies: { 'new-ui-kit': '1.0.0' } }),
       frontendSource: "const ui = import('new-ui-kit');",
+    })).toBe(true);
+  });
+
+  it('recognizes bare side-effect frontend imports', () => {
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: ['package.json'],
+      packageBefore: JSON.stringify({ dependencies: {} }),
+      packageCurrent: JSON.stringify({ dependencies: { 'new-ui-kit': '1.0.0' } }),
+      frontendSource: "import 'new-ui-kit';",
+    })).toBe(true);
+  });
+
+  it('follows the lockfile graph for a changed transitive frontend package', () => {
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: ['package-lock.json'],
+      packageBefore: JSON.stringify({ dependencies: { 'new-ui-kit': '1.0.0' } }),
+      packageCurrent: JSON.stringify({ dependencies: { 'new-ui-kit': '1.0.0' } }),
+      packageLockBefore: uiGraphBefore,
+      packageLockCurrent: uiGraphCurrent,
+      frontendSource: "import { Button } from 'new-ui-kit';",
     })).toBe(true);
   });
 
