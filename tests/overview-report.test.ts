@@ -169,4 +169,38 @@ describe('full-window Overview report', () => {
     expect(container.querySelector('.fx-band')?.textContent).toContain('±1.5% Chinese bank settlement estimate; CNY spending excluded');
     expect(container.querySelector('.fx-band')?.getAttribute('aria-label')).toContain('CNY spending excluded');
   });
+
+  it('keeps refund direction in the chart and exposes a signed accessible data table', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input), 'https://ledger.example.test');
+      if (url.pathname === '/api/accounts') {
+        return jsonResponse({ accounts: [{ id: 'cad-account', name: 'CAD account', institution: 'Synthetic bank', currency: 'CAD', kind: 'chequing', status: 'import_only', last_synced_at: null, plaid_item_id: null }] });
+      }
+      if (url.pathname === '/api/reports/summary') {
+        return jsonResponse({
+          ledgerId: 'personal', asOf: '2026-10-14T12:00:00.000Z', timeBasis: 'accounting_date', timeZone: 'America/Toronto',
+          from: url.searchParams.get('from'), to: url.searchParams.get('to'), includeProvisional: false,
+          currencyTotals: [{ currency: 'CAD', confirmedMinorUnits: -500, provisionalMinorUnits: 0, confirmedCount: 1, provisionalCount: 0 }],
+          dailyTotals: [{ date: '2026-10-12', currency: 'CAD', confirmedMinorUnits: -500, provisionalMinorUnits: 0 }],
+          reviewCount: 0, excludedCount: 0, sourceCoverage: { statement: 1 },
+        });
+      }
+      return jsonResponse({ transactions: [{ id: 'refund-row', account_id: 'cad-account', date: '2026-10-12', merchant: 'Refund row', amount_minor: 500, currency: 'CAD', category: 'Other', kind: 'refund', status: 'confirmed', source: 'statement', fingerprint: 'refund-row' }] });
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(createElement(App));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) await settle();
+
+    expect(container.querySelector('.refund-bar')?.getAttribute('data-direction')).toBe('refund');
+    const table = container.querySelector('.chart-data-table');
+    expect(table?.textContent).toContain('Refund');
+    expect(table?.textContent).toContain('-$5.00');
+  });
 });
+
