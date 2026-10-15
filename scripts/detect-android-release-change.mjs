@@ -53,7 +53,13 @@ function dependencyClosure(lockfile, rootNames) {
   const visited = new Set(queue);
   while (queue.length > 0) {
     const packagePath = queue.shift();
-    for (const dependencyName of Object.keys(packages[packagePath]?.dependencies ?? {})) {
+    const packageMetadata = packages[packagePath] ?? {};
+    const dependencyNames = new Set([
+      ...Object.keys(packageMetadata.dependencies ?? {}),
+      ...Object.keys(packageMetadata.optionalDependencies ?? {}),
+      ...Object.keys(packageMetadata.peerDependencies ?? {}),
+    ]);
+    for (const dependencyName of dependencyNames) {
       const dependencyPath = resolvePackagePath(packagePath, dependencyName, packages);
       if (dependencyPath && !visited.has(dependencyPath)) {
         visited.add(dependencyPath);

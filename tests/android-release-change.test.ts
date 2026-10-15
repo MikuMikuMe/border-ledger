@@ -121,6 +121,30 @@ describe('Android release change detector', () => {
     })).toBe(true);
   });
 
+  it('follows optional and peer frontend dependency edges', () => {
+    const before = JSON.stringify({ packages: {
+      '': { dependencies: { 'new-ui-kit': '1.0.0' } },
+      'node_modules/new-ui-kit': { version: '1.0.0', optionalDependencies: { 'ui-helper': '1.0.0' }, peerDependencies: { 'ui-peer': '1.0.0' } },
+      'node_modules/ui-helper': { version: '1.0.0' },
+      'node_modules/ui-peer': { version: '1.0.0' },
+    } });
+    const current = JSON.stringify({ packages: {
+      '': { dependencies: { 'new-ui-kit': '1.0.0' } },
+      'node_modules/new-ui-kit': { version: '1.0.0', optionalDependencies: { 'ui-helper': '1.0.0' }, peerDependencies: { 'ui-peer': '1.0.0' } },
+      'node_modules/ui-helper': { version: '1.0.1' },
+      'node_modules/ui-peer': { version: '1.0.1' },
+    } });
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: ['package-lock.json'],
+      packageBefore: JSON.stringify({ dependencies: { 'new-ui-kit': '1.0.0' } }),
+      packageCurrent: JSON.stringify({ dependencies: { 'new-ui-kit': '1.0.0' } }),
+      packageLockBefore: before,
+      packageLockCurrent: current,
+      frontendSource: "import { Button } from 'new-ui-kit';",
+    })).toBe(true);
+  });
+
   it('publishes when a backend package change also changes app source', () => {
     expect(shouldPublishAndroidRelease({
       eventName: 'push',
