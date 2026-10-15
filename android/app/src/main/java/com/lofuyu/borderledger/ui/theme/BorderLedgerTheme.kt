@@ -1,10 +1,16 @@
 package com.lofuyu.borderledger.ui.theme
 
+import android.content.Context
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 
 private val Paper = Color(0xFFF3EFE6)
@@ -22,6 +28,8 @@ private val DarkMuted = Color(0xFFA5B2AA)
 private val DarkRule = Color(0xFF43534B)
 private val DarkTeal = Color(0xFF83C9B1)
 private val DarkCopper = Color(0xFFEDA087)
+
+enum class ThemeColorSource { BrandLight, BrandDark, DynamicLight, DynamicDark }
 
 private val LightColors = lightColorScheme(
     primary = Teal,
@@ -66,6 +74,7 @@ private val DarkColors = darkColorScheme(
 @Composable
 fun BorderLedgerTheme(
     mode: AppearanceMode,
+    context: Context = LocalContext.current,
     content: @Composable () -> Unit,
 ) {
     val dark = when (mode) {
@@ -73,5 +82,29 @@ fun BorderLedgerTheme(
         AppearanceMode.Light -> false
         AppearanceMode.Dark -> true
     }
-    MaterialTheme(colorScheme = if (dark) DarkColors else LightColors, content = content)
+    val colorScheme = when (themeColorSource(mode, dark, Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)) {
+        ThemeColorSource.DynamicDark -> dynamicColorScheme(context, dark = true)
+        ThemeColorSource.DynamicLight -> dynamicColorScheme(context, dark = false)
+        ThemeColorSource.BrandDark -> DarkColors
+        ThemeColorSource.BrandLight -> LightColors
+    }
+    MaterialTheme(colorScheme = colorScheme, content = content)
 }
+
+fun themeColorSource(mode: AppearanceMode, systemDark: Boolean, dynamicColorAvailable: Boolean): ThemeColorSource = when {
+    mode == AppearanceMode.System && dynamicColorAvailable && systemDark -> ThemeColorSource.DynamicDark
+    mode == AppearanceMode.System && dynamicColorAvailable -> ThemeColorSource.DynamicLight
+    mode == AppearanceMode.Dark || (mode == AppearanceMode.System && systemDark) -> ThemeColorSource.BrandDark
+    else -> ThemeColorSource.BrandLight
+}
+
+@Composable
+private fun dynamicColorScheme(context: Context, dark: Boolean): ColorScheme {
+    // The SDK guard is intentionally local so lint can prove the API-level
+    // requirement even though Compose chooses the actual scheme at runtime.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        return if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    }
+    return if (dark) DarkColors else LightColors
+}
+
