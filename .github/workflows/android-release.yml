@@ -9,6 +9,8 @@ on:
       - src/**
       - index.html
       - contracts/**
+      - package.json
+      - package-lock.json
       - tsconfig.json
       - vite.config.ts
       - public/**
@@ -18,11 +20,64 @@ permissions:
   contents: read
 
 jobs:
+  detect-app-change:
+    runs-on: ubuntu-latest
+    outputs:
+      app_changed: ${{ steps.detect.outputs.app_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Distinguish app changes from backend-only package changes
+        id: detect
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo 'app_changed=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+            echo 'app_changed=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mapfile -t changed < <(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")
+          package_changed=false
+          non_package_changed=false
+          backend_only=true
+          for path in "${changed[@]}"; do
+            case "$path" in
+              package.json|package-lock.json)
+                package_changed=true
+                ;;
+              worker/*|wrangler.jsonc|.github/workflows/deploy.yml|tests/worker-*|tests/ledger-*|tests/fx-*)
+                non_package_changed=true
+                ;;
+              *)
+                non_package_changed=true
+                backend_only=false
+                ;;
+            esac
+          done
+
+          if [[ "$package_changed" == true && "$non_package_changed" == true && "$backend_only" == true ]]; then
+            echo 'app_changed=false' >> "$GITHUB_OUTPUT"
+            echo 'Only backend paths and package manifests changed; Android release is skipped.'
+          else
+            echo 'app_changed=true' >> "$GITHUB_OUTPUT"
+          fi
+
   release:
     # A backend-only change never matches the path filter above. Manual runs
     # are intentionally limited to main so a feature branch cannot publish a
     # production APK or overwrite a release tag.
-    if: github.ref == 'refs/heads/main'
+    needs: detect-app-change
+    if: github.ref == 'refs/heads/main' && needs.detect-app-change.outputs.app_changed == 'true'
     runs-on: windows-latest
     permissions:
       contents: write

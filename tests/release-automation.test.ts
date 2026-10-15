@@ -21,9 +21,11 @@ describe('release automation contract', () => {
     expect(releaseWorkflow).toContain('android/**');
     expect(releaseWorkflow).toContain('src/**');
     expect(releaseWorkflow).toContain('contracts/**');
-    expect(releaseWorkflow).not.toContain('package.json');
-    expect(releaseWorkflow).not.toContain('package-lock.json');
-    expect(releaseWorkflow).toContain("if: github.ref == 'refs/heads/main'");
+    expect(releaseWorkflow).toContain('package.json');
+    expect(releaseWorkflow).toContain('package-lock.json');
+    expect(releaseWorkflow).toContain('Distinguish app changes from backend-only package changes');
+    expect(releaseWorkflow).toContain("needs.detect-app-change.outputs.app_changed == 'true'");
+    expect(releaseWorkflow).toContain("github.ref == 'refs/heads/main'");
     expect(releaseWorkflow).toContain('if-no-files-found: error');
     expect(releaseWorkflow).toContain('contents: write');
     expect(releaseWorkflow).toContain('assembleRelease');
@@ -46,7 +48,7 @@ describe('release automation contract', () => {
     expect(deployWorkflow).toContain('MOBILE_SESSION_ENCRYPTION_KEY');
     expect(deployWorkflow).toContain('command: deploy --env production --keep-vars --var');
     expect(deployWorkflow).toContain('deploymentRevision');
-    expect(deployWorkflow).toContain('/api/mobile/v1/auth/requests');
+    expect(deployWorkflow).toContain('mobileAuthConfigured');
     expect(deployWorkflow).not.toContain('configured=false');
     expect(deployWorkflow).not.toContain('deployment skipped');
   });

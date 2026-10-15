@@ -957,6 +957,7 @@ export default {
       ok: true,
       service: 'border-ledger-api',
       deploymentRevision: env.DEPLOYMENT_REVISION ?? null,
+      mobileAuthConfigured: Boolean(env.MOBILE_ACCESS_AUTHORIZATION_URL && env.MOBILE_SESSION_ENCRYPTION_KEY),
       time: new Date().toISOString(),
     });
     if (url.pathname === '/api/webhooks/plaid' && request.method === 'POST') {
