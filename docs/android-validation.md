@@ -1,5 +1,11 @@
 # Android validation baseline
 
+## Final local verification update — 2026-10-15
+
+The recovered local checkout has now passed the native Android gate with the installed SDK and wrapper: `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleRelease` all succeeded. The release APK was produced unsigned as expected for the local gate. A disposable debug keystore may be used only for local installation checks; no signing material belongs in this repository.
+
+The final ADB inventory was empty. The connected physical phone was therefore not available for this run, and the disposable x86_64 AVD could not boot because Windows hardware acceleration is disabled. This update does not claim physical-device screenshots, install/update evidence, TalkBack capture, or crash-buffer evidence. Chrome headless DOM smoke and the focused web/FX test groups provide the corresponding browser evidence.
+
 Date: 2026-10-13  
 Status: `DONE_WITH_CONCERNS` — local source inventory and configured D1 metadata recorded; repository authority and active Worker deployment/runtime state could not be established.
 
@@ -61,7 +67,7 @@ No real CMB notification sample or source-capability evidence is available. CMB 
 
 ## Task 17 — release and verification runbook
 
-Status: **scaffolding only**. This document records the acceptance boundary and commands; it does not claim a Gradle build, signed APK, Pixel run, `apksigner` result, checksum, CI success, or visual acceptance. The Android wrapper JAR is currently absent from this workspace, so Android Gradle validation is explicitly gated.
+Status: **local native gate complete; device/signing/remote-release gates remain owner-controlled**. This document records the acceptance boundary and commands. The recovered checkout has a working wrapper JAR and SDK, and the unsigned native test/lint/release assembly gate passed. It does not claim a signed production release, physical-device acceptance, or remote deployment acceptance.
 
 ### F01–F18 parity ledger
 
@@ -143,3 +149,4 @@ adb shell dumpsys package com.lofuyu.borderledger
 ```
 
 These commands are instructions for a future equipped environment, not evidence that they ran here.
+
