@@ -3,6 +3,7 @@ package com.lofuyu.borderledger.ui.theme
 import android.content.Context
 import android.os.PowerManager
 import android.provider.Settings
+import com.lofuyu.borderledger.ui.settings.DeviceDisplayPreferencesStore
 
 data class MotionPolicy(
     val appVisible: Boolean,
@@ -12,7 +13,10 @@ data class MotionPolicy(
     val allowsContinuousMotion: Boolean get() = appVisible && !reducedMotion && !batterySaver
 }
 
-class MotionPolicyProvider(private val context: Context) {
+class MotionPolicyProvider(
+    private val context: Context,
+    private val devicePreferences: DeviceDisplayPreferencesStore? = null,
+) {
     fun current(appVisible: Boolean): MotionPolicy {
         val durationScale = runCatching {
             Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
@@ -20,7 +24,7 @@ class MotionPolicyProvider(private val context: Context) {
         val powerManager = context.getSystemService(PowerManager::class.java)
         return MotionPolicy(
             appVisible = appVisible,
-            reducedMotion = durationScale == 0f,
+            reducedMotion = durationScale == 0f || devicePreferences?.read()?.reducedMotion == true,
             batterySaver = powerManager?.isPowerSaveMode == true,
         )
     }

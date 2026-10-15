@@ -118,7 +118,7 @@ class AppContainer(
     )
     val themePreferences: ThemePreferences = SharedPreferencesThemePreferences(appContext)
     val deviceDisplayPreferencesStore: DeviceDisplayPreferencesStore = SharedPreferencesDeviceDisplayPreferences(appContext)
-    val motionPolicyProvider = MotionPolicyProvider(appContext)
+    val motionPolicyProvider = MotionPolicyProvider(appContext, deviceDisplayPreferencesStore)
 
     private val ownerClient = ownerLoginClient ?: HttpWorkerOwnerLoginClient(
         origin = BuildConfig.MOBILE_API_ORIGIN,

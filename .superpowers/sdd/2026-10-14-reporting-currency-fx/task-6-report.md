@@ -2,7 +2,7 @@
 
 ## Status
 
-`IMPLEMENTATION COMPLETE; USB VISUAL QA COMPLETE`
+`IMPLEMENTATION COMPLETE; PRIOR USB/AVD VISUAL QA RECORDED; FINAL RECOVERY RERUN UNAVAILABLE`
 
 Android now carries a nullable reporting target independently from the source-currency filter, validates the additive report contract through the shared currency registry and safe monetary integer bounds, exposes the target in Settings, presents converted totals/daily values with source audit lanes and the server-provided Chinese-bank band, and includes a debug-only credential-free `FX_REPORT_PREVIEW` activity.
 
@@ -43,7 +43,7 @@ adb -s R5CR119NQ7A shell cmd package resolve-activity --brief com.lofuyu.borderl
 adb -s R5CR119NQ7A shell am start -W -n com.lofuyu.borderledger.probe/com.lofuyu.borderledger.debug.FxReportPreviewActivity -a com.lofuyu.borderledger.debug.FX_REPORT_PREVIEW --es scenario boc+cny
 ```
 
-The debug build and install succeeded; Android reported `Status: ok` and resolved `FxReportPreviewActivity`. The USB target was `R5CR119NQ7A` (`SM-G9910`, SDK 33). The activity was then obscured by the phone's secure Samsung PIN bouncer (`CredentialType: Pin`, `mCurrentFocus=NotificationShade`), so the UI tree contained only lockscreen nodes. No UI pass is claimed from that state; the app must be visually inspected after the owner unlocks the device.
+The debug build and install succeeded; Android reported `Status: ok` and resolved `FxReportPreviewActivity`. The USB target was `R5CR119NQ7A` (`SM-G9910`, SDK 33). This initial attempt was obscured by the phone's secure Samsung PIN bouncer (`CredentialType: Pin`, `mCurrentFocus=NotificationShade`), so that individual UI-tree capture was not used as UI evidence. The owner subsequently unlocked the device and the physical-device pass recorded below superseded this initial gate.
 
 `apksigner verify --verbose app-debug.apk` also passed with APK Signature Scheme v2 and one signer. The signer is a disposable local debug key used only to install the debug probe; no release signing material was added.
 
@@ -57,6 +57,8 @@ Disposable emulator UI evidence:
 - Signed the unsigned release APK with the same disposable local QA key, installed it as package `com.lofuyu.borderledger`, launched the real `MainActivity`, and visually verified the unauthenticated login and About screens. No crash-buffer entries were produced.
 
 ## Physical-device evidence
+
+The evidence below is retained from the earlier unlocked-device/AVD validation run. The recovered checkout's final ADB inventory was empty, so the newly added query-race, chart, theme, and reduced-motion changes were not reinstalled on the physical phone during this recovery pass. The native unit/lint/release gate and web/Chrome evidence are current for the recovered checkout; no new physical-device claim is made here.
 
 - After the owner unlocked `R5CR119NQ7A` (`SM-G9910`, SDK 33), the current debug APK was rebuilt with the disposable local QA keystore, installed, and launched successfully.
 - On the physical handset, `available`, `partial`, `unavailable`, `provisional`, `refund`, and `boc+cny` scenarios all launched with `Status: ok`; accessibility trees and screenshots were captured for every state, and crash-buffer checks were empty.

@@ -5,6 +5,8 @@ dist/
 .env.*
 !.env.example
 coverage/
+android/.gradle/
+android/**/build/
 .impeccable/review/
 .impeccable/mocks/
 .impeccable/build/
