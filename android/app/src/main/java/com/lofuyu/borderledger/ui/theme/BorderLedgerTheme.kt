@@ -32,8 +32,6 @@ private val DarkReview = Color(0xFFE6B16E)
 
 enum class ThemeColorSource { BrandLight, BrandDark, DynamicLight, DynamicDark }
 
-enum class ThemeColorSource { BrandLight, BrandDark, DynamicLight, DynamicDark }
-
 private val LightColors = lightColorScheme(
     primary = Teal,
     onPrimary = Color.White,
