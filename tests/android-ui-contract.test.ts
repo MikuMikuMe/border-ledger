@@ -41,8 +41,11 @@ describe('Android interaction contract', () => {
 
   it('keeps the login motion layer visibly authored and low-noise', () => {
     expect(loginBackdrop).toContain('drawCircle(');
-    expect(loginBackdrop).toContain('drawRoundRect(');
-    expect(loginBackdrop).toContain('FLOW_CYCLE_MILLIS');
+    expect(loginBackdrop).toContain('drawPath(');
+    expect(loginBackdrop).toContain('drawRect(brush = forestWash)');
+    expect(loginBackdrop).toContain('LOGIN_THREAD_COUNT');
+    expect(loginBackdrop).toContain('THREAD_CYCLE_MILLIS');
+    expect(loginBackdrop).toContain('updateLoginThreadGeometry(');
   });
 
   it('keeps secondary entry screens on the same edge-to-edge surface', () => {
