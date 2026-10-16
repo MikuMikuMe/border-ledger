@@ -1,34 +1,38 @@
 package com.lofuyu.borderledger.ui.login
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.unit.dp
 import com.lofuyu.borderledger.ui.theme.MotionPolicy
 import kotlinx.coroutines.isActive
-import kotlin.math.cos
-import kotlin.math.sin
 
-/** Slow brand shapes and ink ribbons; controls remain outside this canvas and never drift. */
+/** A slow, full-bleed field of ink threads; sign-in controls remain outside the canvas. */
 @Composable
 fun LoginFlowBackdrop(
     modifier: Modifier = Modifier,
     motionPolicy: MotionPolicy,
 ) {
-    val colors = MaterialTheme.colorScheme
     val progress = remember { Animatable(0f) }
+    val geometry = remember { FloatArray(LOGIN_THREAD_COUNT * LOGIN_THREAD_STRIDE) }
+    val path = remember { Path() }
+    val forestWash = remember {
+        Brush.verticalGradient(
+            colors = listOf(Color(0xFF061A14), Color(0xFF0A241B), Color(0xFF071B15)),
+        )
+    }
+
     LaunchedEffect(motionPolicy.allowsContinuousMotion) {
         if (!motionPolicy.allowsContinuousMotion) {
             progress.snapTo(0f)
@@ -37,87 +41,69 @@ fun LoginFlowBackdrop(
                 progress.animateTo(
                     targetValue = 1f,
                     animationSpec = tween(
-                        durationMillis = FLOW_CYCLE_MILLIS,
-                        easing = CubicBezierEasing(0.16f, 0f, 0.3f, 1f),
+                        durationMillis = THREAD_CYCLE_MILLIS,
+                        easing = LinearEasing,
                     ),
                 )
+                // Geometry maps 1 back to 0 exactly, so this reset is visually seamless.
                 progress.snapTo(0f)
             }
         }
     }
 
     Canvas(modifier = modifier) {
-        val phase = if (motionPolicy.allowsContinuousMotion) {
-            progress.value * (2f * Math.PI.toFloat())
-        } else {
-            0f
-        }
-        val drift = sin(phase)
-        val counterDrift = cos(phase * 0.82f + 0.8f)
-        val orbit = size.minDimension
+        drawRect(brush = forestWash)
 
+        val glowCenter = Offset(size.width * 0.78f, size.height * 0.19f)
+        val glowRadius = size.maxDimension * 0.62f
         drawCircle(
-            color = colors.primaryContainer.copy(alpha = 0.72f),
-            radius = orbit * 0.26f,
-            center = Offset(
-                x = size.width * (0.90f + drift * 0.06f),
-                y = size.height * (0.16f + counterDrift * 0.035f),
+            brush = Brush.radialGradient(
+                colors = listOf(Color(0xFF2D6B4D).copy(alpha = 0.46f), Color.Transparent),
+                center = glowCenter,
+                radius = glowRadius,
             ),
+            radius = glowRadius,
+            center = glowCenter,
         )
-        drawCircle(
-            color = colors.secondaryContainer.copy(alpha = 0.66f),
-            radius = orbit * 0.20f,
-            center = Offset(
-                x = size.width * (0.08f + counterDrift * 0.045f),
-                y = size.height * (0.79f + drift * 0.035f),
-            ),
+
+        val phase = loginThreadPhase(
+            progress = progress.value,
+            allowMotion = motionPolicy.allowsContinuousMotion,
         )
-        drawRoundRect(
-            color = colors.primary.copy(alpha = 0.10f),
-            topLeft = Offset(size.width * 0.63f, size.height * 0.44f),
-            size = Size(size.width * 0.54f, size.height * 0.20f),
-            cornerRadius = CornerRadius(orbit * 0.12f),
-            style = Stroke(width = 1.5f),
+        updateLoginThreadGeometry(
+            geometry = geometry,
+            width = size.width,
+            height = size.height,
+            progress = phase,
         )
-        val first = Path().apply {
-            moveTo(size.width * 0.02f, size.height * (0.27f + drift * 0.04f))
-            cubicTo(
-                size.width * 0.28f,
-                size.height * (0.05f + drift * 0.12f),
-                size.width * 0.57f,
-                size.height * (0.46f - drift * 0.14f),
-                size.width * 1.06f,
-                size.height * (0.20f + drift * 0.10f),
+
+        repeat(LOGIN_THREAD_COUNT) { index ->
+            val offset = index * LOGIN_THREAD_STRIDE
+            path.reset()
+            path.moveTo(geometry[offset + THREAD_START_X], geometry[offset + THREAD_START_Y])
+            path.cubicTo(
+                geometry[offset + THREAD_CONTROL_1_X], geometry[offset + THREAD_CONTROL_1_Y],
+                geometry[offset + THREAD_CONTROL_2_X], geometry[offset + THREAD_CONTROL_2_Y],
+                geometry[offset + THREAD_END_X], geometry[offset + THREAD_END_Y],
+            )
+
+            val isChampagneThread = index % 13 == 6
+            val color = if (isChampagneThread) CHAMPAGNE_THREAD else JADE_THREAD
+            val baseOpacity = if (isChampagneThread) 0.56f else 0.40f
+            val intensity = geometry[offset + THREAD_INTENSITY]
+            drawPath(
+                path = path,
+                color = color.copy(alpha = baseOpacity * intensity),
+                style = Stroke(
+                    width = if (isChampagneThread) 1.05.dp.toPx() else 0.72.dp.toPx(),
+                    cap = StrokeCap.Round,
+                ),
             )
         }
-        val second = Path().apply {
-            moveTo(size.width * -0.03f, size.height * (0.43f - counterDrift * 0.07f))
-            cubicTo(
-                size.width * 0.34f,
-                size.height * (0.72f - counterDrift * 0.10f),
-                size.width * 0.64f,
-                size.height * (0.12f + counterDrift * 0.15f),
-                size.width * 1.08f,
-                size.height * (0.48f - counterDrift * 0.09f),
-            )
-        }
-        drawPath(
-            path = first,
-            color = colors.primary.copy(alpha = 0.58f),
-            style = Stroke(width = 2.8f, cap = StrokeCap.Round),
-        )
-        drawPath(
-            path = second,
-            color = colors.secondary.copy(alpha = 0.58f),
-            style = Stroke(width = 2.1f, cap = StrokeCap.Round),
-        )
-        drawLine(
-            color = colors.outline.copy(alpha = 0.46f),
-            start = Offset(0f, size.height * 0.52f),
-            end = Offset(size.width, size.height * 0.52f),
-            strokeWidth = 1f,
-        )
     }
 }
 
-private const val FLOW_CYCLE_MILLIS = 14_000
+private const val THREAD_CYCLE_MILLIS = 30_000
+private val JADE_THREAD = Color(0xFFB8D8C2)
+private val CHAMPAGNE_THREAD = Color(0xFFE9D6AF)
+
