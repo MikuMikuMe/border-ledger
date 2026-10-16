@@ -40,3 +40,4 @@ class LoginThreadGeometryTest {
         start.indices.forEach { index -> assertEquals(start[index], end[index], 0.01f) }
     }
 }
+
