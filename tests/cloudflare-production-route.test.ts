@@ -26,4 +26,26 @@ describe('production Worker routing', () => {
 
     expect(workerFirstPaths).toContain('/api/*');
   });
+  
+  it('preserves the full-site custom-host route alongside the API route', () => {
+    const config = unstable_readConfig({
+      config: fileURLToPath(new URL('../wrangler.jsonc', import.meta.url)),
+      env: 'production',
+    });
+
+    expect(config.routes ?? []).toContainEqual({
+      pattern: 'pf.lofuyu.com/*',
+      zone_name: 'lofuyu.com',
+    });
+  });
+
+  it('keeps the workers.dev trigger enabled when custom routes are configured', () => {
+    const config = unstable_readConfig({
+      config: fileURLToPath(new URL('../wrangler.jsonc', import.meta.url)),
+      env: 'production',
+    });
+
+    expect(config.workers_dev).toBe(true);
+  });
+
 });
