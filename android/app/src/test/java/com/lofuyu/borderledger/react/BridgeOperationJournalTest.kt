@@ -73,6 +73,50 @@ class BridgeOperationJournalTest {
         assertEquals("reconciliation_required",result.status)
         assertEquals(0,writes)
     }
+
+    @Test fun plaidRecoveryReplaysOnlyTheSameIdempotentExternalOperation() = runTest {
+        val disk = MemoryRecords()
+        val first = BridgeOperationJournal(disk)
+        first.awaitExternal("plaid-replay-1", "plaid", "{}", "owner")
+        assertEquals("reconciliation_required", first.completeExternal("plaid-replay-1", "owner") {
+            error("response lost after the request was submitted")
+        }.status)
+
+        var calls = 0
+        val recovered = BridgeOperationJournal(disk).retryExternalWithSameIdempotency("plaid-replay-1", "owner") {
+            calls += 1
+            "pending-connection-1"
+        }
+
+        assertEquals(1, calls)
+        assertEquals("completed", recovered.status)
+        assertEquals("pending-connection-1", recovered.resultId)
+    }
+
+    @Test fun plaidRecoveryDoesNotRaceAnExchangeThatIsStillActive() = runTest {
+        val journal = BridgeOperationJournal(MemoryRecords())
+        journal.awaitExternal("plaid-active-1", "plaid", "{}", "owner")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val first = async {
+            journal.completeExternal("plaid-active-1", "owner") {
+                entered.complete(Unit)
+                release.await()
+                "pending-connection-1"
+            }
+        }
+        entered.await()
+        var retries = 0
+        val duplicate = journal.retryExternalWithSameIdempotency("plaid-active-1", "owner") {
+            retries += 1
+            "wrong"
+        }
+
+        assertEquals("running", duplicate.status)
+        assertEquals(0, retries)
+        release.complete(Unit)
+        assertEquals("completed", first.await().status)
+    }
     @Test fun lostPromiseAndRecreationNeverReplayFinancialWrite() = runTest {
         val disk = MemoryRecords()
         var writes = 0

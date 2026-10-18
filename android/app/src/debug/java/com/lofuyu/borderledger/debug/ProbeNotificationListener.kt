@@ -14,7 +14,7 @@ class ProbeNotificationListener : NotificationListenerService() {
     private val pendingUiUpdates = AtomicInteger(0)
 
     override fun onListenerConnected() {
-        mainHandler.post { ProbeStore.listenerConnected.value = true }
+        mainHandler.post { ProbeStore.setListenerConnected(true) }
 
         // Active notifications are a reconnect snapshot, not notification history or backfill.
         val active = runCatching { activeNotifications }.getOrElse { emptyArray() }
@@ -29,7 +29,7 @@ class ProbeNotificationListener : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
-        mainHandler.post { ProbeStore.listenerConnected.value = false }
+        mainHandler.post { ProbeStore.setListenerConnected(false) }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {

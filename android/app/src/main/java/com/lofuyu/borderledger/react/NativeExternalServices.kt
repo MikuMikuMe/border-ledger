@@ -45,7 +45,9 @@ internal class RestoredPlaidCallbackClaim(
 /** Native-only persisted handoff arguments. SAF URIs, file bytes and provider tokens never enter JS. */
 class NativeExternalServices(private val r: NativeServiceRuntime) {
     private val mutex=Mutex()
+    private val plaidCallbackMutex=Mutex()
     private val records get()=r.container.bridgeRecords
+    private val plaidResultStore get()=PendingPlaidResultStore(records)
     private val restoredOwnerFence = RestoredOwnerFence(
         restore = { r.container.ownerSessionManager.restore() },
         currentGeneration = { r.currentGeneration() },
@@ -81,7 +83,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                 val requestCode=nextRequestCode()
                 val value=JSONObject().put("version",1).put("operationId",id).put("kind",kind).put("owner",owner).put("requestCode",requestCode).put("arguments",arguments)
                 records.write(PENDING,value.toString().encodeToByteArray())
-                if(kind=="plaid") persistLinkOutcome(owner,ConnectionCoordinatorState.Linking)
+                if(kind=="plaid") persistLinkOutcome(owner,ConnectionCoordinatorState.Linking,id)
                 when(kind) {
                     "import_picker" -> host.launchImport(id)
                     "export_picker" -> host.launchExport(id)
@@ -96,11 +98,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                         catch(_: Exception) {
                             runCatching {
                                 r.withOwner(owner) {
-                                    r.container.bridgeOperations.cancel(id,owner)
-                                    markDrained(owner,id)
-                                    clearPendingIf(id,owner)
-                                    persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"))
-                                    r.changes.emit("accounts")
+                                    settlePlaidLaunchFailure(owner,id)
                                 }
                             }
                         }
@@ -162,47 +160,188 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         // Restore the native session before entering the generation fence. If
         // restoration cannot validate the persisted owner, leave the handoff
         // pending for conservative recovery rather than canceling or rebinding it.
-        r.withOwner(owner) {
-            val value=pending()?.takeIf {
-                it.getString("kind")=="plaid" &&
-                    it.getString("owner")==owner &&
-                    it.getString("operationId")==operationId
-            } ?: return@withOwner
-            val id=value.getString("operationId")
-            if(result is PlaidLinkResult.Canceled || result is PlaidLinkResult.Unsupported || result is PlaidLinkResult.Failed) {
-                r.container.bridgeOperations.cancel(id,owner)
-                markDrained(owner,id)
-                clearPendingIf(id,owner)
-                persistLinkOutcome(owner, when(result) {
-                    PlaidLinkResult.Canceled -> ConnectionCoordinatorState.Canceled
-                    PlaidLinkResult.Unsupported -> ConnectionCoordinatorState.Unsupported("unsupported")
-                    is PlaidLinkResult.Failed -> ConnectionCoordinatorState.Failed("failed")
-                    else -> error("unreachable")
-                })
-                r.changes.emit("accounts")
-                return@withOwner
+        plaidCallbackMutex.withLock {
+            r.withOwner(owner) {
+                val value=pending()?.takeIf {
+                    it.getString("kind")=="plaid" &&
+                        it.getString("owner")==owner &&
+                        it.getString("operationId")==operationId
+                } ?: return@withOwner
+                val id=value.getString("operationId")
+                if (hasFinalPlaidOutcome(owner,id)) {
+                    markDrained(owner,id)
+                    clearPendingIf(id,owner)
+                    plaidResultStore.clear(owner,id)
+                    return@withOwner
+                }
+                when(result) {
+                    PlaidLinkResult.Canceled, PlaidLinkResult.Unsupported, is PlaidLinkResult.Failed -> {
+                        when (r.container.bridgeOperations.query(id,owner)?.status) {
+                            "awaiting_result" -> {
+                                r.container.bridgeOperations.cancel(id,owner)
+                                markDrained(owner,id)
+                                clearPendingIf(id,owner)
+                                plaidResultStore.clear(owner,id)
+                                val outcome=when(result) {
+                                    PlaidLinkResult.Canceled -> ConnectionCoordinatorState.Canceled
+                                    PlaidLinkResult.Unsupported -> ConnectionCoordinatorState.Unsupported("unsupported")
+                                    is PlaidLinkResult.Failed -> ConnectionCoordinatorState.Failed("failed")
+                                }
+                                persistLinkOutcome(owner,outcome,id)
+                            }
+                            "canceled" -> {
+                                markDrained(owner,id)
+                                clearPendingIf(id,owner)
+                                plaidResultStore.clear(owner,id)
+                                persistLinkOutcome(owner,ConnectionCoordinatorState.Canceled,id)
+                            }
+                            "failed_local" -> {
+                                markDrained(owner,id)
+                                clearPendingIf(id,owner)
+                                plaidResultStore.clear(owner,id)
+                                persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"),id)
+                            }
+                            "running" -> return@withOwner // The original exchange still owns the operation.
+                            else -> {
+                                val token=plaidResultStore.read(owner,id)
+                                if (token!=null) processPlaidSuccess(value,owner,id,token)
+                                else persistLinkOutcome(owner,ConnectionCoordinatorState.ReconciliationRequired,id)
+                            }
+                        }
+                    }
+                    is PlaidLinkResult.Success -> processPlaidSuccess(value,owner,id,result.publicToken)
+                }
             }
-            val success=result as PlaidLinkResult.Success
-            val marker="rn_plaid_result_v1_${digest(success.publicToken)}"
-            if(records.read(marker)!=null) return@withOwner // Ignore an old success without claiming a newer flow.
-            var staged: com.lofuyu.borderledger.accounts.ConnectionOperation? = null
-            val completed=r.container.bridgeOperations.completeExternal(id,owner) {
-                check(ownerMatches(value))
-                // Duplicate delivery to another native waiter must not mint a new exchange key.
-                check(records.read(marker)==null)
-                records.write(marker,id.encodeToByteArray())
-                val pending=r.container.accountRepository.exchange(success.publicToken,id,value.getJSONObject("arguments").bridgeNullableString("reconnectConnectionId"))
-                check(pending.state=="pending" && pending.pendingConnectionId!=null)
-                staged=pending
-                pending.operationId
-            }
-            markDrained(owner,id)
-            clearPendingIf(id,owner)
-            if (completed.status=="completed" && staged!=null) persistLinkOutcome(owner,ConnectionCoordinatorState.Pending(staged!!,staged!!.accounts))
-            else persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"))
         }
         r.changes.emit("accounts")
     }
+
+    /** Reconcile a token saved before exchange, after the Activity/session is restored. */
+    suspend fun recoverPendingPlaidResult() {
+        val value=pending()?.takeIf { it.getString("kind")=="plaid" } ?: return
+        val id=value.getString("operationId")
+        val owner=value.getString("owner")
+        if (!restoredOwnerFence.matches(owner)) return
+        val token=plaidResultStore.read(owner,id)
+        if (token!=null) {
+            handlePlaid(PlaidLinkResult.Success(token),id)
+            return
+        }
+        val operation=r.container.bridgeOperations.query(id,owner)
+        if (operation?.status=="reconciliation_required") {
+            persistLinkOutcome(owner,ConnectionCoordinatorState.ReconciliationRequired,id)
+            r.changes.emit("accounts")
+        }
+    }
+
+    private suspend fun processPlaidSuccess(value: JSONObject, owner: String, id: String, publicToken: String) {
+        val marker="rn_plaid_result_v1_${digest(publicToken)}"
+        val existingMarker=records.read(marker)?.decodeToString()
+        if (existingMarker!=null && existingMarker!=id) {
+            // Never bind a provider result already claimed by another operation
+            // to this flow. If this operation provably has not submitted work,
+            // terminate it locally; otherwise preserve the ambiguity.
+            val operation=r.container.bridgeOperations.query(id,owner)
+            if (operation?.status in setOf("awaiting_result","failed_local")) {
+                r.container.bridgeOperations.cancel(id,owner)
+                markDrained(owner,id)
+                clearPendingIf(id,owner)
+                plaidResultStore.clear(owner,id)
+                persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"),id)
+            } else {
+                persistLinkOutcome(owner,ConnectionCoordinatorState.ReconciliationRequired,id)
+            }
+            return
+        }
+        // Persist the encrypted callback result first. A crash between these
+        // writes must leave enough information to resume the same operation.
+        plaidResultStore.save(owner,id,publicToken)
+        records.write(marker,id.encodeToByteArray())
+
+        var staged: com.lofuyu.borderledger.accounts.ConnectionOperation? = null
+        val reconnectId=value.getJSONObject("arguments").bridgeNullableString("reconnectConnectionId")
+        suspend fun exchangeWithStableKey(): String {
+            check(ownerMatches(value))
+            val pending=r.container.accountRepository.exchange(publicToken,id,reconnectId)
+            check(pending.state=="pending" && pending.pendingConnectionId!=null)
+            staged=pending
+            return pending.operationId
+        }
+
+        val previous=r.container.bridgeOperations.query(id,owner) ?: return
+        val outcome=try {
+            when(previous.status) {
+                "awaiting_result" -> r.container.bridgeOperations.completeExternal(id,owner) { exchangeWithStableKey() }
+                "running", "reconciliation_required" -> r.container.bridgeOperations.retryExternalWithSameIdempotency(id,owner) { exchangeWithStableKey() }
+                // A process may stop after the durable local receipt but before the account snapshot.
+                // The Worker returns its stored exchange receipt for this same owner/key without re-exchanging Plaid.
+                "completed" -> {
+                    exchangeWithStableKey()
+                    previous
+                }
+                else -> previous
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            r.container.bridgeOperations.query(id,owner)
+        } ?: return
+
+        if (outcome.status=="running" && staged==null) return
+        if (outcome.status=="completed" && staged!=null) {
+            val pending=requireNotNull(staged)
+            persistLinkOutcome(owner,ConnectionCoordinatorState.Pending(pending,pending.accounts),id)
+            markDrained(owner,id)
+            clearPendingIf(id,owner)
+            plaidResultStore.clear(owner,id)
+        } else if (outcome.status=="failed_local") {
+            markDrained(owner,id)
+            clearPendingIf(id,owner)
+            plaidResultStore.clear(owner,id)
+            persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"),id)
+        } else {
+            // Keep the encrypted provider result and pending operation so the same backend
+            // idempotency key can be reconciled on the next native resume. Never mint a new key.
+            persistLinkOutcome(owner,ConnectionCoordinatorState.ReconciliationRequired,id)
+        }
+    }
+
+    /**
+     * A failed LinkKit handoff may happen after the exchange has already been
+     * submitted. Only an operation that the journal proves is still awaiting
+     * its callback can be canceled and drained; ambiguous work stays recoverable.
+     */
+    private suspend fun settlePlaidLaunchFailure(owner: String, id: String) {
+        if (hasFinalPlaidOutcome(owner,id)) {
+            markDrained(owner,id)
+            clearPendingIf(id,owner)
+            plaidResultStore.clear(owner,id)
+            return
+        }
+        val operation=r.container.bridgeOperations.cancel(id,owner)
+        when (operation?.status) {
+            "canceled", "failed_local" -> {
+                markDrained(owner,id)
+                clearPendingIf(id,owner)
+                plaidResultStore.clear(owner,id)
+                persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"),id)
+            }
+            "running", "reconciliation_required", "completed" -> {
+                // Never erase a submitted exchange because a later Activity or
+                // callback step threw. The encrypted result and original key are
+                // retained for resume reconciliation.
+                persistLinkOutcome(owner,ConnectionCoordinatorState.ReconciliationRequired,id)
+            }
+            else -> return
+        }
+        r.changes.emit("accounts")
+    }
+
+    private suspend fun hasFinalPlaidOutcome(owner: String, operationId: String): Boolean =
+        records.read(LINK)?.let { JSONObject(it.decodeToString()) }?.let { value ->
+            value.optString("owner")==owner && value.optString("operationId")==operationId &&
+                value.optString("state") !in setOf("linking","reconciliation_required")
+        } == true
 
     suspend fun linkSnapshot(): Map<String,Any?> {
         val owner=r.ownerGeneration()
@@ -213,6 +352,11 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
             "accounts" to stored.getJSONArray("accounts").let { a -> (0 until a.length()).map { index -> val v=a.getJSONObject(index); mapOf("providerAccountId" to v.getString("providerAccountId"),"name" to v.getString("name"),"mask" to v.bridgeNullableString("mask"),"subtype" to v.bridgeNullableString("subtype"),"currency" to v.getString("currency"),"kind" to v.getString("kind")) } })
     }
     suspend fun clearLink() { records.delete(LINK) }
+
+    suspend fun clearPlaidResultForOwner(owner: String) {
+        val value=pending()?.takeIf { it.getString("kind")=="plaid" && it.getString("owner")==owner } ?: return
+        plaidResultStore.clear(owner,value.getString("operationId"))
+    }
 
     private suspend fun ownerMatches(value: JSONObject): Boolean {
         return restoredOwnerFence.matches(value.getString("owner"))
@@ -229,9 +373,11 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         records.write(key,value.toString().encodeToByteArray())
     }
     private suspend fun isDrained(owner: String, id: String): Boolean = records.read(drainedKey(owner))?.let { JSONObject(it.decodeToString()).has(id) } == true
-    private suspend fun persistLinkOutcome(owner: String, state: ConnectionCoordinatorState) {
+    private suspend fun persistLinkOutcome(owner: String, state: ConnectionCoordinatorState, operationId: String?=null) {
         val safe=BridgePayloads.link(state)
-        records.write(LINK,JSONObject(safe).put("owner",owner).put("version",1).toString().encodeToByteArray())
+        val stored=JSONObject(safe).put("owner",owner).put("version",1)
+        operationId?.let { stored.put("operationId",it) }
+        records.write(LINK,stored.toString().encodeToByteArray())
     }
     private suspend fun nextRequestCode(): Int {
         val old=records.read(COUNTER)?.decodeToString()?.toInt() ?: 4096

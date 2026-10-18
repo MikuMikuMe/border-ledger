@@ -22,12 +22,13 @@ $required = @(
     'app\src\main\java\com\lofuyu\borderledger\local\EncryptedRecordStore.kt',
     'app\src\main\java\com\lofuyu\borderledger\local\OutboxDao.kt',
     'app\src\main\java\com\lofuyu\borderledger\local\OwnerReadCache.kt',
-    'app\src\main\java\com\lofuyu\borderledger\ui\theme\BorderLedgerTheme.kt',
+    'app\src\main\java\com\lofuyu\borderledger\ui\theme\ThemeColorSource.kt',
     'app\src\main\java\com\lofuyu\borderledger\ui\theme\MotionPolicy.kt',
-    'app\src\main\java\com\lofuyu\borderledger\ui\onboarding\CaptureOnboardingScreen.kt',
     'app\src\test\java\com\lofuyu\borderledger\auth\OwnerSessionManagerTest.kt',
     'app\src\test\java\com\lofuyu\borderledger\auth\CaptureOnboardingCoordinatorTest.kt',
     '..\mobile\src\screens\LoginScreen.tsx',
+    '..\mobile\src\features\tools\ToolsViews.tsx',
+    '..\mobile\src\features\tools\ToolsController.ts',
     '..\mobile\src\components\threads\ThreadField.tsx',
     '..\shared\threads\ThreadGeometry.ts'
 )
@@ -64,16 +65,18 @@ $mainActivity = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lof
 $reactActivity = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\react\BorderLedgerReactActivity.kt')
 $reactServices = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\react\NativeServiceRuntime.kt')
 $outbox = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\local\OutboxDao.kt')
-$captureScreen = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\ui\onboarding\CaptureOnboardingScreen.kt')
+$captureViews = Get-Content -Raw -LiteralPath (Join-Path $mobileRoot 'src\features\tools\ToolsViews.tsx')
+$captureController = Get-Content -Raw -LiteralPath (Join-Path $mobileRoot 'src\features\tools\ToolsController.ts')
 $threadField = Get-Content -Raw -LiteralPath (Join-Path $mobileRoot 'src\components\threads\ThreadField.tsx')
 $threadGeometry = Get-Content -Raw -LiteralPath (Join-Path $sharedThreads 'ThreadGeometry.ts')
-if ($versionCatalog -notmatch 'compose-foundation\s*=\s*\{\s*module\s*=\s*"androidx\.compose\.foundation:foundation"') { throw 'Compose Foundation catalog alias is missing.' }
+if ($versionCatalog -match 'androidx\.compose|activity-compose|kotlin-compose') { throw 'Legacy Compose dependencies remain after the React Native cutover.' }
 if ($appContainer -match 'UnavailableMobileApi') { throw 'Production AppContainer still defaults capture to UnavailableMobileApi.' }
 if ($mainActivity -notmatch 'class MainActivity : BorderLedgerReactActivity' -or $reactActivity -notmatch 'class BorderLedgerReactActivity : ReactActivity\(\), NativeServiceHost') { throw 'Production launcher is not hosted by the React Native Activity.' }
 if ($appContainer -notmatch 'HttpWorkerCaptureApi' -or $reactActivity -notmatch 'captureHealth\.refresh' -or $reactServices -notmatch 'captureOnboarding\.syncOwnerSessionState') { throw 'Capture onboarding is not wired to the signed-in owner/API boundary.' }
 if ($productionText -match 'ownerSignedIn\s*=\s*false') { throw 'Capture onboarding still has a production false owner-sign-in default.' }
 if ($outbox -notmatch 'private val mutex = Mutex\(\)' -or $outbox -notmatch 'enqueue\(event: QueuedAlert\): EnqueueResult = mutex\.withLock') { throw 'Outbox enqueue is not protected by its read-modify-write mutex.' }
-if ($captureScreen -match 'onClick\s*=\s*\{\s*coordinator\.[^}]*SourceTestResult\.Passed') { throw 'A source-test button can assert Passed without evidence.' }
+if ($captureViews -notmatch 'Only matching listener evidence can pass this test' -or $captureViews -notmatch 'onPress=\{\(\)=>\{setConsent\(false\);void c\.requestTest\(\);\}\}') { throw 'The React Native source-test action is not routed through the native capture boundary.' }
+if ($captureController -match 'sourceTest\s*[:=]\s*["'']Passed|SourceTestResult\.Passed') { throw 'The React Native source-test controller can assert Passed without native evidence.' }
 if ($threadGeometry -notmatch 'THREAD_COUNT\s*=\s*88' -or $threadGeometry -notmatch 'THREAD_SPEED\s*=\s*0\.58' -or $threadGeometry -notmatch 'REDUCED_MOTION_PHASE\s*=\s*1\.8') { throw 'Shared Threads geometry no longer matches the approved original login demo.' }
 if ($threadField -notmatch 'advanceCanonicalThreadPhase' -or $threadField -notmatch 'canonicalThreadPaint' -or $threadField -notmatch 'useFrameCallback') { throw 'Production login does not render the shared Threads geometry through the native Skia animation.' }
 $requiredMarkers = @(

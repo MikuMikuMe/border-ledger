@@ -102,6 +102,12 @@ describe('second-stage native financial controller',()=>{
     await c.connect('plaid');f.emit({...link,state:'pending',outcomeCode:'success',pendingConnectionId:'pending_1',accounts:[account]});await c.selectAccounts('select',['account_1']);
     expect(f.writes).toEqual([['plaid',null]]);expect(queries).toBe(1);expect(c.mutation.current().blocked).toBe(true);c.dispose();
   });
+  it('does not start another bank connection while the previous exchange is being reconciled',async()=>{
+    const f=fixture(),c=new DetailsController(f.ports);await c.start();
+    f.emit({...link,state:'reconciliation_required',outcomeCode:'reconciliation_required'});
+    await c.connect('must-not-start');
+    expect(f.writes).toEqual([]);c.dispose();
+  });
   it.each(['canceled','failed','unsupported'])('shows native Plaid %s outcome and allows a deliberate new flow only after terminal receipt',async outcome=>{
     const f=fixture(),c=new DetailsController(f.ports);await c.start();
     f.ports.accounts.startConnect=async op=>{f.writes.push(op);f.emit({...link,state:outcome,outcomeCode:outcome});return {...receipt(op,'plaid'),status:'canceled'};};

@@ -203,6 +203,22 @@ class Task3ExternalOwnershipTest {
     }
 
     @Test
+    fun interruptedPlaidExchangeCanRestoreItsPublicTokenOnlyForTheSameOwnerAndOperation() = runTest {
+        val records = MemoryRecords()
+        val firstRuntime = PendingPlaidResultStore(records)
+        firstRuntime.save("owner-a", "plaid-op-1", "short-lived-public-token")
+
+        val restoredRuntime = PendingPlaidResultStore(records)
+        assertEquals("short-lived-public-token", restoredRuntime.read("owner-a", "plaid-op-1"))
+        assertNull(restoredRuntime.read("owner-b", "plaid-op-1"))
+        assertNull(restoredRuntime.read("owner-a", "plaid-op-2"))
+        restoredRuntime.clear("owner-b", "plaid-op-1")
+        assertEquals("short-lived-public-token", restoredRuntime.read("owner-a", "plaid-op-1"))
+        restoredRuntime.clear("owner-a", "plaid-op-1")
+        assertNull(restoredRuntime.read("owner-a", "plaid-op-1"))
+    }
+
+    @Test
     fun accountLinkOutcomesKeepFixedCodesWithoutProviderText() {
         val pending = com.lofuyu.borderledger.accounts.ConnectionOperation("o", "pending", pendingConnectionId = "p")
         assertEquals("success", BridgePayloads.link(com.lofuyu.borderledger.bank.ConnectionCoordinatorState.Pending(pending, emptyList()))["outcomeCode"])
@@ -211,6 +227,9 @@ class Task3ExternalOwnershipTest {
         val failed = BridgePayloads.link(com.lofuyu.borderledger.bank.ConnectionCoordinatorState.Failed("provider secret"))
         assertEquals("failed", failed["outcomeCode"])
         assertFalse(failed.toString().contains("secret"))
+        val unresolved = BridgePayloads.link(com.lofuyu.borderledger.bank.ConnectionCoordinatorState.ReconciliationRequired)
+        assertEquals("reconciliation_required", unresolved["state"])
+        assertEquals("reconciliation_required", unresolved["outcomeCode"])
     }
 
     private class MemoryRecords : SecureRecordPort {

@@ -94,6 +94,40 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
         catch(error: Exception) { finish(id,failureStatus(error),null) }
     }
 
+    /**
+     * Reconcile a callback whose remote endpoint supports the same stable
+     * idempotency key. Callers must reuse the exact original request payload;
+     * this is not a general retry path for ambiguous writes.
+     */
+    internal suspend fun retryExternalWithSameIdempotency(
+        id: String,
+        owner: String,
+        write: suspend () -> String?,
+    ): BridgeOperation {
+        val existing = mutex.withLock {
+            val value = requireNotNull(read(id))
+            require(value.getString("owner") == owner)
+            val stored = value.getString("status")
+            if (stored == "running" && id in active) return@withLock decode(value, id)
+            require(stored == "running" || stored == "reconciliation_required") {
+                "Only an unresolved external operation can be reconciled."
+            }
+            value.put("status", "running").put("updatedAt", Instant.now().toString())
+            records.write(key(id), value.toString().encodeToByteArray())
+            active.add(id)
+            null
+        }
+        if (existing != null) return existing
+        return try {
+            finish(id, "completed", write())
+        } catch (error: CancellationException) {
+            mutex.withLock { active.remove(id) }
+            throw error
+        } catch (error: Exception) {
+            finish(id, failureStatus(error), null)
+        }
+    }
+
     /** Only an external action that has not submitted work can be canceled. */
     suspend fun cancel(id: String, owner: String): BridgeOperation? = mutex.withLock {
         val value=read(id)?.takeIf { it.getString("owner")==owner } ?: return@withLock null

@@ -74,11 +74,12 @@ object BridgePayloads {
     fun connection(v: ConnectionStatus) = mapOf("connectionId" to v.connectionId, "institution" to v.institution, "state" to v.state, "expiresAt" to v.expiresAt, "cleanupState" to v.cleanupState, "lastSyncedAt" to v.lastSyncedAt, "lastError" to v.lastError?.let { "source_error" })
     fun link(v: ConnectionCoordinatorState): Map<String, Any?> = mapOf("state" to when(v) {
         ConnectionCoordinatorState.Idle -> "idle"; ConnectionCoordinatorState.LoadingLink -> "loading"; ConnectionCoordinatorState.Linking -> "linking"; is ConnectionCoordinatorState.Pending -> "pending"
-        is ConnectionCoordinatorState.Connected -> "connected"; ConnectionCoordinatorState.Canceled -> "canceled"; is ConnectionCoordinatorState.Unsupported -> "unsupported"; is ConnectionCoordinatorState.Failed -> "failed"
+        is ConnectionCoordinatorState.Connected -> "connected"; ConnectionCoordinatorState.Canceled -> "canceled"; is ConnectionCoordinatorState.Unsupported -> "unsupported"; ConnectionCoordinatorState.ReconciliationRequired -> "reconciliation_required"; is ConnectionCoordinatorState.Failed -> "failed"
     }, "outcomeCode" to when(v) {
         is ConnectionCoordinatorState.Pending, is ConnectionCoordinatorState.Connected -> "success"
         ConnectionCoordinatorState.Canceled -> "canceled"
         is ConnectionCoordinatorState.Unsupported -> "unsupported"
+        ConnectionCoordinatorState.ReconciliationRequired -> "reconciliation_required"
         is ConnectionCoordinatorState.Failed -> "failed"
         else -> null
     }, "pendingConnectionId" to (v as? ConnectionCoordinatorState.Pending)?.operation?.pendingConnectionId,

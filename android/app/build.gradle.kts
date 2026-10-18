@@ -5,7 +5,6 @@ import java.security.MessageDigest
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.compose)
     id("com.facebook.react")
 }
 
@@ -148,7 +147,6 @@ android {
         }
     }
     buildFeatures {
-        compose = true
         buildConfig = true
     }
     compileOptions {
@@ -168,19 +166,12 @@ dependencies {
     implementation(project(":sharedCore"))
     implementation("com.facebook.react:react-android")
     implementation("com.facebook.react:hermes-android")
-    implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
-    implementation(libs.compose.foundation)
-    implementation(libs.compose.animation)
-    implementation(libs.compose.material3)
-    implementation(libs.compose.material.icons.extended)
-    implementation(libs.activity.compose)
+    implementation(libs.activity.ktx)
     implementation(libs.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.work.runtime.ktx)
     // Official Plaid Link Android SDK; Link is opened through the coordinator boundary.
     implementation(libs.plaid.link.sdk)
-    debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation("androidx.test:runner:1.7.0")

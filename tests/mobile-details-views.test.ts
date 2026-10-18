@@ -59,4 +59,8 @@ describe('detail view fixtures and accessibility',()=>{
   it.each([['canceled','Connection canceled'],['failed','Bank authorization failed'],['unsupported','Bank authorization is unavailable']])('explains native %s outcomes without exposing provider secrets', (state,message)=>{
     const tree=render(AccountsView,{...actions,dark:false,state:ready({page:{accounts:[],nextCursor:null,limit:50},connections:[],link:{...link,state,outcomeCode:state}}),mutation});expect(json(tree)).toContain(message);expect(button(tree,'Start bank connection').props.disabled).toBe(false);
   });
+  it('explains an unresolved bank exchange and blocks another connection attempt',()=>{
+    const tree=render(AccountsView,{...actions,dark:false,state:ready({page:{accounts:[],nextCursor:null,limit:50},connections:[],link:{...link,state:'reconciliation_required',outcomeCode:'reconciliation_required'}}),mutation});
+    expect(json(tree)).toContain('being reconciled');expect(button(tree,'Start bank connection').props.disabled).toBe(true);
+  });
 });

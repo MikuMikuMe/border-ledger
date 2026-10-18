@@ -12,7 +12,7 @@
 - [x] Register TurboModules and local fonts in release; initialize React Native only when the UI starts so workers stay headless.
 - [x] Keep the established package/application ID, owner storage formats, device identity, notification listener and worker behavior.
 - [x] Restore the approved logo as the Android launcher icon and retain the existing appearance tokens.
-- [ ] Remove superseded Compose presentation code and dependencies only where no shared native model or repository still depends on them.
+- [x] Remove superseded Compose presentation code and dependencies only where no shared native model or repository still depends on them; the user explicitly authorized deleting the disconnected Compose screens. Kotlin models, auth/session, repositories, storage, workers, and debug-only probe code remain outside this deletion.
 
 ## Authentication and production routing
 

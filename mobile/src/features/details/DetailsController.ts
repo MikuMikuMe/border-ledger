@@ -70,7 +70,7 @@ export class DetailsController {
   async classify(op:string,classification:string){const current=this.detail.current(),stream=current.data?.stream;if(current.phase!=='ready'||!stream||!['unclassified','subscription','bill','other','excluded'].includes(classification))return;
     await this.write(op,()=>this.ports.recurring.startClassify(op,stream.id,stream.revision,classification),()=>this.loadDetail());}
   async connect(op:string,reconnect:string|null=null){
-    const current=this.accounts.current();if(current.phase!=='ready'||['pending','loading','linking'].includes(this.link.state)||reconnect&&!current.data?.connections.some(c=>c.connectionId===reconnect))return;
+    const current=this.accounts.current();if(current.phase!=='ready'||['pending','loading','linking','reconciliation_required'].includes(this.link.state)||reconnect&&!current.data?.connections.some(c=>c.connectionId===reconnect))return;
     await this.write(op,()=>this.ports.accounts.startConnect(op,reconnect),()=>this.loadAccounts());
     // Read progress independently of the durable receipt; this never unlocks a write.
     if(this.available()&&['awaiting_result','reconciliation_required'].includes(this.mutation.current().status))await this.loadAccounts();

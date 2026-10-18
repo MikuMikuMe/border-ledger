@@ -43,6 +43,7 @@ sealed interface ConnectionCoordinatorState {
     data class Connected(val operation: ConnectionOperation) : ConnectionCoordinatorState
     data object Canceled : ConnectionCoordinatorState
     data class Unsupported(val message: String) : ConnectionCoordinatorState
+    data object ReconciliationRequired : ConnectionCoordinatorState
     data class Failed(val message: String, val recoverable: Boolean = true) : ConnectionCoordinatorState
 }
 

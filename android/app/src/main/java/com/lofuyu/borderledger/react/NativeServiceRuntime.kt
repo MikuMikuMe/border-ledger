@@ -103,22 +103,27 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
     suspend fun signOut() = ownerWorkMutex.withLock {
         // Fence queued UI results before the existing native sign-out clears credentials/cache.
         try {
+            currentGeneration()?.let { external.clearPlaidResultForOwner(it) }
             session.signOut()
             fileState.invalidate()
         } finally { signingOut=false }
         container.captureOnboarding.syncOwnerSessionState()
         changes.emit("all")
     }
-    suspend fun resume() = ownerWorkMutex.withLock {
-        session.resume()
-        if(container.ownerSessionManager.state.value is OwnerSessionState.SignedOut || container.ownerSessionManager.state.value is OwnerSessionState.Expired) {
-            generationMutex.withLock { container.bridgeRecords.delete(GENERATION) }
-            fileState.invalidate()
-        } else if (container.ownerSessionManager.state.value is OwnerSessionState.SignedIn) {
-            fileState.bindCurrent(ownerGeneration())
+    suspend fun resume() {
+        val signedIn = ownerWorkMutex.withLock {
+            session.resume()
+            if(container.ownerSessionManager.state.value is OwnerSessionState.SignedOut || container.ownerSessionManager.state.value is OwnerSessionState.Expired) {
+                generationMutex.withLock { container.bridgeRecords.delete(GENERATION) }
+                fileState.invalidate()
+            } else if (container.ownerSessionManager.state.value is OwnerSessionState.SignedIn) {
+                fileState.bindCurrent(ownerGeneration())
+            }
+            container.captureOnboarding.syncOwnerSessionState()
+            changes.emit("all")
+            container.ownerSessionManager.state.value is OwnerSessionState.SignedIn
         }
-        container.captureOnboarding.syncOwnerSessionState()
-        changes.emit("all")
+        if (signedIn) external.recoverPendingPlaidResult()
     }
     suspend fun cachedSnapshot(): Map<String, Any?>? {
         val entry = container.ledgerRepository.readCachedOwnerSnapshot(Instant.now()) ?: return null

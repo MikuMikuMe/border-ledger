@@ -34,9 +34,14 @@ and app-posting notification settings actions; both remain native host intents.
 After a lost response, an existing read endpoint may help a screen explain the
 current state, but the bridge never infers that a particular write succeeded.
 `reconciliation_required` is deliberately persistent where the existing backend
-has no operation-status endpoint. It must not trigger an automatic retry. File
-picker/Plaid operation identities survive process death; claimed callbacks are
-never resubmitted. Native import row review is paginated. A staged import draft
+has no operation-status endpoint. It must not trigger an automatic retry. The
+Plaid exchange callback is a narrow exception: its short-lived public token is
+kept only in encrypted native records and may be replayed after Activity/process
+recreation with the original operation ID, because the Worker exchange endpoint
+replays the stored response for that owner/idempotency key. It never creates a
+new ID or exposes the token to JavaScript. File picker/Plaid operation identities
+survive process death; claimed callbacks are never rebound to a newer flow.
+Native import row review is paginated. A staged import draft
 is retained across Activity recreation in the application, but is not reconstructed
 after process death; its safe operation/preview identifiers remain queryable.
 

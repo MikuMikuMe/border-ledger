@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +15,16 @@ const login = read('mobile/src/screens/LoginScreen.tsx');
 const threadField = read('mobile/src/components/threads/ThreadField.tsx');
 const geometry = read('shared/threads/ThreadGeometry.ts');
 const about = read('mobile/src/screens/AboutScreen.tsx');
+const externalServices = read('android/app/src/main/java/com/lofuyu/borderledger/react/NativeExternalServices.kt');
+const plaidResultStore = read('android/app/src/main/java/com/lofuyu/borderledger/react/PendingPlaidResultStore.kt');
+const bridgeOperationJournal = read('android/app/src/main/java/com/lofuyu/borderledger/react/BridgeOperationJournal.kt');
+const detailsViews = read('mobile/src/features/details/DetailsViews.tsx');
+
+const kotlinFiles = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+  const path = resolve(directory, entry.name);
+  if (entry.isDirectory()) return kotlinFiles(path);
+  return entry.isFile() && entry.name.endsWith('.kt') ? [path] : [];
+});
 
 describe('Android React Native production surface', () => {
   it('applies keyboard resize mode to the actual production launcher activity', () => {
@@ -85,5 +95,38 @@ describe('Android React Native production surface', () => {
     expect(login).toContain('useSafeAreaInsets()');
     expect(about).toContain('<SafeAreaView');
     expect(about).not.toContain('Current migration preview');
+  });
+
+  it('ships no Compose source or runtime dependency in any Android variant', () => {
+    const composeSources = kotlinFiles(resolve(root, 'android/app/src'))
+      .filter((path) => /androidx\.compose|@Composable|setContent\s*\{/.test(readFileSync(path, 'utf8')));
+    const gradle = [
+      read('android/app/build.gradle.kts'),
+      read('android/build.gradle.kts'),
+      read('android/gradle/libs.versions.toml'),
+    ].join('\n');
+
+    expect(composeSources).toEqual([]);
+    expect(gradle).not.toMatch(/androidx\.compose|activity-compose|kotlin\.plugin\.compose|libs\.plugins\.kotlin\.compose|compose\s*=\s*true/);
+  });
+
+  it('supplies a short native staging root for Windows CMake builds', () => {
+    const androidGradle = read('android/app/build.gradle.kts');
+    const androidCi = read('.github/workflows/android-ci.yml');
+    const androidRelease = read('.github/workflows/android-release.yml');
+    expect(androidGradle).toContain('arguments += "-DCMAKE_OBJECT_PATH_MAX=250"');
+    expect(androidGradle).toContain('buildStagingDirectory = file(providers.gradleProperty("borderLedgerCxxRoot")');
+    expect(androidCi).toContain('ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx');
+    expect(androidRelease).toContain('ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx');
+  });
+
+  it('recovers a Plaid callback from encrypted native state with its original idempotency key', () => {
+    expect(plaidResultStore).toContain('SecureRecordPort');
+    expect(externalServices).toContain('plaidResultStore.save(owner,id,publicToken)');
+    expect(externalServices).toContain('recoverPendingPlaidResult()');
+    expect(externalServices).toContain('retryExternalWithSameIdempotency(id,owner)');
+    expect(externalServices).not.toContain('if(records.read(marker)!=null) return@withOwner');
+    expect(bridgeOperationJournal).toContain('Only an unresolved external operation can be reconciled.');
+    expect(detailsViews).toContain("outcome==='reconciliation_required'");
   });
 });
