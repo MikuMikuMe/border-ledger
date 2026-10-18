@@ -86,8 +86,8 @@ export function ActivityView({dark,state,facetRows=state.data?.items??[],filters
   </View>;
 }
 export function MutationStatus({dark,mutation}:Theme&{mutation:MutationState}) {
-  const message=mutation.status==='revision_conflict'?'This record changed elsewhere. Your draft is preserved; close and refresh before saving again.':mutation.status==='completed'?'Saved. Refresh to read the current server revision.':mutation.status==='ready'?'':mutation.status==='checking'?'Checking native operation receipts…':mutation.status==='saving'?'Saving…':'The submitted operation needs reconciliation. Refresh status; do not submit it again.';
-  return message?<View accessibilityLiveRegion="polite"><Copy dark={dark} error={mutation.status==='revision_conflict'||mutation.status==='reconciliation_required'}>{message}</Copy></View>:null;
+  const message=mutation.status==='revision_conflict'?'This record changed elsewhere. Your draft is preserved; close and refresh before saving again.':mutation.status==='rejected'?'The server rejected this request. Refresh the data and review before trying again.':mutation.status==='completed'?'Saved. Refresh to read the current server revision.':mutation.status==='ready'?'':mutation.status==='checking'?'Checking native operation receipts…':mutation.status==='saving'?'Saving…':'The submitted operation needs reconciliation. Refresh status; do not submit it again.';
+  return message?<View accessibilityLiveRegion="polite"><Copy dark={dark} error={mutation.status==='revision_conflict'||mutation.status==='rejected'||mutation.status==='reconciliation_required'}>{message}</Copy></View>:null;
 }
 export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,onOpen,onLoadMore,selected,onClose,onClassify,mutation}:Theme&{state:LoadState<RecurringData>;filters:{currency?:string|null;classification?:string|null};currencies:string[];onRetry():void;onFilter(value:{currency?:string|null;classification?:string|null}):void;onOpen(id:string):void;onLoadMore():void;selected?:Stream|null;onClose?():void;onClassify?(classification:string):void;mutation?:MutationState}) {
   const page=state.data?.page,summary=state.data?.summary;

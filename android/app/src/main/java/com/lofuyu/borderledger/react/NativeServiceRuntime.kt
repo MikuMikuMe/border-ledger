@@ -17,7 +17,11 @@ interface NativeServiceHost {
     fun openBrowser(uri: Uri)
     fun launchImport(operationId: String)
     fun launchExport(operationId: String)
-    suspend fun launchPlaid(linkToken: String, operationId: String): com.lofuyu.borderledger.bank.PlaidLinkResult
+    suspend fun launchPlaid(
+        linkToken: String,
+        operationId: String,
+        onProviderLaunchStarted: suspend () -> Unit,
+    ): com.lofuyu.borderledger.bank.PlaidLinkResult
     fun openNotificationSettings()
     fun openAppNotificationSettings()
 }
@@ -102,11 +106,15 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
     }
     suspend fun signOut() = ownerWorkMutex.withLock {
         // Fence queued UI results before the existing native sign-out clears credentials/cache.
+        val owner = currentGeneration()
         try {
-            currentGeneration()?.let { external.clearPlaidResultForOwner(it) }
-            session.signOut()
-            fileState.invalidate()
-        } finally { signingOut=false }
+            signOutBeforeClearingHandoff(
+                signOut = { session.signOut() },
+                clearHandoff = { owner?.let { external.clearPlaidResultForOwner(it) } },
+            )
+        } finally {
+            try { fileState.invalidate() } finally { signingOut=false }
+        }
         container.captureOnboarding.syncOwnerSessionState()
         changes.emit("all")
     }

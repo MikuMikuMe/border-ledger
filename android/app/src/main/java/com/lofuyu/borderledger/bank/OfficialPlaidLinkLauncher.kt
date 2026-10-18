@@ -58,6 +58,7 @@ internal class PlaidCallbackIdentity(restoredOperationId: String? = null) {
 class OfficialPlaidLinkLauncher(
     private val activity: ComponentActivity,
     private val onOrphanedResult: (PlaidLinkResult, String?) -> Unit = { _, _ -> },
+    private val onResultReceived: (String?) -> Unit = {},
 ) : PlaidLinkLauncher {
     constructor(activity: ComponentActivity, onOrphanedResult: (PlaidLinkResult) -> Unit) : this(
         activity,
@@ -70,6 +71,9 @@ class OfficialPlaidLinkLauncher(
     private val openLink: ActivityResultLauncher<PlaidSession> =
         activity.registerForActivityResult(OpenPlaidLink()) { result ->
             val mapped = mapResult(result)
+            // Mark the callback synchronously before Activity resume can expose
+            // a stale cancellation action to the UI.
+            onResultReceived(pendingOperationId)
             val pending = pendingResult
             if (pending == null) {
                 // ActivityResult re-delivery after process recreation has no
@@ -88,10 +92,23 @@ class OfficialPlaidLinkLauncher(
 
     /** RN supplies the persisted native operation ID so a callback cannot be rebound to a newer flow. */
     suspend fun launch(linkToken: String, operationId: String): PlaidLinkResult = withContext(Dispatchers.Main.immediate) {
-        launchInternal(linkToken, operationId)
+        launchInternal(linkToken, operationId) {}
     }
 
-    private suspend fun launchInternal(linkToken: String, operationId: String?): PlaidLinkResult {
+    /** Persist the provider-open boundary only after preloading, immediately before launching LinkKit. */
+    suspend fun launch(
+        linkToken: String,
+        operationId: String,
+        onProviderLaunchStarted: suspend () -> Unit,
+    ): PlaidLinkResult = withContext(Dispatchers.Main.immediate) {
+        launchInternal(linkToken, operationId, onProviderLaunchStarted)
+    }
+
+    private suspend fun launchInternal(
+        linkToken: String,
+        operationId: String?,
+        onProviderLaunchStarted: suspend () -> Unit = {},
+    ): PlaidLinkResult {
         check(pendingResult == null) { "A Plaid Link session is already open." }
         pendingOperationId = operationId
 
@@ -112,6 +129,7 @@ class OfficialPlaidLinkLauncher(
         val result = CompletableDeferred<PlaidLinkResult>()
         pendingResult = result
         return try {
+            onProviderLaunchStarted()
             openLink.launch(session)
             result.await()
         } catch (cancellation: CancellationException) {

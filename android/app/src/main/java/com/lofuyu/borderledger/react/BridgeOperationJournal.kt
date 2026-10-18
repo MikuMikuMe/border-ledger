@@ -156,6 +156,7 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
     private suspend fun read(id: String): JSONObject? = records.read(key(id))?.let { JSONObject(it.decodeToString()) }
     private fun failureStatus(error: Exception): String = when(error) {
         is BridgeLocalFailure -> "failed_local"
+        is com.lofuyu.borderledger.accounts.AccountRequestRejected -> "rejected"
         is com.lofuyu.borderledger.recurring.RecurringRevisionConflict,
         is com.lofuyu.borderledger.review.ReviewRevisionConflict,
         is com.lofuyu.borderledger.ui.accounts.devices.DeviceRevisionConflict,

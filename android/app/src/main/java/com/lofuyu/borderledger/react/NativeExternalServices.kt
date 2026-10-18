@@ -7,11 +7,15 @@ import com.lofuyu.borderledger.bank.PlaidLinkResult
 import com.lofuyu.borderledger.exports.*
 import com.lofuyu.borderledger.imports.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal class RestoredOwnerFence(
     private val restore: suspend () -> Unit,
@@ -46,8 +50,14 @@ internal class RestoredPlaidCallbackClaim(
 class NativeExternalServices(private val r: NativeServiceRuntime) {
     private val mutex=Mutex()
     private val plaidCallbackMutex=Mutex()
+    private val plaidPreProviderLaunchGate=PlaidPreProviderLaunchGate()
+    private val plaidCallbacksInProgress=ConcurrentHashMap.newKeySet<String>()
+    private val plaidReturnedFromProvider=ConcurrentHashMap.newKeySet<String>()
+    private val activeDocumentPickerOperations=ConcurrentHashMap.newKeySet<String>()
+    private val documentResultDelivered=AtomicBoolean(false)
     private val records get()=r.container.bridgeRecords
     private val plaidResultStore get()=PendingPlaidResultStore(records)
+    private val plaidLaunchState get()=PlaidProviderLaunchState(records)
     private val restoredOwnerFence = RestoredOwnerFence(
         restore = { r.container.ownerSessionManager.restore() },
         currentGeneration = { r.currentGeneration() },
@@ -65,6 +75,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                 val existing=r.container.bridgeOperations.query(id,owner)
                 if(existing!=null) return@withLock BridgePayloads.operation(r.container.bridgeOperations.awaitExternal(id,kind,arguments.toString(),owner))
                 val host=requireNotNull(r.host)
+                require(kind in setOf("import_picker","export_picker","plaid"))
                 val previous=pending()
                 if(previous!=null) {
                     val previousOwner=previous.getString("owner")
@@ -78,75 +89,178 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                     }
                     records.delete(PENDING)
                 }
-                val op=r.container.bridgeOperations.awaitExternal(id,kind,arguments.toString(),owner)
-                if(op.operationId!=id) return@withLock BridgePayloads.operation(op)
                 val requestCode=nextRequestCode()
                 val value=JSONObject().put("version",1).put("operationId",id).put("kind",kind).put("owner",owner).put("requestCode",requestCode).put("arguments",arguments)
+                // Persist the recovery source before opening the operation journal:
+                // process recreation can reconstruct an awaiting picker from here.
                 records.write(PENDING,value.toString().encodeToByteArray())
+                val op=try {
+                    r.container.bridgeOperations.awaitExternal(id,kind,arguments.toString(),owner)
+                } catch(error: Exception) {
+                    clearPendingIf(id,owner)
+                    throw error
+                }
+                if(op.operationId!=id) {
+                    clearPendingIf(id,owner)
+                    return@withLock BridgePayloads.operation(op)
+                }
                 if(kind=="plaid") persistLinkOutcome(owner,ConnectionCoordinatorState.Linking,id)
+                var response=op
                 when(kind) {
-                    "import_picker" -> host.launchImport(id)
-                    "export_picker" -> host.launchExport(id)
-                    "plaid" -> r.scope.launch {
-                        try {
-                            val result = r.withOwner(owner) {
-                                val link=r.container.accountRepository.createLinkToken(arguments.bridgeNullableString("reconnectConnectionId"))
-                                requireNotNull(r.host).launchPlaid(requireNotNull(link.linkToken),id)
-                            }
-                            handlePlaid(result,id)
-                        } catch(error: CancellationException) { throw error }
-                        catch(_: Exception) {
-                            runCatching {
-                                r.withOwner(owner) {
-                                    settlePlaidLaunchFailure(owner,id)
+                    "import_picker", "export_picker" -> response=launchDocumentPicker(value,host) ?: op
+                    "plaid" -> {
+                        lateinit var job: Job
+                        job=r.scope.launch(start=CoroutineStart.LAZY) {
+                            try {
+                                val result = r.withOwner(owner) {
+                                    val link=r.container.accountRepository.createLinkToken(arguments.bridgeNullableString("reconnectConnectionId"))
+                                    val linkToken=requireNotNull(link.linkToken)
+                                    requireNotNull(r.host).launchPlaid(linkToken,id) {
+                                        val mayOpen=plaidPreProviderLaunchGate.beginProviderLaunch(id,job) {
+                                            plaidLaunchState.markStarted(owner,id)
+                                        }
+                                        if(!mayOpen) throw CancellationException("Plaid preparation was canceled before Link opened.")
+                                    }
                                 }
+                                handlePlaid(result,id)
+                            } catch(error: CancellationException) { throw error }
+                            catch(_: Exception) {
+                                runCatching {
+                                    r.withOwner(owner) {
+                                        settlePlaidLaunchFailure(owner,id)
+                                    }
+                                }
+                            } finally {
+                                plaidPreProviderLaunchGate.remove(id,job)
                             }
                         }
+                        plaidPreProviderLaunchGate.register(id,job)
+                        job.start()
                     }
                 }
-                BridgePayloads.operation(op)
+                BridgePayloads.operation(response)
             }
         }
     }
 
     suspend fun requestCode(id: String): Int = requireNotNull(pending()?.takeIf { it.getString("operationId")==id }).getInt("requestCode")
 
-    suspend fun handleDocumentResult(code: Int, uri: Uri?, accepted: Boolean) {
-        val value=pending()?.takeIf { it.getInt("requestCode")==code && it.getString("kind")!="plaid" } ?: return
-        if(!ownerMatches(value)) return
-        val id=value.getString("operationId"); val owner=value.getString("owner")
+    fun noteDocumentResultReceived() { documentResultDelivered.set(true) }
+
+    fun notePlaidCallbackReceived(operationId: String?) { operationId?.let(plaidCallbacksInProgress::add) }
+
+    suspend fun noteActivityResumed() {
+        val resultWasDelivered=documentResultDelivered.getAndSet(false)
+        val original=pending() ?: return
+        val owner=original.getString("owner")
+        if(!restoredOwnerFence.matches(owner)) return
+        var accountsChanged=false
         r.withOwner(owner) {
-            if(!accepted || uri==null) {
+            mutex.withLock {
+                val value=pending()?.takeIf {
+                    it.getString("operationId")==original.getString("operationId") && it.getString("owner")==owner
+                } ?: return@withLock
+                when(value.getString("kind")) {
+                    "import_picker", "export_picker" -> {
+                        val id=value.getString("operationId")
+                        val operation=r.container.bridgeOperations.query(id,owner)
+                            ?: r.container.bridgeOperations.awaitExternal(id,value.getString("kind"),value.getJSONObject("arguments").toString(),owner)
+                        if(operation.operationId!=id) {
+                            clearPendingIf(id,owner)
+                        } else if(DocumentPickerRecovery.shouldRelaunch(
+                                value.getString("kind"),operation.status,
+                                activeInProcess=id in activeDocumentPickerOperations,
+                                resultDelivered=resultWasDelivered,
+                            )) {
+                            r.host?.let { launchDocumentPicker(value,it) }
+                        }
+                    }
+                    "plaid" -> {
+                        val id=value.getString("operationId")
+                        if(plaidLaunchState.wasStarted(owner,id) &&
+                            !plaidPreProviderLaunchGate.isPreparing(id) &&
+                            id !in plaidCallbacksInProgress && plaidReturnedFromProvider.add(id)) {
+                            accountsChanged=true
+                        }
+                    }
+                }
+            }
+        }
+        if(accountsChanged) r.changes.emit("accounts")
+    }
+
+    private suspend fun launchDocumentPicker(value: JSONObject, host: NativeServiceHost): BridgeOperation? {
+        val id=value.getString("operationId")
+        val owner=value.getString("owner")
+        val kind=value.getString("kind")
+        if(!activeDocumentPickerOperations.add(id)) return r.container.bridgeOperations.query(id,owner)
+        try {
+            when(kind) {
+                "import_picker" -> host.launchImport(id)
+                "export_picker" -> host.launchExport(id)
+                else -> error("Unknown document picker")
+            }
+            return null
+        } catch(error: CancellationException) {
+            activeDocumentPickerOperations.remove(id)
+            throw error
+        } catch(_: Exception) {
+            activeDocumentPickerOperations.remove(id)
+            val operation=r.container.bridgeOperations.query(id,owner)
+            if(operation?.status=="awaiting_result") {
                 r.container.bridgeOperations.cancel(id,owner)
                 markDrained(owner,id)
                 clearPendingIf(id,owner)
                 r.changes.emit("files")
-                return@withOwner
             }
-            r.container.bridgeOperations.completeExternal(id,owner) {
-                check(ownerMatches(value))
-                r.withFiles(owner) {
-                    val args=value.getJSONObject("arguments")
-                    when(value.getString("kind")) {
-                        "import_picker" -> {
-                            BridgeImportOperations.preview(r.container.importRepository,r.container.statementDocumentReader.read(uri),args.getString("accountId"),id)
+            return r.container.bridgeOperations.query(id,owner)
+        }
+    }
+
+    suspend fun handleDocumentResult(uri: Uri?, accepted: Boolean) {
+        val value=pending()?.takeIf { it.getString("kind")!="plaid" } ?: return
+        val id=value.getString("operationId")
+        activeDocumentPickerOperations.remove(id)
+        try {
+            if(!ownerMatches(value)) return
+            val owner=value.getString("owner")
+            r.withOwner(owner) {
+                if(!accepted || uri==null) {
+                    r.container.bridgeOperations.cancel(id,owner)
+                    markDrained(owner,id)
+                    clearPendingIf(id,owner)
+                    r.changes.emit("files")
+                    return@withOwner
+                }
+                r.container.bridgeOperations.completeExternal(id,owner) {
+                    check(ownerMatches(value))
+                    r.withFiles(owner) {
+                        val args=value.getJSONObject("arguments")
+                        when(value.getString("kind")) {
+                            "import_picker" -> {
+                                BridgeImportOperations.preview(r.container.importRepository,r.container.statementDocumentReader.read(requireNotNull(uri)),args.getString("accountId"),id)
+                            }
+                            "export_picker" -> {
+                                val destination=requireNotNull(uri)
+                                val request=LedgerExportRequest(ExportSelection.entries.first { it.wireValue==args.getString("selection") },
+                                    LedgerExportFilters(args.bridgeNullableString("currency"),args.bridgeNullableString("startDate"),args.bridgeNullableString("endDate")))
+                                val result=r.container.exportCoordinator.export(request, ContentResolverExportDestination(r.applicationContext.contentResolver,destination), if(args.getBoolean("share")) ExportHandoff.Share else ExportHandoff.Save)
+                                check(result is ExportState.Completed)
+                                if(args.getBoolean("share") && ownerMatches(value)) r.applicationContext.startActivity(r.container.exportCoordinator.createShareIntent(destination).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                                result.receipt.receiptId
+                            }
+                            else -> error("Unknown handoff")
                         }
-                        "export_picker" -> {
-                            val request=LedgerExportRequest(ExportSelection.entries.first { it.wireValue==args.getString("selection") },
-                                LedgerExportFilters(args.bridgeNullableString("currency"),args.bridgeNullableString("startDate"),args.bridgeNullableString("endDate")))
-                            val result=r.container.exportCoordinator.export(request, ContentResolverExportDestination(r.applicationContext.contentResolver,uri), if(args.getBoolean("share")) ExportHandoff.Share else ExportHandoff.Save)
-                            check(result is ExportState.Completed)
-                            if(args.getBoolean("share") && ownerMatches(value)) r.applicationContext.startActivity(r.container.exportCoordinator.createShareIntent(uri).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-                            result.receipt.receiptId
-                        }
-                        else -> error("Unknown handoff")
                     }
                 }
+                markDrained(owner,id)
+                clearPendingIf(id,owner)
             }
-            markDrained(owner,id)
-            clearPendingIf(id,owner)
+            r.changes.emit("files")
+        } finally {
+            activeDocumentPickerOperations.remove(id)
+            documentResultDelivered.set(false)
         }
-        r.changes.emit("files")
     }
 
     suspend fun handlePlaid(result: PlaidLinkResult, operationId: String?=null) {
@@ -154,6 +268,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         // bind it to the currently pending operation: that operation may be a
         // newer flow created after cancellation or process recreation.
         if (operationId == null) return
+        try {
         val persisted = plaidCallbackClaim.claim(operationId) ?: return
         val owner=persisted.getString("owner")
         // A recreated Activity can deliver the SDK result before onResume.
@@ -172,6 +287,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                     markDrained(owner,id)
                     clearPendingIf(id,owner)
                     plaidResultStore.clear(owner,id)
+                    plaidLaunchState.clear(owner,id)
                     return@withOwner
                 }
                 when(result) {
@@ -182,6 +298,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                                 markDrained(owner,id)
                                 clearPendingIf(id,owner)
                                 plaidResultStore.clear(owner,id)
+                                plaidLaunchState.clear(owner,id)
                                 val outcome=when(result) {
                                     PlaidLinkResult.Canceled -> ConnectionCoordinatorState.Canceled
                                     PlaidLinkResult.Unsupported -> ConnectionCoordinatorState.Unsupported("unsupported")
@@ -193,12 +310,14 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                                 markDrained(owner,id)
                                 clearPendingIf(id,owner)
                                 plaidResultStore.clear(owner,id)
+                                plaidLaunchState.clear(owner,id)
                                 persistLinkOutcome(owner,ConnectionCoordinatorState.Canceled,id)
                             }
                             "failed_local" -> {
                                 markDrained(owner,id)
                                 clearPendingIf(id,owner)
                                 plaidResultStore.clear(owner,id)
+                                plaidLaunchState.clear(owner,id)
                                 persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"),id)
                             }
                             "running" -> return@withOwner // The original exchange still owns the operation.
@@ -214,6 +333,10 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
             }
         }
         r.changes.emit("accounts")
+        } finally {
+            plaidCallbacksInProgress.remove(operationId)
+            plaidReturnedFromProvider.remove(operationId)
+        }
     }
 
     /** Reconcile a token saved before exchange, after the Activity/session is restored. */
@@ -234,6 +357,60 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         }
     }
 
+    /** Cancel only a Plaid handoff whose provider exchange has not started. */
+    suspend fun cancelPlaidConnect(operationId: String): Map<String, Any?> {
+        val initial=pending()?.takeIf { it.getString("kind")=="plaid" && it.getString("operationId")==operationId }
+            ?: throw BridgeFailure("not_found")
+        val owner=initial.getString("owner")
+        if(!ownerMatches(initial)) throw BridgeFailure("not_found")
+
+        // This lock is the serialization point with the final callback immediately
+        // before LinkKit opens. If cancellation wins, the canceled Job cannot open it.
+        plaidPreProviderLaunchGate.cancelBeforeProviderLaunch(operationId)
+        return plaidCallbackMutex.withLock {
+            r.withOwner(owner) {
+                mutex.withLock {
+                    val value=pending()?.takeIf {
+                        it.getString("kind")=="plaid" && it.getString("operationId")==operationId && it.getString("owner")==owner
+                    } ?: throw BridgeFailure("not_found")
+                    val journal=r.container.bridgeOperations
+                    val current=journal.query(operationId,owner) ?: throw BridgeFailure("not_found")
+                    val providerStarted=plaidLaunchState.wasStarted(owner,operationId)
+                    val providerReturned=operationId in plaidReturnedFromProvider
+                    val callbackInProgress=operationId in plaidCallbacksInProgress
+                    val linkState=records.read(LINK)?.let { JSONObject(it.decodeToString()) }?.takeIf {
+                        it.optString("owner")==owner && it.optString("operationId")==operationId
+                    }?.optString("state").orEmpty()
+                    if(!PlaidHandoffAvailability.canCancel(
+                            linkState,current.status,providerStarted,providerReturned,callbackInProgress,
+                        )) return@withLock BridgePayloads.operation(current)
+
+                    val decision=PlaidHandoffCancellation(journal,plaidLaunchState)
+                        .cancelBeforeSubmission(operationId,owner,providerHasReturned=providerReturned) ?: throw BridgeFailure("not_found")
+                    when(decision) {
+                        is PlaidCancellationDecision.Canceled -> {
+                            markDrained(owner,operationId)
+                            clearPendingIf(operationId,owner)
+                            plaidResultStore.clear(owner,operationId)
+                            plaidLaunchState.clear(owner,operationId)
+                            plaidReturnedFromProvider.remove(operationId)
+                            val outcome=if(decision.operation.status=="canceled") ConnectionCoordinatorState.Canceled
+                                else ConnectionCoordinatorState.Failed("failed")
+                            persistLinkOutcome(owner,outcome,operationId)
+                        }
+                        is PlaidCancellationDecision.Retained -> {
+                            if(decision.operation.status in setOf("running","reconciliation_required","completed")) {
+                                persistLinkOutcome(owner,ConnectionCoordinatorState.ReconciliationRequired,operationId)
+                            }
+                        }
+                    }
+                    r.changes.emit("accounts")
+                    BridgePayloads.operation(decision.operation)
+                }
+            }
+        }
+    }
+
     private suspend fun processPlaidSuccess(value: JSONObject, owner: String, id: String, publicToken: String) {
         val marker="rn_plaid_result_v1_${digest(publicToken)}"
         val existingMarker=records.read(marker)?.decodeToString()
@@ -247,6 +424,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                 markDrained(owner,id)
                 clearPendingIf(id,owner)
                 plaidResultStore.clear(owner,id)
+                plaidLaunchState.clear(owner,id)
                 persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"),id)
             } else {
                 persistLinkOutcome(owner,ConnectionCoordinatorState.ReconciliationRequired,id)
@@ -294,10 +472,12 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
             markDrained(owner,id)
             clearPendingIf(id,owner)
             plaidResultStore.clear(owner,id)
+            plaidLaunchState.clear(owner,id)
         } else if (outcome.status=="failed_local") {
             markDrained(owner,id)
             clearPendingIf(id,owner)
             plaidResultStore.clear(owner,id)
+            plaidLaunchState.clear(owner,id)
             persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"),id)
         } else {
             // Keep the encrypted provider result and pending operation so the same backend
@@ -316,6 +496,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
             markDrained(owner,id)
             clearPendingIf(id,owner)
             plaidResultStore.clear(owner,id)
+            plaidLaunchState.clear(owner,id)
             return
         }
         val operation=r.container.bridgeOperations.cancel(id,owner)
@@ -324,6 +505,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                 markDrained(owner,id)
                 clearPendingIf(id,owner)
                 plaidResultStore.clear(owner,id)
+                plaidLaunchState.clear(owner,id)
                 persistLinkOutcome(owner,ConnectionCoordinatorState.Failed("failed"),id)
             }
             "running", "reconciliation_required", "completed" -> {
@@ -347,7 +529,16 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         val owner=r.ownerGeneration()
         val stored=records.read(LINK)?.let { JSONObject(it.decodeToString()) }?.takeIf { it.getString("owner")==owner }
         if(stored==null) return BridgePayloads.link(ConnectionCoordinatorState.Idle)
+        val operationId=stored.bridgeNullableString("operationId")
+        val operation=operationId?.let { r.container.bridgeOperations.query(it,owner) }
+        val providerLaunchStarted=operationId?.let { plaidLaunchState.wasStarted(owner,it) } ?: false
+        val canCancel=operation?.kind=="plaid" && PlaidHandoffAvailability.canCancel(
+            stored.getString("state"),operation.status,providerLaunchStarted,
+            operationId?.let(plaidReturnedFromProvider::contains) ?: false,
+            operationId?.let(plaidCallbacksInProgress::contains) ?: false,
+        )
         return mapOf("state" to stored.getString("state"),"pendingConnectionId" to stored.bridgeNullableString("pendingConnectionId"),"connectionId" to stored.bridgeNullableString("connectionId"),
+            "operationId" to operationId,"canCancel" to canCancel,
             "outcomeCode" to stored.bridgeNullableString("outcomeCode"),
             "accounts" to stored.getJSONArray("accounts").let { a -> (0 until a.length()).map { index -> val v=a.getJSONObject(index); mapOf("providerAccountId" to v.getString("providerAccountId"),"name" to v.getString("name"),"mask" to v.bridgeNullableString("mask"),"subtype" to v.bridgeNullableString("subtype"),"currency" to v.getString("currency"),"kind" to v.getString("kind")) } })
     }
@@ -355,7 +546,9 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
 
     suspend fun clearPlaidResultForOwner(owner: String) {
         val value=pending()?.takeIf { it.getString("kind")=="plaid" && it.getString("owner")==owner } ?: return
-        plaidResultStore.clear(owner,value.getString("operationId"))
+        val id=value.getString("operationId")
+        plaidResultStore.clear(owner,id)
+        plaidLaunchState.clear(owner,id)
     }
 
     private suspend fun ownerMatches(value: JSONObject): Boolean {

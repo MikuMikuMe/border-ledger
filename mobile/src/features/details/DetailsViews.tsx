@@ -53,7 +53,7 @@ export function ReviewView({dark,state,mutation,selected,draft={category:'',note
   </View>;
 }
 
-export function AccountsView({dark,state,mutation,onRetry,onLoadMore,onConnect,onSelect,onCancel,onSync,onDisconnect}:Base&{state:LoadState<AccountsData>;onConnect(reconnect:string|null):void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(id:string):void}) {
+export function AccountsView({dark,state,mutation,onRetry,onLoadMore,onConnect,onCancelConnect,onSelect,onCancel,onSync,onDisconnect}:Base&{state:LoadState<AccountsData>;onConnect(reconnect:string|null):void;onCancelConnect():void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(id:string):void}) {
   const data=state.data,link=data?.link,[selected,setSelected]=useState<string[]>([]),[account,setAccount]=useState<Account|null>(null),[disconnect,setDisconnect]=useState<Connection|null>(null);
   useEffect(()=>{setSelected([]);},[link?.pendingConnectionId]);
   useEffect(()=>{if(state.phase==='locked'){setAccount(null);setDisconnect(null);setSelected([]);}},[state.phase]);
@@ -63,6 +63,7 @@ export function AccountsView({dark,state,mutation,onRetry,onLoadMore,onConnect,o
   return <View style={styles.section}>
     <Copy dark={dark}>Plaid handles bank authorization. Select which accounts Border Ledger can use.</Copy><Status dark={dark} state={state} onRetry={onRetry} label="bank status"/>
     {message?<View accessibilityLiveRegion="polite"><Copy dark={dark}>{message}</Copy></View>:null}
+    {link?.state==='linking'&&link.canCancel?<View><Copy dark={dark}>Authorization has not opened yet. You can safely cancel this handoff.</Copy><Action dark={dark} label="Cancel bank authorization" disabled={state.phase!=='ready'} onPress={onCancelConnect}/></View>:null}
     {data?<><Copy dark={dark} heading>Bank connections</Copy>{!data.connections.length?<Copy dark={dark}>No active bank connections are available.</Copy>:null}
       {data.connections.map(c=><Card key={c.connectionId} dark={dark}><Copy dark={dark} heading>{c.institution??'Bank connection'}</Copy><Copy dark={dark}>{c.state} · Last sync {c.lastSyncedAt??'not synced yet'}</Copy><Copy dark={dark}>Expires {c.expiresAt??'unavailable'} · Cleanup: {c.cleanupState??'none'}</Copy>{c.lastError?<Copy dark={dark} error>Provider status: {c.lastError}</Copy>:null}<Action dark={dark} label={`Reconnect ${c.institution??'bank'}`} disabled={disabled||link?.state==='pending'||link?.state==='loading'||link?.state==='linking'} onPress={()=>onConnect(c.connectionId)}/><Action dark={dark} label={`Disconnect ${c.institution??'bank'}`} disabled={disabled} onPress={()=>setDisconnect(c)}/></Card>)}
       <Action dark={dark} label="Request bank sync" disabled={disabled} onPress={onSync}/><Copy dark={dark}>A confirmed request may remain queued. Last sync changes only when the native service reports it.</Copy>

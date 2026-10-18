@@ -14,7 +14,7 @@ function remember<T>(known:Map<string,T>,rows:T[],id:(v:T)=>string,revision:(v:T
   rows.forEach(row=>{const key=id(row),old=known.get(key);if(!old||revision(old)<=revision(row))known.set(key,row);});return rows.map(row=>known.get(id(row))!);
 }
 function merge<T>(old:T[],rows:T[],id:(v:T)=>string):T[]{const map=new Map(old.map(v=>[id(v),v]));rows.forEach(v=>map.set(id(v),v));return [...map.values()];}
-const emptyLink:LinkSnapshot={state:'idle',outcomeCode:null,pendingConnectionId:null,connectionId:null,accounts:[]};
+const emptyLink:LinkSnapshot={state:'idle',outcomeCode:null,operationId:null,canCancel:false,pendingConnectionId:null,connectionId:null,accounts:[]};
 export class DetailsController {
   readonly review:Resource<ReviewPage>;readonly detail:Resource<Detail>;readonly accounts:Resource<AccountsData>;readonly mutation:MutationGate;
   private subscriptions:{remove():void}[]=[];private disposed=false;private locked=false;private selectedId:string|null=null;
@@ -74,6 +74,12 @@ export class DetailsController {
     await this.write(op,()=>this.ports.accounts.startConnect(op,reconnect),()=>this.loadAccounts());
     // Read progress independently of the durable receipt; this never unlocks a write.
     if(this.available()&&['awaiting_result','reconciliation_required'].includes(this.mutation.current().status))await this.loadAccounts();
+  }
+  async cancelConnect(){
+    const operationId=this.link.operationId;
+    if(!this.available()||!this.link.canCancel||!operationId)return;
+    await this.read(()=>this.ports.accounts.cancelConnect(operationId));
+    if(this.available())await Promise.all([this.recover(),this.loadAccounts()]);
   }
   async selectAccounts(op:string,ids:string[]){const selected=[...new Set(ids)],pending=this.link.pendingConnectionId;if(this.accounts.current().phase!=='ready'||this.link.state!=='pending'||!pending||!selected.length||selected.some(id=>!this.link.accounts.some(a=>a.providerAccountId===id)))return;
     await this.write(op,()=>this.ports.accounts.startSelectAccounts(op,pending,selected),()=>this.loadAccounts());}

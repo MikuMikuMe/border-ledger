@@ -53,8 +53,10 @@ class BridgePayloadsTest {
     @Test fun accountProjectionNeverReturnsLinkTokenOrProviderErrors() {
         val op = ConnectionOperation("o", "pending", linkToken="secret", pendingConnectionId="p", accounts=emptyList())
         val payload = BridgePayloads.link(ConnectionCoordinatorState.Pending(op, emptyList()))
-        assertEquals(setOf("state", "outcomeCode", "pendingConnectionId", "connectionId", "accounts"), payload.keys)
+        assertEquals(setOf("state", "outcomeCode", "operationId", "canCancel", "pendingConnectionId", "connectionId", "accounts"), payload.keys)
         assertEquals("success", payload["outcomeCode"])
+        assertNull(payload["operationId"])
+        assertEquals(false, payload["canCancel"])
         assertFalse(payload.toString().contains("secret"))
         val failed=BridgePayloads.link(ConnectionCoordinatorState.Failed("secret"))
         assertEquals("failed", failed["state"])

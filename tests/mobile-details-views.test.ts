@@ -8,7 +8,7 @@ const {RecurringDetailView,ReviewView,AccountsView}=await import(modulePath);
 import {account,connection,detail,alert,link} from './fixtures/mobile-details';
 (globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;
 const ready=<T,>(data:T)=>({phase:'ready',data,message:null});const mutation={blocked:false,status:'ready'};
-const actions={onRetry:()=>{},onLoadMore:()=>{},onOpen:()=>{},onClose:()=>{},onSave:()=>{},onDraft:()=>{},onResolve:()=>{},onClassify:()=>{},onConnect:()=>{},onSelect:()=>{},onCancel:()=>{},onSync:()=>{},onDisconnect:()=>{}};
+const actions={onRetry:()=>{},onLoadMore:()=>{},onOpen:()=>{},onClose:()=>{},onSave:()=>{},onDraft:()=>{},onResolve:()=>{},onClassify:()=>{},onConnect:()=>{},onSelect:()=>{},onCancel:()=>{},onCancelConnect:()=>{},onSync:()=>{},onDisconnect:()=>{}};
 const render=(component:unknown,props:unknown)=>{let tree:any;act(()=>{tree=create(React.createElement(component,props));});return tree;};
 const json=(tree:any)=>tree.root.findAll((n:any)=>n.type==='Text').map((n:any)=>n.children.join('')).join('\n');
 const button=(tree:any,label:string)=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel===label)[0];
@@ -62,5 +62,12 @@ describe('detail view fixtures and accessibility',()=>{
   it('explains an unresolved bank exchange and blocks another connection attempt',()=>{
     const tree=render(AccountsView,{...actions,dark:false,state:ready({page:{accounts:[],nextCursor:null,limit:50},connections:[],link:{...link,state:'reconciliation_required',outcomeCode:'reconciliation_required'}}),mutation});
     expect(json(tree)).toContain('being reconciled');expect(button(tree,'Start bank connection').props.disabled).toBe(true);
+  });
+  it('offers cancellation only for a native-confirmed pre-exchange Plaid handoff',()=>{
+    let canceled=false;const props={...actions,dark:false,state:ready({page:{accounts:[],nextCursor:null,limit:50},connections:[],link:{...link,state:'linking',operationId:'plaid-1',canCancel:true}}),mutation:{blocked:true,status:'awaiting_result'},onCancelConnect:()=>{canceled=true;}};
+    const tree=render(AccountsView,props);expect(button(tree,'Cancel bank authorization').props.disabled).toBe(false);
+    act(()=>button(tree,'Cancel bank authorization').props.onPress());expect(canceled).toBe(true);
+    const unsafe=render(AccountsView,{...props,state:ready({...props.state.data,link:{...props.state.data.link,canCancel:false}})});
+    expect(button(unsafe,'Cancel bank authorization')).toBeFalsy();
   });
 });

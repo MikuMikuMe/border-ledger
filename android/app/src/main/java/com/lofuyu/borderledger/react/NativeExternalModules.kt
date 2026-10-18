@@ -14,6 +14,7 @@ class AccountsModule(context: ReactApplicationContext, private val r: NativeServ
     override fun readAccounts(cursor: String?, limit: Double, p: Promise)=s.call(p) { require(limit in 1.0..100.0 && limit==limit.toInt().toDouble()); BridgePayloads.accountPage(r.container.accountRepository.listAccounts(cursor,limit.toInt())) }
     override fun readConnections(p: Promise)=s.call(p) { r.container.accountRepository.listConnections().map(BridgePayloads::connection) }
     override fun startConnect(op: String, reconnect: String?, p: Promise)=s.call(p) { r.external.start(op,"plaid",JSONObject().put("reconnectConnectionId",reconnect ?: JSONObject.NULL)) }
+    override fun cancelConnect(op: String, p: Promise)=s.call(p) { r.external.cancelPlaidConnect(op) }
     override fun startSelectAccounts(op: String, pending: String, accounts: ReadableArray, p: Promise)=s.call(p) {
         val ids=accounts.strings(); require(ids.isNotEmpty() && ids.size<=100)
         r.write(op,"select_accounts",listOf(pending,ids).toString()) { val result=r.container.accountRepository.selectAccounts(pending,ids,op); check(result.state=="connected"); r.external.clearLink(); result.operationId }

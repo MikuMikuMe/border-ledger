@@ -82,7 +82,8 @@ object BridgePayloads {
         ConnectionCoordinatorState.ReconciliationRequired -> "reconciliation_required"
         is ConnectionCoordinatorState.Failed -> "failed"
         else -> null
-    }, "pendingConnectionId" to (v as? ConnectionCoordinatorState.Pending)?.operation?.pendingConnectionId,
+    }, "operationId" to null, "canCancel" to false,
+        "pendingConnectionId" to (v as? ConnectionCoordinatorState.Pending)?.operation?.pendingConnectionId,
         "connectionId" to (v as? ConnectionCoordinatorState.Connected)?.operation?.connectionId,
         "accounts" to (v as? ConnectionCoordinatorState.Pending)?.accounts.orEmpty().map(::account))
     fun capture(v: CaptureOnboardingState) = mapOf("health" to v.health.name, "apiHealth" to v.apiHealth.name,

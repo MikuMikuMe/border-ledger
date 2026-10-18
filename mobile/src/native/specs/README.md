@@ -1,9 +1,10 @@
 # Native service contracts
 
-The eight `Native*.ts` files are the public service API for RN screens. Android
-implements the generated `com.lofuyu.borderledger.react.codegen.*Spec` classes;
-`NativeServicePackage` is explicitly registered in debug builds only. The production
-Compose launcher and native services remain in place.
+The eight `Native*.ts` files are the public service API for React Native screens.
+Android implements the generated `com.lofuyu.borderledger.react.codegen.*Spec`
+classes; `NativeServicePackage` is explicitly registered in debug builds only.
+React Native owns the production UI. Kotlin retains authentication, storage,
+repositories, capture and background-service responsibilities.
 
 Subscribe to typed events, then request the initial snapshot (or initial page).
 Call `NativeSession.refreshOnResume()` when the JS app resumes; the Android host
@@ -18,7 +19,7 @@ cancel through `NativeSession`. On a new JS runtime, call `readOperations(0, 50)
 (and subsequent offset pages) to discover native operation IDs and outcomes without
 JS persistence. Repeating the ID returns its native durable status;
 a different ID cannot retry an identical unresolved write either. Statuses are
-`awaiting_result`, `running`, `completed`, `canceled`, `revision_conflict`, `failed_local`, and
+`awaiting_result`, `running`, `completed`, `canceled`, `revision_conflict`, `failed_local`, `rejected`, and
 `reconciliation_required`. `completed` means the existing native repository returned
 its confirmed outcome. `resultId` is a safe receipt, preview or backend-operation
 reference; file snapshots distinguish actual import/export receipt IDs. Cancel
@@ -28,6 +29,8 @@ can discard an unsubmitted external result. It cannot undo a submitted write.
 parsing proved that the operation sent no backend request. It permits a deliberate
 new reviewed action. Unknown failures after preview/staging/commit submission remain
 `reconciliation_required`; neither snapshots nor an error message can reclassify them.
+`rejected` is terminal only when the Worker response explicitly reports a
+non-retryable client error; refresh the data and review before choosing another action.
 Import commits accept 1–500 selected rows. Capture exposes separate listener-access
 and app-posting notification settings actions; both remain native host intents.
 

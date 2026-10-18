@@ -11,7 +11,7 @@ function fixture(){
     session:{readOperations:async()=>[],queryOperation:async()=>null},
     recurring:{readDetail:async(...args)=>{reads.push(args);return detail;},startClassify:async(...args)=>op('recurring_classify',...args),onChanged:()=>({remove:()=>{removed++;}})},
     review:{readAlerts:async(...args)=>{reads.push(args);return {items:[alert],nextCursor:null,limit:50};},startReview:async(...args)=>op('review',...args),startAnnotate:async(...args)=>op('annotate',...args),onChanged:cb=>{reviewChanged=cb;return {remove:()=>{removed++;}};}},
-    accounts:{getSnapshot:async()=>snapshot,readAccounts:async(...args)=>{reads.push(args);return {accounts:[account],nextCursor:null,limit:50};},readConnections:async()=>[connection],startConnect:async(...args)=>op('plaid',...args),startSelectAccounts:async(...args)=>op('select_accounts',...args),startCancelPending:async(...args)=>op('cancel_pending',...args),startSync:async(...args)=>op('bank_sync',...args),startDisconnect:async(...args)=>op('disconnect',...args),onStateChanged:cb=>{emit=cb;return {remove:()=>{removed++;}};}},
+    accounts:{getSnapshot:async()=>snapshot,readAccounts:async(...args)=>{reads.push(args);return {accounts:[account],nextCursor:null,limit:50};},readConnections:async()=>[connection],startConnect:async(...args)=>op('plaid',...args),cancelConnect:async(...args)=>op('cancel_connect',...args),startSelectAccounts:async(...args)=>op('select_accounts',...args),startCancelPending:async(...args)=>op('cancel_pending',...args),startSync:async(...args)=>op('bank_sync',...args),startDisconnect:async(...args)=>op('disconnect',...args),onStateChanged:cb=>{emit=cb;return {remove:()=>{removed++;}};}},
   };
   return {ports,writes,reads,emit:(value:LinkSnapshot)=>{snapshot=value;emit(value);},reviewChanged:()=>reviewChanged(),removed:()=>removed};
 }
@@ -107,6 +107,13 @@ describe('second-stage native financial controller',()=>{
     f.emit({...link,state:'reconciliation_required',outcomeCode:'reconciliation_required'});
     await c.connect('must-not-start');
     expect(f.writes).toEqual([]);c.dispose();
+  });
+  it('only asks native to cancel a bank authorization explicitly marked safe to cancel',async()=>{
+    const f=fixture(),c=new DetailsController(f.ports);await c.start();
+    f.emit({...link,state:'linking',operationId:'plaid-operation',canCancel:false});await c.cancelConnect();
+    expect(f.writes).toEqual([]);
+    f.emit({...link,state:'linking',operationId:'plaid-operation',canCancel:true});await c.cancelConnect();
+    expect(f.writes).toEqual([['cancel_connect','plaid-operation']]);c.dispose();
   });
   it.each(['canceled','failed','unsupported'])('shows native Plaid %s outcome and allows a deliberate new flow only after terminal receipt',async outcome=>{
     const f=fixture(),c=new DetailsController(f.ports);await c.start();

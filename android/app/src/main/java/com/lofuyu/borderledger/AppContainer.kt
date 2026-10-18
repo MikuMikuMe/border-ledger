@@ -15,9 +15,6 @@ import com.lofuyu.borderledger.auth.CallbackConfiguration
 import com.lofuyu.borderledger.auth.EncryptedCaptureCredentialProvider
 import com.lofuyu.borderledger.auth.EncryptedOwnerSessionStore
 import com.lofuyu.borderledger.auth.OwnerSessionManager
-import com.lofuyu.borderledger.bank.PlaidLinkCoordinator
-import com.lofuyu.borderledger.bank.PlaidLinkLauncher
-import com.lofuyu.borderledger.bank.UnsupportedPlaidLinkLauncher
 import com.lofuyu.borderledger.accounts.AccountRepository
 import com.lofuyu.borderledger.accounts.HttpWorkerAccountConnectionGateway
 import com.lofuyu.borderledger.capture.BankNotificationListenerRuntime
@@ -61,8 +58,6 @@ class AppContainer(
     captureApi: CaptureApi? = null,
     /** Empty by default; production capture stays disabled until approved configuration is injected. */
     captureProfileProvider: CaptureSourceProfileProvider = MutableSourceProfileRegistry(),
-    /** Injectable official Plaid Link bridge; the safe default reports unsupported. */
-    plaidLinkLauncher: PlaidLinkLauncher = UnsupportedPlaidLinkLauncher,
     deviceId: String = deviceIdentity(context),
 ) {
     private val appContext = context.applicationContext
@@ -160,7 +155,6 @@ class AppContainer(
             ownerCredentials = ownerSessionManager,
         ),
     )
-    val plaidLinkCoordinator = PlaidLinkCoordinator(accountRepository, plaidLinkLauncher)
     val reportingPreferencesRepository: ReportingPreferencesRepository = HttpWorkerReportingPreferencesRepository(
         origin = BuildConfig.MOBILE_API_ORIGIN,
         environment = BuildConfig.MOBILE_ENVIRONMENT,

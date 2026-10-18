@@ -45,7 +45,7 @@ export function AppShellScreen({ dark, initialDestination, onAbout, onSignOut }:
         <View style={styles.header}>
           <View>
             <Text style={[styles.brand, dark && styles.textDark]}>Border Ledger</Text>
-            <Text style={[styles.kicker, dark && styles.mutedDark]}>NATIVE PREVIEW</Text>
+            <Text style={[styles.kicker, dark && styles.mutedDark]}>PERSONAL FINANCE</Text>
           </View>
           <Pressable onPress={onAbout} accessibilityRole="button" style={({ pressed }) => [styles.about, pressed && styles.pressed]}>
             <Text style={[styles.aboutText, dark && styles.accentDark]}>About</Text>

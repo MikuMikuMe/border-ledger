@@ -82,6 +82,11 @@ describe('F04/F13 native durable writes',()=>{
     await gate.submit('fixture_op_1',async()=>op('revision_conflict'),async()=>null);
     expect(gate.current()).toMatchObject({blocked:false,status:'revision_conflict'});
   });
+  it('treats a definitive server rejection as terminal rather than an unresolved write',async()=>{
+    const gate=new MutationGate(); await gate.recover(async()=>[]);
+    await gate.submit('fixture_op_1',async()=>op('rejected'),async()=>null);
+    expect(gate.current()).toEqual({blocked:false,status:'rejected'});
+  });
   it('does not let a recovery read unlock a write before its native journal claim',async()=>{
     const gate=new MutationGate();await gate.recover(async()=>[]);let finish!:(value:any)=>void;
     const write=gate.submit('fixture_op_1',()=>new Promise(resolve=>{finish=resolve;}),async()=>null);

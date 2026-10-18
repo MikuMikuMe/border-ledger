@@ -3,7 +3,8 @@ package com.lofuyu.borderledger.react
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import androidx.lifecycle.lifecycleScope
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -19,6 +20,7 @@ import kotlinx.coroutines.launch
 abstract class BorderLedgerReactActivity : ReactActivity(), NativeServiceHost {
     protected val services get() = (application as BorderLedgerApplication).nativeServices
     private var plaid: OfficialPlaidLinkLauncher? = null
+    private var documentPicker: ActivityResultLauncher<Intent>? = null
     private var plaidCallbackIdentity = PlaidCallbackIdentity()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -27,12 +29,25 @@ abstract class BorderLedgerReactActivity : ReactActivity(), NativeServiceHost {
         supportFragmentManager.fragmentFactory = RNScreensFragmentFactory()
         super.onCreate(savedInstanceState)
         plaidCallbackIdentity = PlaidCallbackIdentity(savedInstanceState?.getString(PLAID_OPERATION_ID))
-        plaid = OfficialPlaidLinkLauncher(this) { result, callbackOperationId ->
-            val claimedOperationId = plaidCallbackIdentity.claim(callbackOperationId)
+        documentPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            services.external.noteDocumentResultReceived()
             services.scope.launch {
-                services.external.handlePlaid(result, claimedOperationId)
+                runCatching {
+                    services.external.handleDocumentResult(result.data?.data, result.resultCode == RESULT_OK)
+                }
             }
         }
+        plaid = OfficialPlaidLinkLauncher(
+            activity = this,
+            onOrphanedResult = { result, callbackOperationId ->
+                val claimedOperationId = plaidCallbackIdentity.claim(callbackOperationId)
+                services.external.notePlaidCallbackReceived(claimedOperationId)
+                services.scope.launch {
+                    services.external.handlePlaid(result, claimedOperationId)
+                }
+            },
+            onResultReceived = services.external::notePlaidCallbackReceived,
+        )
         services.host = this
     }
 
@@ -46,6 +61,7 @@ abstract class BorderLedgerReactActivity : ReactActivity(), NativeServiceHost {
         services.host = this
         services.scope.launch {
             runCatching { services.resume() }
+            runCatching { services.external.noteActivityResumed() }
             val enabled = androidx.core.app.NotificationManagerCompat
                 .getEnabledListenerPackages(this@BorderLedgerReactActivity).contains(packageName)
             services.container.captureOnboarding.setNotificationAccess(
@@ -86,44 +102,30 @@ abstract class BorderLedgerReactActivity : ReactActivity(), NativeServiceHost {
     override fun openNotificationSettings() = openCaptureSettings(false)
     override fun openAppNotificationSettings() = openCaptureSettings(true)
 
-    @Suppress("DEPRECATION")
     override fun launchImport(operationId: String) {
-        lifecycleScope.launch {
-            startActivityForResult(
-                Intent(Intent.ACTION_OPEN_DOCUMENT)
-                    .addCategory(Intent.CATEGORY_OPENABLE)
-                    .setType("text/*"),
-                services.external.requestCode(operationId),
-            )
-        }
+        requireNotNull(documentPicker).launch(
+            Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("text/*"),
+        )
     }
 
-    @Suppress("DEPRECATION")
     override fun launchExport(operationId: String) {
-        lifecycleScope.launch {
-            startActivityForResult(
-                services.container.exportCoordinator.createSaveDocumentIntent(),
-                services.external.requestCode(operationId),
-            )
-        }
+        requireNotNull(documentPicker).launch(
+            services.container.exportCoordinator.createSaveDocumentIntent(),
+        )
     }
 
-    override suspend fun launchPlaid(linkToken: String, operationId: String): PlaidLinkResult {
+    override suspend fun launchPlaid(
+        linkToken: String,
+        operationId: String,
+        onProviderLaunchStarted: suspend () -> Unit,
+    ): PlaidLinkResult {
         plaidCallbackIdentity.begin(operationId)
         return try {
-            requireNotNull(plaid).launch(linkToken, operationId)
+            requireNotNull(plaid).launch(linkToken, operationId, onProviderLaunchStarted)
         } finally {
             plaidCallbackIdentity.complete(operationId)
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        services.scope.launch {
-            runCatching {
-                services.external.handleDocumentResult(requestCode, data?.data, resultCode == RESULT_OK)
-            }
         }
     }
 

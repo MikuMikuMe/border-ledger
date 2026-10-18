@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = $PSScriptRoot
 $launcher = Join-Path $root 'app/src/main/java/com/lofuyu/borderledger/bank/OfficialPlaidLinkLauncher.kt'
-$coordinator = Join-Path $root 'app/src/main/java/com/lofuyu/borderledger/bank/PlaidLinkCoordinator.kt'
+$container = Join-Path $root 'app/src/main/java/com/lofuyu/borderledger/AppContainer.kt'
 $activity = Join-Path $root 'app/src/main/java/com/lofuyu/borderledger/react/BorderLedgerReactActivity.kt'
 $build = Join-Path $root 'app/build.gradle.kts'
 
@@ -24,7 +24,7 @@ function Assert-NotContains([string]$Path, [string]$Needle, [string]$Label) {
     }
 }
 
-foreach ($path in @($launcher, $coordinator, $activity, $build)) { Assert-File $path }
+foreach ($path in @($launcher, $container, $activity, $build)) { Assert-File $path }
 
 Assert-Contains $launcher 'registerForActivityResult(OpenPlaidLink())' 'official Activity Result bridge'
 Assert-Contains $launcher 'onOrphanedResult' 'ActivityResult recovery handoff'
@@ -37,8 +37,10 @@ Assert-Contains $launcher 'PlaidLinkResult.Canceled' 'explicit cancellation mapp
 Assert-Contains $launcher 'PlaidLinkResult.Failed' 'explicit SDK error mapping'
 Assert-NotContains $launcher 'accessToken' 'provider access-token handling'
 Assert-NotContains $launcher 'clientSecret' 'Plaid secret handling'
-Assert-Contains $coordinator 'fun attachLauncher' 'Activity bridge attachment boundary'
-Assert-Contains $activity 'OfficialPlaidLinkLauncher(this)' 'production bridge wiring'
+Assert-Contains $activity 'activity = this,' 'production bridge wiring'
+Assert-Contains $activity 'ActivityResultContracts.StartActivityForResult()' 'restorable document-picker registration'
+Assert-Contains $activity 'noteDocumentResultReceived()' 'document-picker result recovery marker'
+Assert-NotContains $container 'PlaidLinkCoordinator(' 'legacy screen coordinator construction'
 Assert-Contains $build 'implementation(libs.plaid.link.sdk)' 'official SDK dependency'
 
 $versions = Join-Path $root 'gradle/libs.versions.toml'

@@ -44,6 +44,8 @@ internal class BridgeSupport(private val runtime: NativeServiceRuntime) {
                 promise.reject("revision_conflict", "Refresh before saving.")
             } catch (_: com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.Offline) {
                 promise.reject("offline", "The service is offline.")
+            } catch (_: com.lofuyu.borderledger.accounts.AccountRequestRejected) {
+                promise.reject("request_rejected", "The server rejected this request. Refresh the data and review before trying again.")
             } catch (_: Exception) {
                 // Never forward a Throwable, its message, stack, URL or provider error to JS.
                 promise.reject("native_unavailable", "The native service could not complete the request. Reconcile submitted operations before continuing.")

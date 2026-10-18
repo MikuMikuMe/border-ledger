@@ -6,7 +6,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
 
-/** Explicitly registered only in the debug host. Production launcher remains Compose. */
+/** Explicitly registered only in the debug host; production and probe launchers share this native bridge. */
 class NativeServicePackage(private val runtime: NativeServiceRuntime): BaseReactPackage() {
     override fun getModule(name: String, context: ReactApplicationContext): NativeModule? = when(name) {
         "NativeSession" -> SessionModule(context,runtime)

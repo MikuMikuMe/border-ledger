@@ -140,6 +140,21 @@ interface AccountHttpTransport {
     suspend fun execute(request: MobileRequest): ByteArray
 }
 
+/** A Worker-confirmed, non-retryable client rejection; carries no response text or secrets. */
+internal class AccountRequestRejected(val statusCode: Int) : Exception()
+
+internal fun accountHttpFailure(status: Int, errorBody: String?): Exception {
+    if(status==401 || status==403) return TransportFailure.Unauthorized
+    val retryable=errorBody?.let { body ->
+        runCatching { JSONObject(body).opt("retryable") as? Boolean }.getOrNull()
+    }
+    if(status in 400..499 && retryable==false) return AccountRequestRejected(status)
+    return when(status) {
+        404, 501 -> TransportFailure.Unavailable
+        else -> TransportFailure.Retryable
+    }
+}
+
 private class UrlConnectionAccountHttpTransport : AccountHttpTransport {
     override suspend fun execute(request: MobileRequest): ByteArray = withContext(Dispatchers.IO) {
         val connection = try {
@@ -155,11 +170,7 @@ private class UrlConnectionAccountHttpTransport : AccountHttpTransport {
         } catch (_: IOException) { throw TransportFailure.Offline }
         try {
             val status = connection.responseCode
-            if (status !in 200..299) throw when (status) {
-                401, 403 -> TransportFailure.Unauthorized
-                404, 501 -> TransportFailure.Unavailable
-                else -> TransportFailure.Retryable
-            }
+            if (status !in 200..299) throw accountHttpFailure(status, readSmallErrorBody(connection))
             if (status == 204) return@withContext ByteArray(0)
             val stream = connection.inputStream
             val output = ByteArrayOutputStream()
@@ -177,6 +188,27 @@ private class UrlConnectionAccountHttpTransport : AccountHttpTransport {
             output.toByteArray()
         } catch (error: TransportFailure) { throw error } catch (_: IOException) { throw TransportFailure.Offline } finally { connection.disconnect() }
     }
+
+    private fun readSmallErrorBody(connection: HttpURLConnection): String? {
+        val stream=connection.errorStream ?: return null
+        return try {
+            stream.use { input ->
+                val output=ByteArrayOutputStream()
+                val buffer=ByteArray(2048)
+                var total=0
+                while(true) {
+                    val count=input.read(buffer)
+                    if(count<0) break
+                    total+=count
+                    if(total>MAX_ERROR_BODY_BYTES) return null
+                    output.write(buffer,0,count)
+                }
+                output.toString(StandardCharsets.UTF_8.name())
+            }
+        } catch(_: Exception) { null }
+    }
+
+    private companion object { const val MAX_ERROR_BODY_BYTES=16*1024 }
 }
 
 private fun JSONObject.toConnectionOperation(): ConnectionOperation = ConnectionOperation(

@@ -81,13 +81,13 @@ export class MutationGate {
     const epoch=++this.epoch;
     this.update(true,'checking');
     try {let offset=0;let pending=false;let page:Operation[];
-      do {page=await read(offset,100);if(epoch!==this.epoch)return;pending ||=page.some(op=>!['completed','revision_conflict','canceled','failed_local'].includes(op.status));offset+=page.length;}while(page.length===100);
+      do {page=await read(offset,100);if(epoch!==this.epoch)return;pending ||=page.some(op=>!['completed','revision_conflict','canceled','failed_local','rejected'].includes(op.status));offset+=page.length;}while(page.length===100);
       if(epoch===this.epoch)this.update(pending,pending?'reconciliation_required':'ready');
     }catch{if(epoch===this.epoch)this.update(true,'reconciliation_required');}
   }
   async submit(id:string,write:()=>Promise<Operation>,query:(id:string)=>Promise<Operation|null>) {
     if(this.state.blocked)return;++this.epoch;this.update(true,'saving');let result:Operation|null=null;
     try{result=await write();}catch{try{result=await query(id);}catch{/* Never replay a submitted write. */}}
-    const status=result?.status??'reconciliation_required';this.update(!['completed','revision_conflict','canceled','failed_local'].includes(status),status);
+    const status=result?.status??'reconciliation_required';this.update(!['completed','revision_conflict','canceled','failed_local','rejected'].includes(status),status);
   }
 }
