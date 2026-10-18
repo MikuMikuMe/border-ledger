@@ -175,6 +175,16 @@ type PlaidQueueMessage = {
 };
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
+const ANDROID_ASSET_LINKS = [{
+  relation: ['delegate_permission/common.handle_all_urls'],
+  target: {
+    namespace: 'android_app',
+    package_name: 'com.lofuyu.borderledger',
+    sha256_cert_fingerprints: [
+      '1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED',
+    ],
+  },
+}];
 const PLAID_SYNC_CONNECTION_PREFIX = 'plaid:';
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_WEBHOOK_BODY_BYTES = 256 * 1024;
@@ -939,6 +949,22 @@ async function handlePreferencesRequest(request: Request, env: Env) {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === '/.well-known/assetlinks.json') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response(null, {
+          status: 405,
+          headers: { ...staticSecurityHeaders(), allow: 'GET, HEAD' },
+        });
+      }
+      return new Response(request.method === 'HEAD' ? null : JSON.stringify(ANDROID_ASSET_LINKS), {
+        status: 200,
+        headers: {
+          ...staticSecurityHeaders(),
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'public, max-age=300',
+        },
+      });
+    }
     const isApplicationOrigin = isAllowedApplicationOrigin(request, env.LEDGER_APP_ORIGIN);
     if (!url.pathname.startsWith('/api/')) {
       if (env.LEDGER_APP_ORIGIN && !isApplicationOrigin) {
