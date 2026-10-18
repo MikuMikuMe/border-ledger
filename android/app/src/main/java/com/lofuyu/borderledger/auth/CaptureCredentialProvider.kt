@@ -8,19 +8,6 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 
-data class CaptureCredentialRecord(
-    val credential: String,
-    val deviceId: String,
-    val generation: Int,
-    val expiresAt: String,
-    val revocationCapability: String,
-)
-
-interface CaptureCredentialProvider {
-    suspend fun current(): CaptureCredentialRecord?
-    suspend fun save(value: CaptureCredentialRecord)
-    suspend fun clear()
-}
 
 class EncryptedCaptureCredentialProvider(private val records: EncryptedRecordStore) : CaptureCredentialProvider {
     override suspend fun current(): CaptureCredentialRecord? = records.read(LedgerRecord.CAPTURE_CREDENTIAL)?.let(::decode)

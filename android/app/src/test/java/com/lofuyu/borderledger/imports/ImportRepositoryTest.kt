@@ -137,6 +137,20 @@ class ImportRepositoryTest {
     }
 
     @Test
+    fun resetDropsThePriorOwnersDraftAndStableCommitIdentity() = runTest {
+        val gateway = RecordingImportGateway()
+        val repository = ImportRepository(gateway)
+        repository.preview(validDocument(), "account-a", "preview-owner-a")
+        repository.commit(operationId = "commit-owner-a")
+
+        repository.reset()
+
+        assertEquals(ImportState.Idle, repository.state.value)
+        assertTrue(repository.retryCommit() == null)
+        assertEquals(1, gateway.commitRequests.size)
+    }
+
+    @Test
     fun chunkLimitMatchesTheWorkerBodyLimit() {
         assertEquals(64 * 1024, ImportChunker.MAX_CHUNK_BYTES)
         assertTrue(ImportChunker.MAX_CHUNK_BYTES < WORKER_MAX_CHUNK_BYTES)

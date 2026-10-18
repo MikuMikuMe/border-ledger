@@ -1,0 +1,67 @@
+package com.lofuyu.borderledger.react
+
+import com.facebook.react.bridge.*
+import com.lofuyu.borderledger.api.TransportFailure
+import com.lofuyu.borderledger.auth.OwnerSessionState
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
+
+internal class BridgeSupport(private val runtime: NativeServiceRuntime) {
+    private val observers = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    fun close() = observers.cancel()
+    fun observe(group: String, emit: () -> Unit) {
+        observers.launch { runtime.changes.collect { if (it == group || it == "all") runCatching(emit) } }
+    }
+    fun observeSuspending(group: String, emit: suspend () -> Unit) {
+        observers.launch { runtime.changes.collect { if(it==group || it=="all") try { emit() } catch(_: Exception) { } } }
+    }
+    fun <T> observeState(flow: kotlinx.coroutines.flow.Flow<T>, emit: (T) -> Unit) {
+        observers.launch { flow.collect { runCatching { emit(it) } } }
+    }
+    fun <T> observeStateSuspending(flow: kotlinx.coroutines.flow.Flow<T>, emit: suspend (T) -> Unit) {
+        observers.launch { flow.collect { try { emit(it) } catch(_: Exception) { } } }
+    }
+    fun call(promise: Promise, owner: Boolean = true, block: suspend () -> Any?) {
+        runtime.scope.launch {
+            try {
+                val generation = if (owner) runtime.ownerGeneration() else null
+                val result = block()
+                if (owner) check(runtime.currentGeneration() == generation && runtime.container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
+                promise.resolve(nativeValue(result))
+            } catch (error: BridgeFailure) {
+                promise.reject(error.code, "Refresh native service state before continuing.")
+            } catch (_: CancellationException) {
+                promise.reject("interrupted", "The native operation was interrupted. Query its operation ID before continuing.")
+            } catch (_: IllegalArgumentException) {
+                promise.reject("invalid_request", "The request is not valid.")
+            } catch (_: TransportFailure.Unauthorized) {
+                promise.reject("unauthorized", "Owner authorization is required.")
+            } catch (_: TransportFailure.Offline) {
+                promise.reject("offline", "The service is offline.")
+            } catch (_: com.lofuyu.borderledger.recurring.RecurringRevisionConflict) {
+                promise.reject("revision_conflict", "Refresh before saving.")
+            } catch (_: com.lofuyu.borderledger.review.ReviewRevisionConflict) {
+                promise.reject("revision_conflict", "Refresh before saving.")
+            } catch (_: com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.Offline) {
+                promise.reject("offline", "The service is offline.")
+            } catch (_: Exception) {
+                // Never forward a Throwable, its message, stack, URL or provider error to JS.
+                promise.reject("native_unavailable", "The native service could not complete the request. Reconcile submitted operations before continuing.")
+            }
+        }
+    }
+    companion object {
+        fun nativeValue(value: Any?): Any? = when(value) {
+            null, is String, is Boolean, is Double, is Int -> value
+            is Map<*, *> -> Arguments.createMap().apply { value.forEach { (k,v) -> put(this, k as String, nativeValue(v)) } }
+            is List<*> -> Arguments.createArray().apply { value.forEach { v -> when(val n = nativeValue(v)) { null -> pushNull(); is String -> pushString(n); is Boolean -> pushBoolean(n); is Int -> pushInt(n); is Double -> pushDouble(n); is WritableMap -> pushMap(n); is WritableArray -> pushArray(n); else -> error("Invalid native value") } } }
+            else -> error("Unprojected native value")
+        }
+        private fun put(map: WritableMap, key: String, value: Any?) { when(value) { null -> map.putNull(key); is String -> map.putString(key,value); is Boolean -> map.putBoolean(key,value); is Int -> map.putInt(key,value); is Double -> map.putDouble(key,value); is WritableMap -> map.putMap(key,value); is WritableArray -> map.putArray(key,value); else -> error("Invalid native value") } }
+        fun map(value: Map<String, Any?>) = nativeValue(value) as WritableMap
+    }
+}
+
+internal fun ReadableMap.text(key: String): String? = if (hasKey(key) && !isNull(key)) getString(key) else null
+internal fun ReadableMap.integer(key: String): Int { val value = getDouble(key); require(value.isFinite() && value == value.toInt().toDouble()); return value.toInt() }
+internal fun ReadableArray.strings(): List<String> = (0 until size()).map { requireNotNull(getString(it)) }

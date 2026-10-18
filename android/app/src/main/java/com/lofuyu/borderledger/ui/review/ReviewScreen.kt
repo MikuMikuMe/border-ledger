@@ -102,8 +102,10 @@ fun ReviewScreen(
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(review.reason, style = MaterialTheme.typography.titleMedium)
                             review.candidateLabel?.let { Text("Candidate: $it") }
-                            if (review.currency != null && review.affectedMinorUnits != null) {
-                                Text("Affected: ${formatMinorUnits(review.affectedMinorUnits, review.currency)}")
+                            val currency = review.currency
+                            val affectedMinorUnits = review.affectedMinorUnits
+                            if (currency != null && affectedMinorUnits != null) {
+                                Text("Affected: ${formatMinorUnits(affectedMinorUnits, currency)}")
                             }
                             Text("Status: ${review.status}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text("Keep separate — disabled", color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -1,6 +1,6 @@
 [versions]
-agp = "8.13.2"
-kotlin = "2.2.20"
+agp = "9.2.1"
+kotlin = "2.4.21"
 composeBom = "2025.10.00"
 activity = "1.11.0"
 junit = "4.13.2"
@@ -22,11 +22,13 @@ lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", v
 work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 plaid-link-sdk = { module = "com.plaid.link:sdk-core", version.ref = "plaidLink" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 

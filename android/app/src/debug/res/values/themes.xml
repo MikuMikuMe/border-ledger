@@ -1,0 +1,4 @@
+<resources>
+    <!-- ReactActivity requires AppCompat; the production Compose theme stays unchanged. -->
+    <style name="Theme.BorderLedger.ReactNative" parent="Theme.AppCompat.DayNight.NoActionBar" />
+</resources>

@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - android/**
+      - mobile/**
+      - shared/**
       - src/**
       - index.html
       - contracts/**
@@ -18,6 +20,8 @@ on:
   push:
     paths:
       - android/**
+      - mobile/**
+      - shared/**
       - src/**
       - index.html
       - contracts/**
@@ -69,8 +73,18 @@ jobs:
     needs: android-toolchain
     if: needs.android-toolchain.outputs.available == 'true'
     runs-on: windows-latest
+    env:
+      ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install React Native dependencies
+        working-directory: mobile
+        run: npm ci
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -79,7 +93,7 @@ jobs:
         with:
           # The action's historical default includes the removed `tools`
           # package. Install only packages required by this project.
-          packages: platform-tools platforms;android-36 build-tools;36.0.0
+          packages: platform-tools platforms;android-37 build-tools;36.0.0
       - name: Run Android lint and unit tests
         working-directory: android
         shell: pwsh

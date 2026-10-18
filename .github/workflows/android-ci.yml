@@ -37,8 +37,33 @@ jobs:
     needs: static-release-gates
     if: needs.static-release-gates.outputs.toolchain_available == 'true'
     runs-on: windows-latest
+    env:
+      ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+      - name: Install independent web test tooling
+        run: npm ci
+      - name: Validate React Native package
+        working-directory: mobile
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run typecheck
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run codegen
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run bundle:release
+          exit $LASTEXITCODE
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -47,11 +72,96 @@ jobs:
         with:
           # The action's historical default includes the removed `tools`
           # package. Install only packages required by this project.
-          packages: platform-tools platforms;android-36 build-tools;36.0.0
+          packages: platform-tools platforms;android-37 build-tools;36.0.0
       - name: Run Android lint, unit tests, and unsigned release assembly
         working-directory: android
         shell: pwsh
-        run: .\gradlew.bat lintDebug testDebugUnitTest assembleRelease --no-daemon
+        run: |
+          .\gradlew.bat lintDebug testDebugUnitTest :sharedCore:testAndroidHostTest assembleDebug --no-daemon
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\gradlew.bat assembleRelease -PmobileEnvironment=production --no-daemon
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\react-native-host-check.ps1 -Merged
+
+  ios-core:
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install isolated mobile graph for Gradle autolinking
+        working-directory: mobile
+        run: npm ci
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37 build-tools;36.0.0
+      - name: Require specified macOS and Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sw_vers -productVersion | cut -d. -f1)" = 26
+          test "$(xcodebuild -version | head -n1)" = 'Xcode 26.4.1'
+          xcodebuild -version
+      - name: Compile and link both iOS core targets
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash gradlew :sharedCore:compileKotlinIosArm64 :sharedCore:compileKotlinIosSimulatorArm64 :sharedCore:linkDebugFrameworkIosArm64 :sharedCore:linkDebugFrameworkIosSimulatorArm64 --no-daemon --console=plain
+          test -f ../shared/core/build/bin/iosArm64/debugFramework/BorderLedgerCore.framework/BorderLedgerCore
+          test -f ../shared/core/build/bin/iosSimulatorArm64/debugFramework/BorderLedgerCore.framework/BorderLedgerCore
+          file ../shared/core/build/bin/iosArm64/debugFramework/BorderLedgerCore.framework/BorderLedgerCore
+          file ../shared/core/build/bin/iosSimulatorArm64/debugFramework/BorderLedgerCore.framework/BorderLedgerCore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-core-frameworks
+          path: shared/core/build/bin/*/debugFramework/
+          if-no-files-found: error
+
+  android-instrumentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+        working-directory: mobile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37 build-tools;36.0.0
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          disable-animations: true
+          script: cd android && bash gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=x86_64 --no-daemon --console=plain
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-instrumentation-results
+          path: android/app/build/reports/androidTests/
+          if-no-files-found: error
 
   android-build-gated:
     needs: static-release-gates

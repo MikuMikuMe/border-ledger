@@ -3,9 +3,12 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const APP_WORKFLOW = resolve(process.cwd(), '.github/workflows/app-build.yml');
+const DEPLOY_WORKFLOW = resolve(process.cwd(), '.github/workflows/deploy.yml');
 
 const APP_PATH_ALLOWLIST = [
   'android/**',
+  'mobile/**',
+  'shared/**',
   'src/**',
   'index.html',
   'contracts/**',
@@ -62,6 +65,10 @@ describe('app-build workflow path contract', () => {
 
     const appChanges = [
       'android/app/src/main/AndroidManifest.xml',
+      'mobile/src/App.tsx',
+      'mobile/package-lock.json',
+      'shared/core/src/commonMain/kotlin/OwnerSessionCore.kt',
+      'shared/threads/ThreadGeometry.ts',
       'src/App.tsx',
       'index.html',
       'contracts/mobile-v1.openapi.yaml',
@@ -96,5 +103,14 @@ describe('app-build workflow path contract', () => {
     expect(source).toContain('testDebugUnitTest');
     expect(source).not.toContain('assembleRelease');
     expect(source).not.toMatch(/secrets\./);
+  });
+});
+
+describe('production Worker deployment workflow', () => {
+  it('restricts workflow_dispatch deployments to the main branch', () => {
+    const source = readFileSync(DEPLOY_WORKFLOW, 'utf8');
+
+    expect(source).toMatch(/^  workflow_dispatch:\s*$/m);
+    expect(source).toMatch(/^    if: github\.ref == ['"]refs\/heads\/main['"]\s*$/m);
   });
 });

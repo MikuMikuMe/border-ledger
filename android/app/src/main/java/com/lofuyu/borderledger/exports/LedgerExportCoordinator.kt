@@ -135,6 +135,11 @@ class LedgerExportCoordinator(
     private val _state = MutableStateFlow<ExportState>(ExportState.Idle)
     val state: StateFlow<ExportState> = _state.asStateFlow()
 
+    /** Drop the in-memory destination/receipt when the authenticated owner changes. */
+    fun reset() {
+        _state.value = ExportState.Idle
+    }
+
     suspend fun export(
         request: LedgerExportRequest,
         destination: ExportDestination,

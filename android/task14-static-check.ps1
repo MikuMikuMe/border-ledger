@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $launcher = Join-Path $root 'app/src/main/java/com/lofuyu/borderledger/bank/OfficialPlaidLinkLauncher.kt'
 $coordinator = Join-Path $root 'app/src/main/java/com/lofuyu/borderledger/bank/PlaidLinkCoordinator.kt'
-$activity = Join-Path $root 'app/src/main/java/com/lofuyu/borderledger/MainActivity.kt'
+$activity = Join-Path $root 'app/src/main/java/com/lofuyu/borderledger/react/BorderLedgerReactActivity.kt'
 $build = Join-Path $root 'app/build.gradle.kts'
 
 function Assert-File([string]$Path) {

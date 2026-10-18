@@ -1,16 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <application android:label="Border Ledger Probe" tools:replace="android:label">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="Border Ledger Probe" android:usesCleartextTraffic="true" tools:replace="android:label">
         <activity android:name="com.lofuyu.borderledger.MainActivity" tools:node="remove" />
-        <activity android:name="com.lofuyu.borderledger.auth.AuthCallbackActivity" tools:node="remove" />
         <service android:name="com.lofuyu.borderledger.capture.BankNotificationListenerService" tools:node="remove" />
-        <activity android:name="com.lofuyu.borderledger.debug.ProbeActivity"
+        <activity android:name="com.lofuyu.borderledger.react.ReactNativeActivity"
+            android:theme="@style/Theme.BorderLedger.ReactNative"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name="com.lofuyu.borderledger.debug.ProbeActivity" android:exported="false" />
         <activity android:name="com.lofuyu.borderledger.debug.FxReportPreviewActivity" android:exported="true">
             <intent-filter>
                 <action android:name="com.lofuyu.borderledger.debug.FX_REPORT_PREVIEW" />

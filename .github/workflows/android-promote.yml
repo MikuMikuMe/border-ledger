@@ -1,0 +1,84 @@
+name: Promote Android release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact Android candidate release tag to promote
+        required: true
+        type: string
+      source_sha:
+        description: Candidate source SHA accepted by the release checklist
+        required: true
+        type: string
+      apk_sha256:
+        description: Candidate APK SHA-256 from its manifest and acceptance record
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: android-production-publish
+    permissions:
+      contents: write
+    steps:
+      # Promotion changes draft metadata only: it never checks out, rebuilds,
+      # re-signs, uploads, or replaces the APK accepted during the candidate run.
+      - name: Validate the accepted source and release identity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPECTED_APK_SHA256: ${{ inputs.apk_sha256 }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_CERT_SHA256: 1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Only main may promote an Android release.' }
+          if ($env:EXPECTED_SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'source_sha must be a full commit SHA.' }
+          if ($env:EXPECTED_SOURCE_SHA.ToLowerInvariant() -ne $env:GITHUB_SHA.ToLowerInvariant()) { throw 'Promotion must run on the exact accepted source SHA at main.' }
+          if ($env:EXPECTED_APK_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'apk_sha256 must be a full SHA-256 digest.' }
+          if ($env:RELEASE_TAG -notmatch '^android-v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'The release tag is not a supported Android version tag.' }
+
+          $main = (& gh api --repo $env:GITHUB_REPOSITORY "repos/$env:GITHUB_REPOSITORY/commits/main" --jq .sha).Trim()
+          if ($LASTEXITCODE -ne 0 -or $main.ToLowerInvariant() -ne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) { throw 'The accepted candidate is no longer the exact current main tree.' }
+          $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,assets,tagName
+          if ($LASTEXITCODE -ne 0) { throw 'The named candidate release could not be read.' }
+          $release = $releaseJson | ConvertFrom-Json
+          if (-not $release.isDraft) { throw 'The candidate is not an unpublished draft.' }
+          if ($release.tagName -ne $env:RELEASE_TAG) { throw 'GitHub returned a different release tag.' }
+
+          $directory = Join-Path $env:RUNNER_TEMP 'accepted-android-candidate'
+          New-Item -ItemType Directory -Path $directory | Out-Null
+          & gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern '*.apk' --pattern SHA256SUMS.txt --pattern candidate-manifest.json --dir $directory
+          if ($LASTEXITCODE -ne 0) { throw 'The candidate APK, checksum, and manifest could not all be downloaded.' }
+          $apk = @(Get-ChildItem -LiteralPath $directory -Filter '*.apk' -File)
+          if ($apk.Count -ne 1) { throw 'Expected exactly one APK in the candidate release.' }
+          $manifest = Get-Content -Raw -LiteralPath (Join-Path $directory 'candidate-manifest.json') | ConvertFrom-Json
+          if ($manifest.sourceSha.ToLowerInvariant() -ne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) { throw 'Candidate manifest source SHA does not match the accepted source.' }
+          if ($manifest.apkFileName -ne $apk[0].Name) { throw 'Candidate manifest APK name does not match the downloaded APK.' }
+          if ($manifest.packageId -ne 'com.lofuyu.borderledger' -or $manifest.mobileEnvironment -ne 'production') { throw 'Candidate package or production environment is incorrect.' }
+          if ($manifest.signingCertificateSha256 -ne $env:EXPECTED_CERT_SHA256) { throw 'Candidate certificate is not the existing Samsung/App Links signer.' }
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $apk[0].FullName).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:EXPECTED_APK_SHA256.ToLowerInvariant() -or $actualHash -ne $manifest.apkSha256.ToLowerInvariant()) { throw 'Candidate APK bytes do not match the accepted SHA-256.' }
+          $sumLine = Get-Content -Raw -LiteralPath (Join-Path $directory 'SHA256SUMS.txt')
+          $escapedApkName = [regex]::Escape($apk[0].Name)
+          if ($sumLine -notmatch "(?m)^$actualHash\s+$escapedApkName\s*$") { throw 'Published SHA256SUMS.txt does not match the APK bytes.' }
+          "Verified release tag $env:RELEASE_TAG at source $env:EXPECTED_SOURCE_SHA with APK SHA-256 $actualHash."
+
+      - name: Publish the exact accepted APK bytes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          & gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=false
+          if ($LASTEXITCODE -ne 0) { throw "Could not promote draft release $env:RELEASE_TAG." }

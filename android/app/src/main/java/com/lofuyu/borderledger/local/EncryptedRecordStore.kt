@@ -6,11 +6,7 @@ import java.io.File
 import java.io.IOException
 
 /** Named encrypted records; the interface can be replaced by Room/SQLCipher without changing callers. */
-interface EncryptedRecordStore {
-    suspend fun read(record: String): ByteArray?
-    suspend fun write(record: String, value: ByteArray)
-    suspend fun delete(record: String)
-}
+interface EncryptedRecordStore : com.lofuyu.borderledger.core.SecureRecordPort
 
 object LedgerRecord {
     const val OWNER_SESSION = "owner_session"

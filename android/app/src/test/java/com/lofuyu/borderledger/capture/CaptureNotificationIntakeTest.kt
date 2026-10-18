@@ -23,6 +23,31 @@ import java.util.UUID
 
 class CaptureNotificationIntakeTest {
     @Test
+    fun notificationAndUploadCompleteFromNativeStoresWithoutReactRuntimeOrActivity() = runTest {
+        val records=CaptureMemoryStore()
+        val health=CaptureHealthStore()
+        val store=EncryptedCaptureIntakeStore(records)
+        val profiles=MutableSourceProfileRegistry().apply { register(SyntheticNotificationFixtures.bocProfile()) }
+        val intake=syntheticIntake(profiles,store,health)
+        intake.onListenerConnected()
+        val queued=intake.process(SyntheticNotificationFixtures.snapshot())
+        assertEquals(1,queued.queuedEventIds.size)
+        // Reopen the durable store as a background worker would. No AppContainer,
+        // Activity, bridge module, JS host or React runtime is constructed.
+        val reopened=EncryptedCaptureIntakeStore(records)
+        var uploaded=emptyList<String>()
+        val client=object: com.lofuyu.borderledger.api.CaptureUploadClient {
+            override suspend fun upload(batch: List<com.lofuyu.borderledger.api.CaptureUploadEvent>): com.lofuyu.borderledger.api.CaptureUploadResult {
+                uploaded=batch.map { it.eventId }
+                return com.lofuyu.borderledger.api.CaptureUploadResult.Success(batch.map { com.lofuyu.borderledger.api.CaptureEventAcknowledgement(it.eventId,"accepted","provisional",listOf("accepted")) })
+            }
+        }
+        val coordinator=com.lofuyu.borderledger.sync.CaptureUploadCoordinator(reopened,client,health,batchEncoder={byteArrayOf(1)})
+        assertTrue(coordinator.sync() is com.lofuyu.borderledger.sync.UploadSyncResult.Completed)
+        assertEquals(queued.queuedEventIds,uploaded)
+        assertEquals(0,reopened.pendingCount())
+    }
+    @Test
     fun approvedNotificationIsParsedAndQueuedBeforeHealthReportsQueued() = runTest {
         val health = CaptureHealthStore()
         val store = EncryptedCaptureIntakeStore(CaptureMemoryStore())

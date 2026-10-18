@@ -82,10 +82,6 @@ data class CaptureOnboardingState(
     val sourceSetupMessage: String = CAPTURE_SOURCE_SETUP_UNAVAILABLE_MESSAGE,
 )
 
-interface OwnerSessionStateProvider {
-    val state: StateFlow<OwnerSessionState>
-}
-
 /**
  * First-run capture policy. The owner state is read from the real session
  * manager, while capture issue/health calls cross the injected capture API
@@ -204,6 +200,7 @@ class CaptureOnboardingCoordinator(
         _state.value = _state.value.copy(
             selected = CaptureScopeConsent(profile.sourceProfileId, profile.accountId, currency, profile.instrumentHint),
             selectedInstrumentLabel = profile.instrumentLabel,
+            sourceTest = SourceTestResult.NotRun,
             consentRecorded = false,
         ).recalculate()
     }

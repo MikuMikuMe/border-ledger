@@ -1,5 +1,10 @@
 # Android validation baseline
 
+The React Native migration's current cutover gates and repeatable checks are in
+[react-native-validation.md](react-native-validation.md). Historical validation
+below remains evidence for its stated revision; it does not close the RN
+production-session, App Link, accessibility or signed-upgrade gates.
+
 ## Final local verification update — 2026-10-15
 
 The recovered local checkout has now passed the native Android gate with the installed SDK and wrapper: `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleRelease` all succeeded. The release APK was produced unsigned as expected for the local gate. A disposable debug keystore may be used only for local installation checks; no signing material belongs in this repository.

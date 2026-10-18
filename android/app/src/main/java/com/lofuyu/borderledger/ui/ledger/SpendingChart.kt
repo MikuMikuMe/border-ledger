@@ -41,11 +41,12 @@ fun chartTargetUnavailable(report: LedgerReport): String? = report.reportingCurr
  * deterministically.
  */
 fun chartCurrencies(report: LedgerReport, includeProvisional: Boolean): List<String> {
-    if (report.reportingCurrency != null) {
+    val reportingCurrency = report.reportingCurrency
+    if (reportingCurrency != null) {
         return if (chartTargetUnavailable(report) != null || report.convertedDailyTotals.isEmpty()) {
             emptyList()
         } else {
-            listOf(report.reportingCurrency)
+            listOf(reportingCurrency)
         }
     }
     val currencies = (report.currencyTotals.map { it.currency } + report.dailyTotals.map { it.currency })
@@ -54,12 +55,13 @@ fun chartCurrencies(report: LedgerReport, includeProvisional: Boolean): List<Str
 }
 
 fun chartLanes(report: LedgerReport, includeProvisional: Boolean): List<SpendingChartLane> {
-    if (report.reportingCurrency != null) {
+    val reportingCurrency = report.reportingCurrency
+    if (reportingCurrency != null) {
         if (chartTargetUnavailable(report) != null) return emptyList()
         val points = report.convertedDailyTotals
             .sortedBy { it.date }
             .map { daily -> SpendingChartPoint(daily.date, if (includeProvisional) daily.confirmedMinorUnits + daily.provisionalMinorUnits else daily.confirmedMinorUnits) }
-        return if (points.isEmpty()) emptyList() else listOf(SpendingChartLane(report.reportingCurrency, points, points.maxAbs()))
+        return if (points.isEmpty()) emptyList() else listOf(SpendingChartLane(reportingCurrency, points, points.maxAbs()))
     }
     val byCurrency = report.dailyTotals.groupBy { it.currency }
     return chartCurrencies(report, includeProvisional).mapNotNull { currency ->

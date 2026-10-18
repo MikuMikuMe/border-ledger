@@ -17,6 +17,8 @@ import com.lofuyu.borderledger.ui.ledger.LedgerSnapshotDecoder
 import com.lofuyu.borderledger.ui.ledger.LedgerTransactionPage
 import com.lofuyu.borderledger.ui.ledger.LedgerTransactionPageDecodeResult
 import java.time.Instant
+import com.lofuyu.borderledger.core.OwnerReadResult
+import com.lofuyu.borderledger.core.ownerRead
 
 /** Owner-authorized read/cache boundary; capture credentials never enter it. */
 class LedgerRepository(
@@ -98,41 +100,40 @@ class LedgerRepository(
     }
 
     suspend fun refreshOwnerReport(query: OwnerReportQuery): ReportRefreshResult {
-        ownerSession.state.value as? OwnerSessionState.SignedIn ?: return ReportRefreshResult.NotSignedIn
-        val api = ownerLedgerApi ?: return ReportRefreshResult.Unavailable
-        return try {
-            when (val decoded = LedgerSnapshotDecoder.decodeReportSummary(api.readReport(query), query.includeProvisional)) {
-                is LedgerReportDecodeResult.Ready -> ReportRefreshResult.Refreshed(decoded.report)
-                is LedgerReportDecodeResult.Unsupported -> ReportRefreshResult.Unavailable
-            }
-        } catch (_: TransportFailure.Offline) {
-            ReportRefreshResult.Offline
-        } catch (_: TransportFailure.Unauthorized) {
-            readCache.clear()
-            ownerSession.markRemoteAuthorizationFailure()
-            ReportRefreshResult.Unauthorized
-        } catch (_: TransportFailure) {
-            ReportRefreshResult.Unavailable
+        return when (val result = ownerRead(
+            signedIn = ownerSession.state.value is OwnerSessionState.SignedIn,
+            available = ownerLedgerApi != null,
+            unauthorized = ::invalidateOwnerAuthorization,
+            read = { requireNotNull(ownerLedgerApi).readReport(query) },
+            decode = { (LedgerSnapshotDecoder.decodeReportSummary(it, query.includeProvisional) as? LedgerReportDecodeResult.Ready)?.report },
+        )) {
+            is OwnerReadResult.Ready -> ReportRefreshResult.Refreshed(result.value)
+            OwnerReadResult.NotSignedIn -> ReportRefreshResult.NotSignedIn
+            OwnerReadResult.Unavailable -> ReportRefreshResult.Unavailable
+            OwnerReadResult.Offline -> ReportRefreshResult.Offline
+            OwnerReadResult.Unauthorized -> ReportRefreshResult.Unauthorized
         }
     }
 
     suspend fun readOwnerTransactions(query: OwnerTransactionQuery = OwnerTransactionQuery()): ActivityRefreshResult {
-        ownerSession.state.value as? OwnerSessionState.SignedIn ?: return ActivityRefreshResult.NotSignedIn
-        val api = ownerLedgerApi ?: return ActivityRefreshResult.Unavailable
-        return try {
-            when (val decoded = LedgerSnapshotDecoder.decodeTransactions(api.readTransactions(query))) {
-                is LedgerTransactionPageDecodeResult.Ready -> ActivityRefreshResult.Refreshed(decoded.page)
-                is LedgerTransactionPageDecodeResult.Unsupported -> ActivityRefreshResult.Unavailable
-            }
-        } catch (_: TransportFailure.Offline) {
-            ActivityRefreshResult.Offline
-        } catch (_: TransportFailure.Unauthorized) {
-            readCache.clear()
-            ownerSession.markRemoteAuthorizationFailure()
-            ActivityRefreshResult.Unauthorized
-        } catch (_: TransportFailure) {
-            ActivityRefreshResult.Unavailable
+        return when (val result = ownerRead(
+            signedIn = ownerSession.state.value is OwnerSessionState.SignedIn,
+            available = ownerLedgerApi != null,
+            unauthorized = ::invalidateOwnerAuthorization,
+            read = { requireNotNull(ownerLedgerApi).readTransactions(query) },
+            decode = { (LedgerSnapshotDecoder.decodeTransactions(it) as? LedgerTransactionPageDecodeResult.Ready)?.page },
+        )) {
+            is OwnerReadResult.Ready -> ActivityRefreshResult.Refreshed(result.value)
+            OwnerReadResult.NotSignedIn -> ActivityRefreshResult.NotSignedIn
+            OwnerReadResult.Unavailable -> ActivityRefreshResult.Unavailable
+            OwnerReadResult.Offline -> ActivityRefreshResult.Offline
+            OwnerReadResult.Unauthorized -> ActivityRefreshResult.Unauthorized
         }
+    }
+
+    private suspend fun invalidateOwnerAuthorization() {
+        readCache.clear()
+        ownerSession.markRemoteAuthorizationFailure()
     }
 
     suspend fun syncCapture(): UploadSyncResult {

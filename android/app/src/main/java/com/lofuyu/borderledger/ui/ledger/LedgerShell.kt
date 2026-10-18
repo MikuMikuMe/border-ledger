@@ -642,8 +642,9 @@ private fun OverviewDestination(
                         }
                     }
                     item { SpendingChart(fullReport, includeProvisional) }
-                    if (selectedReportingCurrency != null && fullReport.fx.chineseBankBand != null) {
-                        item { ChineseBankBandCard(fullReport.fx.chineseBankBand) }
+                    val chineseBankBand = fullReport.fx.chineseBankBand
+                    if (selectedReportingCurrency != null && chineseBankBand != null) {
+                        item { ChineseBankBandCard(chineseBankBand) }
                     }
                     if (selectedReportingCurrency != null && fullReport.currencyTotals.isNotEmpty()) {
                         item { SectionTitle("Source currency audit") }

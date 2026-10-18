@@ -67,6 +67,9 @@ class AppContainer(
 ) {
     private val appContext = context.applicationContext
     private val records = FileEncryptedRecordStore(appContext, AndroidKeyStoreVault())
+    val bridgeOperations = com.lofuyu.borderledger.react.BridgeOperationJournal(records)
+    // A local generation binds operations to this login without exposing or hashing credentials.
+    internal val bridgeRecords: com.lofuyu.borderledger.core.SecureRecordPort get() = records
 
     val ownerSessionStore = EncryptedOwnerSessionStore(records)
     private val storedCaptureCredentialProvider = EncryptedCaptureCredentialProvider(records)

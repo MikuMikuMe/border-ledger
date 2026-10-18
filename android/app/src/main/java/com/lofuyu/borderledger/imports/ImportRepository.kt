@@ -194,6 +194,12 @@ class ImportRepository(
 
     private var commitOperationId: String? = null
 
+    /** Drop the in-memory draft when the authenticated owner generation changes. */
+    fun reset() {
+        commitOperationId = null
+        _state.value = ImportState.Idle
+    }
+
     suspend fun preview(
         document: DocumentReadResult,
         accountId: String,
