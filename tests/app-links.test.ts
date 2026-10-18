@@ -1,0 +1,68 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import worker from '../worker';
+
+describe('Android App Links metadata', () => {
+  it('runs the association route before the Worker static SPA fallback', () => {
+    const config = JSON.parse(readFileSync(resolve(process.cwd(), 'wrangler.jsonc'), 'utf8'));
+
+    expect(config.assets.run_worker_first).toContain('/.well-known/assetlinks.json');
+  });
+
+  it('ships a static well-known association file so SPA fallback cannot mask it', () => {
+    const assetLinksPath = resolve(process.cwd(), 'public/.well-known/assetlinks.json');
+    expect(existsSync(assetLinksPath)).toBe(true);
+    if (!existsSync(assetLinksPath)) return;
+
+    expect(JSON.parse(readFileSync(assetLinksPath, 'utf8'))).toEqual([
+      {
+        relation: ['delegate_permission/common.handle_all_urls'],
+        target: {
+          namespace: 'android_app',
+          package_name: 'com.lofuyu.borderledger',
+          sha256_cert_fingerprints: [
+            '1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED',
+          ],
+        },
+      },
+    ]);
+  });
+
+  it('serves the production app association directly without an SPA response or redirect', async () => {
+    const response = await worker.fetch(
+      new Request('https://pf.lofuyu.com/.well-known/assetlinks.json'),
+      {} as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/^application\/json(?:;|$)/);
+    expect(response.headers.get('cache-control')).toContain('max-age=300');
+    expect(response.headers.get('location')).toBeNull();
+    const canonicalAssociation = JSON.parse(
+      readFileSync(resolve(process.cwd(), 'public/.well-known/assetlinks.json'), 'utf8'),
+    );
+    expect(await response.json()).toEqual(canonicalAssociation);
+  });
+
+  it('serves the same metadata to HEAD without a response body', async () => {
+    const response = await worker.fetch(
+      new Request('https://pf.lofuyu.com/.well-known/assetlinks.json', { method: 'HEAD' }),
+      {} as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/^application\/json(?:;|$)/);
+    expect(await response.text()).toBe('');
+  });
+
+  it('does not serve app-link metadata for unsupported methods', async () => {
+    const response = await worker.fetch(
+      new Request('https://pf.lofuyu.com/.well-known/assetlinks.json', { method: 'POST' }),
+      {} as never,
+    );
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toBe('GET, HEAD');
+  });
+});
