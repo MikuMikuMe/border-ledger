@@ -46,11 +46,11 @@ const styles = StyleSheet.create({
 });
 
 const aboutLightTheme = {
-  safe: styles.safe,
-  accent: styles.eyebrow,
-  text: styles.title,
-  muted: styles.lead,
-  rule: styles.rule,
+  safe: { backgroundColor: '#F3EFE6' },
+  accent: { color: '#1B6B5B' },
+  text: { color: '#18201F' },
+  muted: { color: '#4F5C56' },
+  rule: { backgroundColor: '#D2CCC0' },
 };
 
 const aboutDarkTheme = {
