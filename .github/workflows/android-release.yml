@@ -218,7 +218,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Published Android APK for $($release.tagName) could not be inspected; refusing the candidate." }
             $apks = @(Get-ChildItem -LiteralPath $downloadDir -Filter '*.apk' -File)
             if ($apks.Count -ne 1) { throw "Expected one APK in $($release.tagName); refusing to guess its version." }
-            $apkBadging = (& "$env:ANDROID_HOME/build-tools/36.0.0/aapt2.exe" dump badging $apks[0].FullName) -join "`n"
+            $apkBadging = (& "$env:ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging $apks[0].FullName) -join "`n"
             if ($LASTEXITCODE -ne 0) { throw "Could not inspect version of $($release.tagName)." }
             $version = [regex]::Match($apkBadging, "versionCode='(\d+)'")
             if (-not $version.Success) { throw "No Android version code in $($release.tagName); refusing to guess." }
