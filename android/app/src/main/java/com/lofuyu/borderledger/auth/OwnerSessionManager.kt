@@ -6,6 +6,7 @@ import com.lofuyu.borderledger.api.OwnerLoginClient
 import com.lofuyu.borderledger.core.CoreClock
 import com.lofuyu.borderledger.core.CoreCrypto
 import com.lofuyu.borderledger.local.LocalDataPolicy
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -30,20 +31,44 @@ data class CallbackConfiguration(
     }
 
     fun verify(uri: Uri): VerifiedCallback {
-        if (uri.scheme != scheme || uri.host != host || uri.port != port || uri.path != path || uri.fragment != null) {
-            throw CallbackValidationException
-        }
+        requireExpectedEndpoint(uri)
         val names = uri.queryParameterNames
-        if (names.any { it !in ALLOWED_PARAMETERS }) throw CallbackValidationException
-        if (uri.getQueryParameters("state").size > 1 || uri.getQueryParameters("code").size > 1 || uri.getQueryParameters("error").size > 1) {
-            throw CallbackValidationException
-        }
+        requireAllowedParameters(names)
+        requireUniqueParameters(uri)
         return VerifiedCallback(
             state = uri.getQueryParameter("state"),
             code = uri.getQueryParameter("code"),
             error = uri.getQueryParameter("error"),
         )
     }
+
+    private fun requireExpectedEndpoint(uri: Uri) {
+        if (uri.scheme != scheme) rejectCallback()
+        if (uri.host != host) rejectCallback()
+        if (uri.port != port) rejectCallback()
+        if (uri.path != path) rejectCallback()
+        if (uri.fragment != null) rejectCallback()
+    }
+
+    private fun requireAllowedParameters(names: Set<String>) {
+        if (!ALLOWED_PARAMETERS.containsAll(names)) rejectCallback()
+    }
+
+    private fun requireUniqueParameters(uri: Uri) {
+        // Android's Uri query helpers collapse repeated names, so count names in the raw URI.
+        val rawUri = uri.toString()
+        val queryStart = rawUri.indexOf('?')
+        if (queryStart < 0) return
+
+        val names = rawUri.substring(queryStart + 1)
+            .split('&')
+            .map { parameter ->
+                URLDecoder.decode(parameter.substringBefore('='), StandardCharsets.UTF_8.name())
+            }
+        if (names.size != names.toSet().size) rejectCallback()
+    }
+
+    private fun rejectCallback(): Nothing = throw CallbackValidationException
 
     private companion object {
         val ALLOWED_PARAMETERS = setOf("state", "code", "error", "error_description")

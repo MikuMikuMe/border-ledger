@@ -67,6 +67,23 @@ class OwnerSessionManagerTest {
     }
 
     @Test
+    fun duplicateCallbackParametersAreRejectedAsAmbiguousInput() = runTest {
+        val duplicateQueries = listOf(
+            "state=first&state=second",
+            "code=first&code=second",
+            "error=first&error=second",
+            "error_description=first&error_description=second",
+            "state=first&s%74ate=second",
+        )
+
+        duplicateQueries.forEach { query ->
+            assertThrows<CallbackValidationException> {
+                callback.verify(Uri.parse("https://pf.example.com/android/auth/callback?$query"))
+            }
+        }
+    }
+
+    @Test
     fun canceledReturnIsRecoverableAndDoesNotCreateOwnerState() = runTest {
         val store = TestOwnerSessionStore()
         val client = TestOwnerLoginClient()
