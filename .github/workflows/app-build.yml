@@ -101,8 +101,9 @@ jobs:
       - name: Install Android 17 preview platform
         shell: pwsh
         run: |
-          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
-          & $sdkmanager --install 'platforms;android-37.0' --channel=3
+          $sdkmanager = Get-ChildItem -LiteralPath (Join-Path $env:ANDROID_HOME 'cmdline-tools') -Filter 'sdkmanager.bat' -File -Recurse | Select-Object -First 1
+          if (-not $sdkmanager) { throw 'Android SDK command-line tools were not installed.' }
+          & $sdkmanager.FullName --install 'platforms;android-37.0' --channel=3
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Run Android lint and unit tests
         working-directory: android
