@@ -141,8 +141,6 @@ jobs:
     timeout-minutes: 120
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '2'
-      ANDROID_HOME: ${{ runner.temp }}/android-sdk
-      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Reclaim disk space for Android SDK and native builds
@@ -168,6 +166,9 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        env:
+          ANDROID_HOME: ${{ runner.temp }}/android-sdk
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
         with:
           packages: platform-tools build-tools;36.0.0
           log-accepted-android-sdk-licenses: false
