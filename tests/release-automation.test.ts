@@ -38,6 +38,7 @@ describe('release automation contract', () => {
     expect(releaseWorkflow).toMatch(/^  push:\s*\n\s+branches:\s+\[main\]\s*\n\s+paths:/m);
     expect(releaseWorkflow).toContain('mobile/**');
     expect(releaseWorkflow).toContain('inputs.source_sha || github.sha');
+    expect(releaseWorkflow).toContain('group: android-release-candidate-${{ github.event_name }}-${{ github.sha }}');
     expect(releaseWorkflow).toContain('source_sha');
     expect(releaseWorkflow).toContain('must equal the workflow main SHA');
     const buildJob = releaseWorkflow.split('  sign-artifact:')[0];
