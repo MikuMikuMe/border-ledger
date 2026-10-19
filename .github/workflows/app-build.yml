@@ -75,7 +75,7 @@ jobs:
 
   android-checks:
     needs: android-toolchain
-    if: needs.android-toolchain.outputs.available == 'true'
+    if: needs.android-toolchain.outputs.available == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,11 +91,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
         with:
           # The action's historical default includes the removed `tools`
           # package. Install only packages required by this project.
           packages: platform-tools build-tools;36.0.0
+          log-accepted-android-sdk-licenses: false
       - name: Install Android 17 preview platform
         shell: pwsh
         run: |
@@ -111,7 +113,7 @@ jobs:
 
   android-checks-gated:
     needs: android-toolchain
-    if: needs.android-toolchain.outputs.available != 'true'
+    if: needs.android-toolchain.outputs.available != 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Report unavailable Android build prerequisites
