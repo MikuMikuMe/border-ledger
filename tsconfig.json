@@ -11,10 +11,14 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*", "mobile/src/*"]
+    },
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src", "tests", "worker", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "tests", "worker", "mobile/uniwind-types.d.ts", "vite.config.ts", "vitest.config.ts"]
 }

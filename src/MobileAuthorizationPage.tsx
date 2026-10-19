@@ -8,10 +8,12 @@ const CALLBACK_PATH = '/android/auth/callback';
 
 type ApprovalStatus = 'idle' | 'loading' | 'success' | 'error';
 
+export type MobileAuthorizationFetch = (input: string, init?: RequestInit) => Promise<Response>;
+
 export interface MobileAuthorizationPageProps {
   requestId?: string | null;
   state?: string | null;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: MobileAuthorizationFetch;
   navigate?: (url: string) => void;
   origin?: string;
 }
