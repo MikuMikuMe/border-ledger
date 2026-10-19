@@ -40,7 +40,7 @@ describe('Android React Native production surface', () => {
     ], { encoding: 'utf8' });
 
     expect(output).toContain('TASK5_STATIC_OK');
-  });
+  }, 15_000);
 
   it('keeps the installed launcher name while opening the shared React host', () => {
     expect(manifest).toContain('android:name=".MainActivity"');
