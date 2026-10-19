@@ -37,8 +37,6 @@ jobs:
     needs: static-release-gates
     if: needs.static-release-gates.outputs.toolchain_available == 'true'
     runs-on: windows-latest
-    env:
-      ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -76,6 +74,8 @@ jobs:
       - name: Run Android lint, unit tests, and unsigned release assembly
         working-directory: android
         shell: pwsh
+        env:
+          ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
         run: |
           .\gradlew.bat lintDebug testDebugUnitTest :sharedCore:testAndroidHostTest assembleDebug --no-daemon
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

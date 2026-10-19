@@ -38,8 +38,6 @@ jobs:
       contents: read
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
-    env:
-      ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,6 +105,8 @@ jobs:
       - name: Run Android validation and build unsigned production APK
         working-directory: android
         shell: pwsh
+        env:
+          ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
         run: |
           pwsh -NoProfile -File task17-static-check.ps1 -RequireAndroidToolchain
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

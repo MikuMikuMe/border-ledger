@@ -77,8 +77,6 @@ jobs:
     needs: android-toolchain
     if: needs.android-toolchain.outputs.available == 'true'
     runs-on: windows-latest
-    env:
-      ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -101,6 +99,8 @@ jobs:
       - name: Run Android lint and unit tests
         working-directory: android
         shell: pwsh
+        env:
+          ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
         run: .\gradlew.bat lintDebug testDebugUnitTest --no-daemon
 
   android-checks-gated:
