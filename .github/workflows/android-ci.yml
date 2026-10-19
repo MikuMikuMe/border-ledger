@@ -35,7 +35,7 @@ jobs:
 
   android-build:
     needs: static-release-gates
-    if: needs.static-release-gates.outputs.toolchain_available == 'true'
+    if: needs.static-release-gates.outputs.toolchain_available == 'true' && github.event_name != 'push'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +66,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
         with:
           # The action's historical default includes the removed `tools`
@@ -107,6 +108,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
@@ -134,9 +136,23 @@ jobs:
           if-no-files-found: error
 
   android-instrumentation:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
     steps:
       - uses: actions/checkout@v4
+      - name: Reclaim disk space for Android SDK and native builds
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          tool-cache: false
+          swap-storage: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -148,9 +164,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools build-tools;36.0.0
+          log-accepted-android-sdk-licenses: false
       - name: Install Android 17 preview platform
         shell: bash
         run: |
@@ -166,7 +184,7 @@ jobs:
           api-level: 36
           arch: x86_64
           disable-animations: true
-          script: cd android && bash gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=x86_64 --no-daemon --console=plain
+          script: cd android && bash gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=x86_64 --no-daemon --console=plain --max-workers=2 --stacktrace
       - uses: actions/upload-artifact@v4
         if: always()
         with:
