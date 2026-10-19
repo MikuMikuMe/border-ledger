@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets
 
 /** Minimal JVM test implementation for the Android Uri API used by pure logic tests. */
 class Uri private constructor(private val raw: String) {
-    private val parsed: JavaUri = JavaUri(raw)
+    private val parsed: JavaUri = JavaUri(raw.replace(Regex("%(?![0-9a-fA-F]{2})"), "%25"))
 
     val scheme: String?
         get() = parsed.scheme
@@ -31,6 +31,7 @@ class Uri private constructor(private val raw: String) {
     override fun toString(): String = raw
 
     private fun queryParameters(): Map<String, String?> = parsed.rawQuery
+        ?.let { raw.substringAfter('?').substringBefore('#') }
         ?.split('&')
         ?.filter { it.isNotEmpty() }
         ?.associate { pair ->

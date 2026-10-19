@@ -15,6 +15,10 @@ on:
         description: Candidate APK SHA-256 from its manifest and acceptance record
         required: true
         type: string
+      acceptance_manifest_sha256:
+        description: SHA-256 of the owner-captured, source-bound Android acceptance manifest
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -31,6 +35,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools build-tools;36.0.0
+
       # Promotion changes draft metadata only: it never checks out, rebuilds,
       # re-signs, uploads, or replaces the APK accepted during the candidate run.
       - name: Validate the accepted source and release identity
@@ -39,6 +56,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
           EXPECTED_APK_SHA256: ${{ inputs.apk_sha256 }}
+          EXPECTED_ACCEPTANCE_MANIFEST_SHA256: ${{ inputs.acceptance_manifest_sha256 }}
           RELEASE_TAG: ${{ inputs.tag }}
           EXPECTED_CERT_SHA256: 1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed
         run: |
@@ -46,6 +64,7 @@ jobs:
           if ($env:EXPECTED_SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'source_sha must be a full commit SHA.' }
           if ($env:EXPECTED_SOURCE_SHA.ToLowerInvariant() -ne $env:GITHUB_SHA.ToLowerInvariant()) { throw 'Promotion must run on the exact accepted source SHA at main.' }
           if ($env:EXPECTED_APK_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'apk_sha256 must be a full SHA-256 digest.' }
+          if ($env:EXPECTED_ACCEPTANCE_MANIFEST_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'acceptance_manifest_sha256 must be a full SHA-256 digest.' }
           if ($env:RELEASE_TAG -notmatch '^android-v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'The release tag is not a supported Android version tag.' }
 
           $main = (& gh api --repo $env:GITHUB_REPOSITORY "repos/$env:GITHUB_REPOSITORY/commits/main" --jq .sha).Trim()
@@ -58,8 +77,8 @@ jobs:
 
           $directory = Join-Path $env:RUNNER_TEMP 'accepted-android-candidate'
           New-Item -ItemType Directory -Path $directory | Out-Null
-          & gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern '*.apk' --pattern SHA256SUMS.txt --pattern candidate-manifest.json --dir $directory
-          if ($LASTEXITCODE -ne 0) { throw 'The candidate APK, checksum, and manifest could not all be downloaded.' }
+          & gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern '*.apk' --pattern SHA256SUMS.txt --pattern candidate-manifest.json --pattern acceptance-manifest.json --pattern acceptance-evidence.zip --dir $directory
+          if ($LASTEXITCODE -ne 0) { throw 'The candidate APK, checksums, candidate manifest, and owner acceptance bundle could not all be downloaded.' }
           $apk = @(Get-ChildItem -LiteralPath $directory -Filter '*.apk' -File)
           if ($apk.Count -ne 1) { throw 'Expected exactly one APK in the candidate release.' }
           $manifest = Get-Content -Raw -LiteralPath (Join-Path $directory 'candidate-manifest.json') | ConvertFrom-Json
@@ -67,11 +86,51 @@ jobs:
           if ($manifest.apkFileName -ne $apk[0].Name) { throw 'Candidate manifest APK name does not match the downloaded APK.' }
           if ($manifest.packageId -ne 'com.lofuyu.borderledger' -or $manifest.mobileEnvironment -ne 'production') { throw 'Candidate package or production environment is incorrect.' }
           if ($manifest.signingCertificateSha256 -ne $env:EXPECTED_CERT_SHA256) { throw 'Candidate certificate is not the existing Samsung/App Links signer.' }
+          $buildTools = Join-Path $env:ANDROID_HOME 'build-tools/36.0.0'
+          $apksigner = Join-Path $buildTools 'apksigner'
+          $aapt2 = Join-Path $buildTools 'aapt2'
+          $certificateOutput = (& $apksigner verify --verbose --print-certs $apk[0].FullName 2>&1) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw 'Downloaded candidate APK signature verification failed.' }
+          $certificateMatches = [regex]::Matches($certificateOutput, 'Signer #\d+ certificate SHA-256 digest:\s*([0-9a-fA-F:]+)')
+          if ($certificateMatches.Count -ne 1) { throw 'Downloaded candidate APK must have exactly one readable signer certificate.' }
+          $actualCertificate = $certificateMatches[0].Groups[1].Value.Replace(':', '').ToLowerInvariant()
+          if ($actualCertificate -ne $env:EXPECTED_CERT_SHA256 -or $actualCertificate -ne $manifest.signingCertificateSha256.ToLowerInvariant()) { throw 'Downloaded candidate APK signer does not match its production identity.' }
+          $badging = (& $aapt2 dump badging $apk[0].FullName 2>&1) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw 'Downloaded candidate APK manifest inspection failed.' }
+          $packageMatch = [regex]::Match($badging, "(?m)^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'\s+versionName='([^']*)'")
+          if (-not $packageMatch.Success) { throw 'Downloaded candidate APK package/version metadata could not be read.' }
+          if ($packageMatch.Groups[1].Value -ne 'com.lofuyu.borderledger' -or $packageMatch.Groups[1].Value -ne $manifest.packageId) { throw 'APK package ID does not match candidate manifest.' }
+          if ([int]$packageMatch.Groups[2].Value -ne [int]$manifest.versionCode) { throw 'APK versionCode does not match candidate manifest.' }
+          if ($packageMatch.Groups[3].Value -ne $manifest.versionName) { throw 'APK versionName does not match candidate manifest.' }
+          $actualVersionCode = [int]$packageMatch.Groups[2].Value
           $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $apk[0].FullName).Hash.ToLowerInvariant()
           if ($actualHash -ne $env:EXPECTED_APK_SHA256.ToLowerInvariant() -or $actualHash -ne $manifest.apkSha256.ToLowerInvariant()) { throw 'Candidate APK bytes do not match the accepted SHA-256.' }
           $sumLine = Get-Content -Raw -LiteralPath (Join-Path $directory 'SHA256SUMS.txt')
           $escapedApkName = [regex]::Escape($apk[0].Name)
           if ($sumLine -notmatch "(?m)^$actualHash\s+$escapedApkName\s*$") { throw 'Published SHA256SUMS.txt does not match the APK bytes.' }
+          $acceptanceManifest = Join-Path $directory 'acceptance-manifest.json'
+          $acceptanceZip = Join-Path $directory 'acceptance-evidence.zip'
+          if (-not (Test-Path -LiteralPath $acceptanceManifest -PathType Leaf) -or -not (Test-Path -LiteralPath $acceptanceZip -PathType Leaf)) { throw 'The candidate is missing the owner acceptance manifest or evidence archive.' }
+          $acceptanceManifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $acceptanceManifest).Hash.ToLowerInvariant()
+          if ($acceptanceManifestHash -ne $env:EXPECTED_ACCEPTANCE_MANIFEST_SHA256.ToLowerInvariant()) { throw 'Acceptance manifest SHA-256 does not match the reviewed input.' }
+          $evidenceDirectory = Join-Path $directory 'acceptance-evidence'
+          New-Item -ItemType Directory -Path $evidenceDirectory | Out-Null
+          Expand-Archive -LiteralPath $acceptanceZip -DestinationPath $evidenceDirectory
+          $verifierContent = & gh api --repo $env:GITHUB_REPOSITORY "repos/$env:GITHUB_REPOSITORY/contents/scripts/verify-android-acceptance.mjs?ref=$env:EXPECTED_SOURCE_SHA" --jq .content
+          if ($LASTEXITCODE -ne 0 -or -not $verifierContent) { throw 'The acceptance verifier for the exact accepted source could not be fetched.' }
+          $verifierPath = Join-Path $env:RUNNER_TEMP 'verify-android-acceptance.mjs'
+          [IO.File]::WriteAllBytes($verifierPath, [Convert]::FromBase64String(($verifierContent -join '').Trim()))
+          $acceptanceArgs = @(
+            $verifierPath
+            '--manifest', $acceptanceManifest
+            '--evidence-dir', $evidenceDirectory
+            '--source-sha', $env:EXPECTED_SOURCE_SHA
+            '--apk-sha256', $actualHash
+            '--signing-cert-sha256', $env:EXPECTED_CERT_SHA256
+            '--version-code', [string]$actualVersionCode
+          )
+          & node @acceptanceArgs
+          if ($LASTEXITCODE -ne 0) { throw 'F01–F18, live App Links, or signed in-place-upgrade acceptance failed.' }
           "Verified release tag $env:RELEASE_TAG at source $env:EXPECTED_SOURCE_SHA with APK SHA-256 $actualHash."
 
       - name: Publish the exact accepted APK bytes

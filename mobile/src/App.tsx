@@ -81,7 +81,7 @@ type RootScreenProps = {
   onSignOut(): Promise<void>;
 };
 
-function LoginStack({ snapshot, dark, active, systemReducedMotion, onSignIn, onAppearance }: RootScreenProps) {
+function renderLoginScreens({ snapshot, dark, active, systemReducedMotion, onSignIn, onAppearance }: RootScreenProps) {
   return (
     <>
       <Stack.Screen name="Login" options={{ headerShown: false }}>
@@ -101,7 +101,7 @@ function LoginStack({ snapshot, dark, active, systemReducedMotion, onSignIn, onA
   );
 }
 
-function ShellStack({ snapshot, dark, onSignOut }: RootScreenProps) {
+function renderShellScreens({ snapshot, dark, onSignOut }: RootScreenProps) {
   return (
     <>
       <Stack.Screen name="Shell" options={{ headerShown: false }}>
@@ -119,9 +119,9 @@ function ShellStack({ snapshot, dark, onSignOut }: RootScreenProps) {
   );
 }
 
-function RootScreens(props: RootScreenProps & { route: MobileAppSnapshot['route'] }) {
-  if (props.route === 'login') return <LoginStack {...props} />;
-  return <ShellStack {...props} />;
+function renderRootScreens(props: RootScreenProps & { route: MobileAppSnapshot['route'] }) {
+  if (props.route === 'login') return renderLoginScreens(props);
+  return renderShellScreens(props);
 }
 
 function MobileRoot() {
@@ -174,16 +174,16 @@ function MobileRoot() {
             headerTitleStyle: { fontFamily: 'DMSans', fontWeight: '600' },
           }}
         >
-          <RootScreens
-            route={route}
-            snapshot={snapshot}
-            dark={dark}
-            active={active}
-            systemReducedMotion={systemReducedMotion}
-            onSignIn={(staySignedIn) => coordinator.beginLogin(staySignedIn)}
-            onAppearance={(mode) => coordinator.setAppearance(mode)}
-            onSignOut={() => coordinator.signOut()}
-          />
+          {renderRootScreens({
+            route,
+            snapshot,
+            dark,
+            active,
+            systemReducedMotion,
+            onSignIn: (staySignedIn) => coordinator.beginLogin(staySignedIn),
+            onAppearance: (mode) => coordinator.setAppearance(mode),
+            onSignOut: () => coordinator.signOut(),
+          })}
         </Stack.Navigator>
       </NavigationContainer>
     </>

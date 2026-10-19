@@ -178,7 +178,10 @@ open class OwnerSessionCore(
     private fun validateCallback(verify: () -> VerifiedCallback): VerifiedCallback? = try {
         verify()
     } catch (_: CallbackValidationException) {
-        _state.value = OwnerSessionState.CallbackRejected(recoverable = false)
+        rejectCallback(recoverable = false)
+        null
+    } catch (_: IllegalArgumentException) {
+        rejectCallback(recoverable = false)
         null
     }
 

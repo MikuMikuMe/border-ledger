@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import com.lofuyu.borderledger.BorderLedgerApplication
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,15 +31,31 @@ class AuthCallbackActivity : Activity() {
             finish()
             return
         }
-        val manager = (application as BorderLedgerApplication).container.ownerSessionManager
         activityScope.launch {
-            manager.handleCallback(uri)
-            finish()
+            finishAfterAuthCallback(
+                handleCallback = {
+                    val manager = (application as BorderLedgerApplication).container.ownerSessionManager
+                    manager.handleCallback(uri)
+                },
+                finish = ::finish,
+            )
         }
     }
 
     override fun onDestroy() {
         activityScope.cancel()
         super.onDestroy()
+    }
+}
+
+internal suspend fun finishAfterAuthCallback(handleCallback: suspend () -> Unit, finish: () -> Unit) {
+    try {
+        handleCallback()
+    } catch (canceled: CancellationException) {
+        throw canceled
+    } catch (_: Exception) {
+        // Callback inputs and exception messages may contain credentials; never expose them.
+    } finally {
+        finish()
     }
 }

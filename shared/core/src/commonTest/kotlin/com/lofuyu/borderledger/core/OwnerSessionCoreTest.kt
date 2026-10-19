@@ -9,6 +9,20 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 class OwnerSessionCoreTest {
+    @Test fun malformedCallbackInputIsRejectedWithoutLosingPendingLogin() = runTest {
+        val store = MemorySessionStore()
+        val client = LoginClient()
+        val manager = Session(store, client)
+        manager.beginLogin(false, null)
+        val pending = requireNotNull(store.pending)
+
+        assertEquals(CallbackResult.CallbackRejected, manager.malformedCallback())
+        assertEquals(OwnerSessionState.CallbackRejected(recoverable = false), manager.state.value)
+        assertEquals(pending, store.pending)
+        assertEquals(0, client.exchanges)
+        assertEquals(CallbackResult.SignedIn, manager.callback(VerifiedCallback(pending.state, "code", null)))
+    }
+
     @Test fun callbackCommitsOnceAcrossRecreationAndConsumesDestinationOnce() = runTest {
         val store = MemorySessionStore()
         val client = LoginClient()
@@ -99,6 +113,7 @@ private class TestCrypto : CoreCrypto {
 private class Session(store: MemorySessionStore, client: LoginClient, capture: CaptureProvider = CaptureProvider(), policy: LogoutPolicy = LogoutPolicy()) :
     OwnerSessionCore(store, client, capture, policy, "https://pf.example.com/android/auth/callback", "sandbox", "device", testClock, TestCrypto()) {
     suspend fun callback(value: VerifiedCallback) = handleVerifiedCallback { value }
+    suspend fun malformedCallback() = handleVerifiedCallback { throw IllegalArgumentException("secret callback input") }
 }
 private class MemorySessionStore : OwnerSessionStore {
     var session: OwnerSessionRecord? = null

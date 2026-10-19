@@ -4,10 +4,14 @@ The implementation branch now selects React Native from the existing
 `com.lofuyu.borderledger.MainActivity`; the `.probe` host remains debug-only.
 The unsigned production APK is built as `versionCode=1000` / `0.2.0`, contains
 the embedded RN bundle and local fonts, and excludes the probe/fixture hosts.
-This is still a **candidate, not an accepted production release**: live Pixel
-verification after the session-state fix, the real-device data-preserving
-upgrade, and protected signing/promotion remain open. No signing identity may be
-invented to close those gates.
+This remains a **candidate, not an accepted production release**. Current-source
+Pixel debug instrumentation and a 412×915 login capture pass, and the live
+production App Links file authorizes the expected release certificate. The
+Pixel debug build uses a different signer and therefore is not eligible for
+domain verification; the connected Samsung still has signed v0.1.921, not the
+current source. A current-source production-signed App Links check, real-device
+data-preserving upgrade, owner F01–F18 acceptance, and controlled promotion
+remain open. No signing identity may be invented to close those gates.
 
 The live `/login-demo` now derives from the first-generated ThreadLoginConcept,
 not the superseded simplified migration adaptation: 88 strands ×73 vertices,
@@ -16,15 +20,16 @@ Sparkles/Private, unchecked stay-signed-in. Native-only options retain48dp touch
 targets; the native card is about13dp taller while its bottom remains anchored.
 Static comparison is evidence for review, not acceptance of every screen.
 
-Current local verification: the latest uninstrumented root web/Worker run passed
-484/484, root TypeScript passed, and the production Vite build transformed
-1,583 modules successfully; the focused preferences/D1 route passed 6/6
-after a clean install. Mobile TypeScript, Codegen, all 210 mobile tests, and the
-standalone RN release bundle pass after a clean mobile install. Android lint and
-debug/release assembly passed in a sequential one-worker build. A forced fresh
-run of `:app:testDebugUnitTest` and `:sharedCore:testAndroidHostTest` passed
-296/296 tests across 53 XML suites. The merged-host check confirms the
-production launcher and debug-only probe separation. Static inspection of the
+Current local verification: the latest root web/Worker suite passed 510/510,
+root TypeScript passed, and the production Vite build transformed 1,583 modules
+successfully. Mobile TypeScript passed, and the latest mobile suite passed
+219/219 across 29 files; Codegen and the standalone RN release bundle passed.
+Android lint and debug/release assembly passed in a sequential one-worker build.
+A fresh callback-inclusive JVM/core rerun passed 323 tests (305 app tests
+across 58 suites and 18 shared-core tests across 4 suites), with zero failures
+or errors. Pixel instrumentation passed 8/8 tests. The merged-host check
+confirms the production launcher and debug-only probe separation. Static
+inspection of the
 local unsigned APK reports `com.lofuyu.borderledger`, versionCode 1000 / 0.2.0,
 min SDK 26 / target SDK 36, `index.android.bundle`, the three local fonts, and
 Hermes/React Native/Reanimated/Skia/Worklets/screens/codegen libraries for
@@ -57,28 +62,29 @@ and no competing Gradle build was found. The exact configure then passed
 single-worker, and the complete Android gates plus fresh JVM/core tests passed.
 No ACL or source workaround was applied; transient root cause is unconfirmed.
 
-The Samsung currently has `versionCode=921` / `0.1.921`; pulling only its APK
-confirmed the installed signer is SHA-256
+The Samsung currently has `versionCode=921` / `0.1.921`; its installed signer is
+SHA-256
 `1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed`, matching
-the app-link record and candidate checks. The phone has not been installed,
-uninstalled, cleared, or updated.
+the live App Links record. Current read-only Package Manager inspection reports
+`pf.lofuyu.com: verified` on Samsung. The phone has not been installed,
+uninstalled, cleared, or updated in this validation run.
 
-Cloudflare Access has the exact public overrides for
-`/.well-known/assetlinks.json` and `/api/mobile/v1/*`; the old `/` and
-`/assets/*` overrides and both existing policies/settings were preserved. A
-live unauthenticated mobile-status request reaches Worker bearer auth and
-returns its expected `401`. Until the branch’s Worker code is deployed, the
-live asset-links request still returns the previous SPA HTML, not association
-JSON; the deployment workflow now checks both paths and the release signer.
+The live `https://pf.lofuyu.com/.well-known/assetlinks.json` currently returns
+HTTP 200 `application/json` and one matching statement for package
+`com.lofuyu.borderledger`, relation
+`delegate_permission/common.handle_all_urls`, and release certificate SHA-256
+`1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED`. On the Pixel 10 Pro API 37, the current-source debug install reports its separate debug signer and domain state `1024`; this is expected for a signer mismatch, not evidence that the production association is wrong. A production-signed build of this exact source is required for the Pixel Package Manager check.
 
-The Pixel 10 emulator stopped answering both ADB shell and its own console
-after the QA package update; current visual confirmation is not claimed. A
-non-wiping restart was requested. The GitHub repository has the four Android
-signing secrets at repository scope, no `android-production-signing` or
-`android-production-publish` environments, and `main.protected=false`.
-Environment approver/secret relocation and PR protection are required before
-signing or publication. The Worker workflow's main-ref guard does not prevent a
-direct, unreviewed push to an unprotected `main`.
+The Pixel 10 Pro API 37 emulator is currently reachable. Current-source
+instrumentation passed, including root recreation and local-font checks; a
+visual login capture at 412×915 shows the Thread Field background and readable
+form with no React Native bundle-load or fatal log in the inspected window. A
+System UI “not responding” prompt appeared once during concurrent Android
+builds, cleared after waiting, and was not recorded by `dumpsys activity
+lastanr`; a second capture rendered normally. This remains a load-sensitive
+observation, not a performance pass. The owner reports that main rulesets and
+the signing/publish environments are configured; those controls were not
+independently inspected here. No signing secrets were read or used.
 Canonical debug/emulator live rendering is severely CPU-bound: a15s post-bulk
 trace recorded62 main-thread animation slices averaging236.7ms (main≈96.9% of
 one core). Geometry-preserving batching leaves static pixels unchanged, but

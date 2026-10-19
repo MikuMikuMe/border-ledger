@@ -32,9 +32,9 @@ data class CallbackConfiguration(
 
     fun verify(uri: Uri): VerifiedCallback {
         requireExpectedEndpoint(uri)
+        requireWellFormedUniqueParameters(uri)
         val names = uri.queryParameterNames
         requireAllowedParameters(names)
-        requireUniqueParameters(uri)
         return VerifiedCallback(
             state = uri.getQueryParameter("state"),
             code = uri.getQueryParameter("code"),
@@ -54,17 +54,22 @@ data class CallbackConfiguration(
         if (!ALLOWED_PARAMETERS.containsAll(names)) rejectCallback()
     }
 
-    private fun requireUniqueParameters(uri: Uri) {
+    private fun requireWellFormedUniqueParameters(uri: Uri) {
         // Android's Uri query helpers collapse repeated names, so count names in the raw URI.
         val rawUri = uri.toString()
         val queryStart = rawUri.indexOf('?')
         if (queryStart < 0) return
 
-        val names = rawUri.substring(queryStart + 1)
-            .split('&')
-            .map { parameter ->
-                URLDecoder.decode(parameter.substringBefore('='), StandardCharsets.UTF_8.name())
+        val names = try {
+            rawUri.substring(queryStart + 1).split('&').map { parameter ->
+                val components = parameter.split('=', limit = 2).map { component ->
+                    URLDecoder.decode(component, StandardCharsets.UTF_8.name())
+                }
+                components.first()
             }
+        } catch (_: IllegalArgumentException) {
+            rejectCallback()
+        }
         if (names.size != names.toSet().size) rejectCallback()
     }
 

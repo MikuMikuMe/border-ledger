@@ -2,17 +2,28 @@ package com.lofuyu.borderledger.react
 
 import android.graphics.Typeface
 import com.lofuyu.borderledger.CANONICAL_DISPLAY_AXES
+import com.lofuyu.borderledger.BorderLedgerApplication
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.facebook.react.common.assets.ReactFontManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 @androidx.test.filters.SdkSuppress(minSdkVersion = 28)
 class NativeLoginFontTest {
+    @Before fun initializeTheProductionFontRegistration() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        // Fonts are registered lazily when the React host starts, not at app startup.
+        // Use that same path so standalone font tests measure the rendered faces.
+        instrumentation.runOnMainSync {
+            (instrumentation.targetContext.applicationContext as BorderLedgerApplication).initializeReactNative()
+        }
+    }
+
     @Test fun requestedVariableWeightsReachAndroidInsteadOfCollapsingToRegular() {
         val assets = InstrumentationRegistry.getInstrumentation().targetContext.assets
         val manager = ReactFontManager.getInstance()
