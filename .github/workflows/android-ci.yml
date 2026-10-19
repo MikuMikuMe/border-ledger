@@ -191,7 +191,7 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             cd mobile
             npm start -- --host 0.0.0.0 > "$RUNNER_TEMP/metro.log" 2>&1 &
             metro_pid=$!
