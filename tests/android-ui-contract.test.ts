@@ -117,10 +117,12 @@ describe('Android React Native production surface', () => {
   it('supplies a short native staging root for Windows CMake builds', () => {
     const androidGradle = read('android/app/build.gradle.kts');
     const sharedCoreGradle = read('shared/core/build.gradle.kts');
+    const gradleProperties = read('android/gradle.properties');
     const appBuild = read('.github/workflows/app-build.yml');
     const androidCi = read('.github/workflows/android-ci.yml');
     const androidRelease = read('.github/workflows/android-release.yml');
     const iosCore = androidCi.split('  ios-core:')[1]?.split('  android-instrumentation:')[0] ?? '';
+    expect(gradleProperties).not.toContain('android.enableJetifier=true');
     expect(androidGradle).toContain('compileSdkMinor = 0');
     expect(sharedCoreGradle).toContain('compileSdk = 36');
     expect(sharedCoreGradle).not.toContain('compileSdkMinor');
