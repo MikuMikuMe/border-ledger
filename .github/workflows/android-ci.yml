@@ -70,7 +70,13 @@ jobs:
         with:
           # The action's historical default includes the removed `tools`
           # package. Install only packages required by this project.
-          packages: platform-tools platforms;android-37 build-tools;36.0.0
+          packages: platform-tools build-tools;36.0.0
+      - name: Install Android 17 preview platform
+        shell: pwsh
+        run: |
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
+          & $sdkmanager --install 'platforms;android-37' --channel=3
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Run Android lint, unit tests, and unsigned release assembly
         working-directory: android
         shell: pwsh
@@ -103,7 +109,7 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-37 build-tools;36.0.0
+          packages: platform-tools
       - name: Require specified macOS and Xcode
         shell: bash
         run: |
@@ -144,7 +150,12 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-37 build-tools;36.0.0
+          packages: platform-tools build-tools;36.0.0
+      - name: Install Android 17 preview platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37" --channel=3
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

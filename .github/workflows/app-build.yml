@@ -95,7 +95,13 @@ jobs:
         with:
           # The action's historical default includes the removed `tools`
           # package. Install only packages required by this project.
-          packages: platform-tools platforms;android-37 build-tools;36.0.0
+          packages: platform-tools build-tools;36.0.0
+      - name: Install Android 17 preview platform
+        shell: pwsh
+        run: |
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
+          & $sdkmanager --install 'platforms;android-37' --channel=3
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Run Android lint and unit tests
         working-directory: android
         shell: pwsh
