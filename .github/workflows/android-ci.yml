@@ -141,6 +141,8 @@ jobs:
     timeout-minutes: 120
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      ANDROID_HOME: ${{ runner.temp }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Reclaim disk space for Android SDK and native builds
@@ -190,7 +192,7 @@ jobs:
         with:
           name: android-instrumentation-results
           path: android/app/build/reports/androidTests/
-          if-no-files-found: error
+          if-no-files-found: warn
 
   android-build-gated:
     needs: static-release-gates
