@@ -61,6 +61,7 @@ describe('release automation contract', () => {
     expect(signer).toContain('EXPECTED_CERT_SHA256');
     expect(signer).toContain('android-signed-${{ github.run_id }}');
     expect(signer).toContain('actions/upload-artifact@v4');
+    expect(signer).toContain('candidate-manifest.json');
     expect(signer).not.toContain('actions/checkout');
     expect(signer).not.toContain('contents: write');
     expect(signer).not.toContain('gh release create');
@@ -73,7 +74,6 @@ describe('release automation contract', () => {
     expect(draftRelease).toContain('gh release create');
     expect(draftRelease).toContain('--draft');
     expect(draftRelease).not.toContain('--clobber');
-    expect(draftRelease).toContain('candidate-manifest.json');
   });
 
   it('promotes the accepted draft by verifying the exact source and APK hash without rebuilding or replacing bytes', () => {
