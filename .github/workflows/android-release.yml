@@ -38,8 +38,6 @@ jobs:
       contents: read
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
-    env:
-      ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,13 +98,22 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-37 build-tools;36.0.0
+          packages: platform-tools build-tools;36.0.0
+
+      - name: Install Android 17 preview platform
+        shell: pwsh
+        run: |
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
+          & $sdkmanager --install 'platforms;android-37.0' --channel=3
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Run Android validation and build unsigned production APK
         working-directory: android
         shell: pwsh
+        env:
+          ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
         run: |
           pwsh -NoProfile -File task17-static-check.ps1 -RequireAndroidToolchain
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -163,8 +170,13 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-37 build-tools;36.0.0
+          packages: platform-tools build-tools;36.0.0
 
+      - name: Install Android 17 preview platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" --channel=3
       - name: Run instrumentation suite on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
