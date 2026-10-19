@@ -4,8 +4,10 @@ import com.lofuyu.borderledger.core.SecureRecordPort
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
+import java.security.MessageDigest
 
 class BridgeOperationJournalTest {
     @Test fun recreatedRuntimeCanDiscoverLostOperationIdsWithoutJsStorage()=runTest {
@@ -141,6 +143,43 @@ class BridgeOperationJournalTest {
         assertEquals(1, writes)
     }
 
+    @Test fun terminalFingerprintEntriesArePrunedBeforeCapacityWhileUnresolvedEntriesRemain() = runTest {
+        val disk = MemoryRecords()
+        val owner = "owner"
+        val index = JSONObject()
+        val terminalFingerprint = "terminal-fingerprint-0"
+
+        repeat(9_999) { number ->
+            val id = "terminal-op-${number.toString().padStart(5, '0')}"
+            val fingerprint = "terminal-fingerprint-$number"
+            val request = BridgeOperationRequest(id, "review", fingerprint, owner)
+            index.put(indexFingerprint(request), id)
+            disk.records[operationKey(request.id)] = operationRecord(request, "completed")
+        }
+        val pendingId = "pending-op-0001"
+        val pendingFingerprint = "pending-fingerprint"
+        val pendingRequest = BridgeOperationRequest(pendingId, "review", pendingFingerprint, owner)
+        index.put(indexFingerprint(pendingRequest), pendingId)
+        disk.records[operationKey(pendingRequest.id)] = operationRecord(pendingRequest, "reconciliation_required")
+        disk.records[indexKey(owner)] = index.toString().encodeToByteArray()
+
+        var writes = 0
+        val replacement = BridgeOperationJournal(disk).start(
+            BridgeOperationRequest("replacement-op-1", "review", terminalFingerprint, owner),
+        ) { writes++; "receipt" }
+        val unresolved = BridgeOperationJournal(disk).start(
+            BridgeOperationRequest("pending-op-0002", "review", pendingFingerprint, owner),
+        ) { writes++; "must-not-run" }
+        val savedIndex = JSONObject(disk.records.getValue(indexKey(owner)).decodeToString())
+
+        assertEquals("completed", replacement.status)
+        assertEquals("pending-op-0001", unresolved.operationId)
+        assertEquals("reconciliation_required", unresolved.status)
+        assertTrue(savedIndex.has(indexFingerprint(pendingRequest)))
+        assertTrue(savedIndex.length() <= 2)
+        assertEquals(1, writes)
+    }
+
     @Test fun mismatchedPayloadAndOwnerCannotReuseOrInspectOperation() = runTest {
         val journal = BridgeOperationJournal(MemoryRecords())
         journal.start(BridgeOperationRequest("request-3", "sync", "a", "owner")) { "receipt" }
@@ -160,4 +199,19 @@ class BridgeOperationJournalTest {
         override suspend fun write(record: String, value: ByteArray) { records[record] = value.copyOf() }
         override suspend fun delete(record: String) { records.remove(record) }
     }
+
+    private fun indexKey(owner: String) = "rn_op_index_v1_${digest(owner)}"
+    private fun operationKey(id: String) = "rn_operation_v1_${digest(id)}"
+    private fun indexFingerprint(request: BridgeOperationRequest) = digest(listOf(request.owner, request.kind, request.fingerprint).toString())
+    private fun operationRecord(request: BridgeOperationRequest, status: String) = JSONObject()
+        .put("version", 1)
+        .put("owner", request.owner)
+        .put("kind", request.kind)
+        .put("fingerprint", digest(request.fingerprint))
+        .put("status", status)
+        .put("updatedAt", "2026-10-19T00:00:00Z")
+        .toString()
+        .encodeToByteArray()
+    private fun digest(value: String) = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray())
+        .joinToString("") { "%02x".format(it) }
 }

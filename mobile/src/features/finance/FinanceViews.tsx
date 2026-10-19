@@ -66,23 +66,56 @@ export function OverviewView({dark,state,snapshot,lens,currencies,onLens,onRetry
   </View>;
 }
 export type ActivityProps=Theme&{state:LoadState<Transactions>;facetRows?:Transaction[];filters:Partial<ActivityQuery>;selected:Transaction|null;draft?:{category:string;note:string};mutation?:MutationState;onRetry():void;onFilter(value:Partial<ActivityQuery>):void;onOpen(id:string):void;onLoadMore():void;onClose():void;onDraft(value:{category:string;note:string}):void;onSave():void};
+type ActivityFacetName='currency'|'category'|'status'|'source';
+const activityFacetNames:ActivityFacetName[]=['currency','category','status','source'];
+function activityFacetLabel(name:ActivityFacetName){return name==='status'?'State':name[0].toUpperCase()+name.slice(1);}
+function activityFacetValue(transaction:Transaction,name:ActivityFacetName){return name==='source'?transaction.sourceLabel:transaction[name];}
+function ActivityFacet({dark,facetRows,filters,onFilter,name}:{dark:boolean;facetRows:Transaction[];filters:Partial<ActivityQuery>;onFilter(value:Partial<ActivityQuery>):void;name:ActivityFacetName}){
+  const values=[...new Set(facetRows.map(transaction=>activityFacetValue(transaction,name)).filter((value):value is string=>!!value))].sort();
+  return <Choices dark={dark} label={activityFacetLabel(name)} value={filters[name]??null} values={values} onChange={value=>onFilter({...filters,[name]:value})}/>;
+}
+function ActivityFilters({dark,facetRows,filters,onFilter}:{dark:boolean;facetRows:Transaction[];filters:Partial<ActivityQuery>;onFilter(value:Partial<ActivityQuery>):void}){
+  const p=palette(dark);
+  return <>
+    <TextInput accessibilityLabel="Search merchant, account, status" placeholder="Search merchant, account, status" placeholderTextColor={p.muted} value={filters.query??''} onChangeText={query=>onFilter({...filters,query})} style={[styles.input,{color:p.text,borderColor:p.border}]} returnKeyType="search"/>
+    {activityFacetNames.map(name=><ActivityFacet key={name} dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter} name={name}/>)}
+  </>;
+}
+function ActivityRow({dark,transaction,onOpen}:{dark:boolean;transaction:Transaction;onOpen(id:string):void}){
+  return <Card dark={dark}>
+    <Action dark={dark} label={`Open activity: ${transaction.merchant??'Merchant unavailable'}, ${transaction.currency} ${formatMoney(transaction.signedMinorUnits,transaction.currency)}`} onPress={()=>onOpen(transaction.id)}/>
+    <Copy dark={dark}>{transaction.occurredAt} · {transaction.status} · {transaction.kind}</Copy>
+    <Copy dark={dark}>{transaction.accountLabel??'Account unavailable'} · Source: {transaction.sourceLabel??'unavailable'}</Copy>
+    <Copy dark={dark}>{transaction.category??'Uncategorized'}</Copy>
+  </Card>;
+}
+function ActivityResults({dark,state,rows,onLoadMore,onOpen}:{dark:boolean;state:LoadState<Transactions>;rows:Transaction[];onLoadMore():void;onOpen(id:string):void}){
+  return <>
+    {state.data&&rows.length===0?<Copy dark={dark}>No activity matches this search.</Copy>:null}
+    {rows.map(transaction=><ActivityRow key={transaction.id} dark={dark} transaction={transaction} onOpen={onOpen}/>)}
+    {state.data?.nextCursor?<Action dark={dark} label="Load more Activity" onPress={onLoadMore} disabled={state.phase==='loading'}/>:null}
+  </>;
+}
+function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose}:{dark:boolean;selected:Transaction;draft:{category:string;note:string};mutation:MutationState;onDraft(value:{category:string;note:string}):void;onSave():void;onClose():void}){
+  const p=palette(dark);
+  return <DetailModal dark={dark} title="Activity detail" onClose={onClose}>
+    <Copy dark={dark}>{selected.merchant??'Merchant unavailable'} · {selected.currency} {formatMoney(selected.signedMinorUnits,selected.currency)}</Copy>
+    <Copy dark={dark}>{selected.occurredAt} · {selected.status} · {selected.kind}</Copy>
+    <Copy dark={dark}>Account: {selected.accountLabel??'unavailable'} · Source: {selected.sourceLabel??'unavailable'} · Revision {selected.revision}</Copy>
+    <Copy dark={dark}>Category</Copy><TextInput accessibilityLabel="Category" value={draft.category} maxLength={80} onChangeText={category=>onDraft({...draft,category})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
+    <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
+    <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Source evidence and report values remain server-authoritative.</Copy>
+    <Action dark={dark} label="Save annotation" onPress={onSave} disabled={mutation.blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/><Action dark={dark} label="Close Activity detail" onPress={onClose}/>
+  </DetailModal>;
+}
 export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave}:ActivityProps) {
-  const rows=state.data?.items??[],p=palette(dark);
+  const rows=state.data?.items??[],visibleRows=filterActivity(rows,filters);
   return <View style={styles.section}>
     <Copy dark={dark}>Server Activity pages; filters never convert unlike currencies.</Copy>
-    <TextInput accessibilityLabel="Search merchant, account, status" placeholder="Search merchant, account, status" placeholderTextColor={p.muted} value={filters.query??''} onChangeText={query=>onFilter({...filters,query})} style={[styles.input,{color:p.text,borderColor:p.border}]} returnKeyType="search"/>
-    {(['currency','category','status','source'] as const).map(key=><Choices key={key} dark={dark} label={key==='status'?'State':key[0].toUpperCase()+key.slice(1)} value={filters[key]??null} values={[...new Set(facetRows.map(t=>key==='source'?t.sourceLabel:t[key]).filter((v):v is string=>!!v))].sort()} onChange={value=>onFilter({...filters,[key]:value})}/>)}
+    <ActivityFilters dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter}/>
     <Status dark={dark} state={state} onRetry={onRetry} label="Activity"/>
-    {state.data&&filterActivity(rows,filters).length===0?<Copy dark={dark}>No activity matches this search.</Copy>:null}
-    {filterActivity(rows,filters).map(t=><Card dark={dark} key={t.id}><Action dark={dark} label={`Open activity: ${t.merchant??'Merchant unavailable'}, ${t.currency} ${formatMoney(t.signedMinorUnits,t.currency)}`} onPress={()=>onOpen(t.id)}/><Copy dark={dark}>{t.occurredAt} · {t.status} · {t.kind}</Copy><Copy dark={dark}>{t.accountLabel??'Account unavailable'} · Source: {t.sourceLabel??'unavailable'}</Copy><Copy dark={dark}>{t.category??'Uncategorized'}</Copy></Card>)}
-    {state.data?.nextCursor?<Action dark={dark} label="Load more Activity" onPress={onLoadMore} disabled={state.phase==='loading'}/>:null}
-    {selected?<DetailModal dark={dark} title="Activity detail" onClose={onClose}>
-      <Copy dark={dark}>{selected.merchant??'Merchant unavailable'} · {selected.currency} {formatMoney(selected.signedMinorUnits,selected.currency)}</Copy><Copy dark={dark}>{selected.occurredAt} · {selected.status} · {selected.kind}</Copy><Copy dark={dark}>Account: {selected.accountLabel??'unavailable'} · Source: {selected.sourceLabel??'unavailable'} · Revision {selected.revision}</Copy>
-      <Copy dark={dark}>Category</Copy><TextInput accessibilityLabel="Category" value={draft.category} maxLength={80} onChangeText={category=>onDraft({...draft,category})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
-      <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
-      <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Source evidence and report values remain server-authoritative.</Copy>
-      <Action dark={dark} label="Save annotation" onPress={onSave} disabled={mutation.blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/><Action dark={dark} label="Close Activity detail" onPress={onClose}/>
-    </DetailModal>:null}
+    <ActivityResults dark={dark} state={state} rows={visibleRows} onLoadMore={onLoadMore} onOpen={onOpen}/>
+    {selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={mutation} onDraft={onDraft} onSave={onSave} onClose={onClose}/>:null}
   </View>;
 }
 export function MutationStatus({dark,mutation}:Theme&{mutation:MutationState}) {

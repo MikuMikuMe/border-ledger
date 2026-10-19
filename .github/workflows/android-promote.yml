@@ -67,7 +67,7 @@ jobs:
           if ($env:EXPECTED_ACCEPTANCE_MANIFEST_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'acceptance_manifest_sha256 must be a full SHA-256 digest.' }
           if ($env:RELEASE_TAG -notmatch '^android-v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'The release tag is not a supported Android version tag.' }
 
-          $main = (& gh api --repo $env:GITHUB_REPOSITORY "repos/$env:GITHUB_REPOSITORY/commits/main" --jq .sha).Trim()
+          $main = (& gh api "repos/$env:GITHUB_REPOSITORY/commits/main" --jq .sha).Trim()
           if ($LASTEXITCODE -ne 0 -or $main.ToLowerInvariant() -ne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) { throw 'The accepted candidate is no longer the exact current main tree.' }
           $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,assets,tagName
           if ($LASTEXITCODE -ne 0) { throw 'The named candidate release could not be read.' }
@@ -116,7 +116,7 @@ jobs:
           $evidenceDirectory = Join-Path $directory 'acceptance-evidence'
           New-Item -ItemType Directory -Path $evidenceDirectory | Out-Null
           Expand-Archive -LiteralPath $acceptanceZip -DestinationPath $evidenceDirectory
-          $verifierContent = & gh api --repo $env:GITHUB_REPOSITORY "repos/$env:GITHUB_REPOSITORY/contents/scripts/verify-android-acceptance.mjs?ref=$env:EXPECTED_SOURCE_SHA" --jq .content
+          $verifierContent = & gh api "repos/$env:GITHUB_REPOSITORY/contents/scripts/verify-android-acceptance.mjs?ref=$env:EXPECTED_SOURCE_SHA" --jq .content
           if ($LASTEXITCODE -ne 0 -or -not $verifierContent) { throw 'The acceptance verifier for the exact accepted source could not be fetched.' }
           $verifierPath = Join-Path $env:RUNNER_TEMP 'verify-android-acceptance.mjs'
           [IO.File]::WriteAllBytes($verifierPath, [Convert]::FromBase64String(($verifierContent -join '').Trim()))

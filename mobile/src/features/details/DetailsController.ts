@@ -87,13 +87,29 @@ export class DetailsController {
   async openRecurring(id:string){if(!this.available())return;this.selectedId=id;this.detail.reset();await this.loadDetail();}
   closeRecurring(){this.selectedId=null;this.detail.reset();}
   async loadDetail(more=false,options:{recoverConflict?:boolean}={}){
-    if(!this.available()||!this.selectedId)return;const id=this.selectedId,current=this.detail.current();if(!shouldLoadMore(more,current.phase,current.data))return;
-    const previous=more?current.data:null;
-    await this.detail.load(async()=>{const value=await this.read(()=>this.ports.recurring.readDetail(id,previous?.nextCursor??null,50));if(!this.available()||this.selectedId!==id)throw {code:'unauthorized'};
-      const stream=remember(this.streams,[value.stream],v=>v.id,v=>v.revision)[0];return {...value,stream,classification:stream.classification,history:previous?merge(previous.history,value.history,v=>v.providerTransactionId):value.history};});
+    const request=this.detailRequest(more);if(!request)return;
+    await this.detail.load(()=>this.readDetailPage(request.id,request.previous));
     // Only the explicit refresh action can recover a definitive conflict after
     // a successful current-detail read. Recovery checks receipts; it never retries.
-    if(options.recoverConflict&&!more&&this.selectedId===id&&this.detail.current().phase==='ready'&&this.mutation.current().status==='revision_conflict')await this.recover();
+    if(this.shouldRecoverConflict(request.id,more,options))await this.recover();
+  }
+  private detailRequest(more:boolean):{id:string;previous:Detail|null}|null{
+    if(!this.available()||!this.selectedId)return null;
+    const current=this.detail.current();if(!shouldLoadMore(more,current.phase,current.data))return null;
+    return {id:this.selectedId,previous:more?current.data:null};
+  }
+  private async readDetailPage(id:string,previous:Detail|null):Promise<Detail>{
+    const value=await this.read(()=>this.ports.recurring.readDetail(id,previous?.nextCursor??null,50));
+    this.assertSelectedDetail(id);
+    const stream=remember(this.streams,[value.stream],v=>v.id,v=>v.revision)[0];
+    return {...value,stream,classification:stream.classification,history:previous?merge(previous.history,value.history,v=>v.providerTransactionId):value.history};
+  }
+  private assertSelectedDetail(id:string){if(!this.available()||this.selectedId!==id)throw {code:'unauthorized'};}
+  private shouldRecoverConflict(id:string,more:boolean,options:{recoverConflict?:boolean}):boolean{
+    if(!options.recoverConflict||more)return false;
+    if(this.selectedId!==id)return false;
+    if(this.detail.current().phase!=='ready')return false;
+    return this.mutation.current().status==='revision_conflict';
   }
   async loadAccounts(more=false){
     if(!this.available())return;const current=this.accounts.current();if(more&&!shouldLoadMore(true,current.phase,current.data?.page??null))return;

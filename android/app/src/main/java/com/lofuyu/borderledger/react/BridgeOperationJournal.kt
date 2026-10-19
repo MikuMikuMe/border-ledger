@@ -120,8 +120,9 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
         // Persist its terminal result so a lost JS promise can discover it.
         val rejected = isRejected(validate)
         val pending = operationRecord(request, if (rejected) JournalStatuses.FailedLocal else JournalStatuses.Running)
+        val index = prepareIndex(request)
         records.write(key(request.id), pending.toString().encodeToByteArray())
-        index(request)
+        persistIndex(request, index)
         if (rejected) return@withLock decode(pending, request.id)
         active.add(request.id)
         null
@@ -198,8 +199,9 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
         }
         unresolved(request)?.let { return@withLock it }
         val value=operationRecord(request, JournalStatuses.AwaitingResult)
+        val index = prepareIndex(request)
         records.write(key(request.id),value.toString().encodeToByteArray())
-        index(request)
+        persistIndex(request, index)
         decode(value,request.id)
     }
 
@@ -302,12 +304,33 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
         val value=read(id) ?: error("Missing operation")
         return decode(value,id).takeIf { it.status in setOf(JournalStatuses.Running.raw,JournalStatuses.AwaitingResult.raw,JournalStatuses.ReconciliationRequired.raw) }
     }
-    private suspend fun index(request: JournalRequest) {
+    private suspend fun prepareIndex(request: JournalRequest): JSONObject {
         val value=records.read(indexKey(request.owner))?.let { JSONObject(it.decodeToString()) } ?: JSONObject()
-        require(value.length()<10000)
+        val fingerprints = value.keys().asSequence().toList()
+        fingerprints.forEach { fingerprint ->
+            val id = value.getString(fingerprint)
+            val operation = read(JournalOperationId(id))
+            if (operation?.getString("owner") == request.owner.raw && isTerminalForIndex(operation.getString("status"))) {
+                value.remove(fingerprint)
+            }
+        }
+        val fingerprint = operationFingerprint(request)
+        check(value.has(fingerprint) || value.length() < MAX_INDEXED_FINGERPRINTS) {
+            "The owner operation index is full of unresolved operations. Reconcile them before starting another write."
+        }
+        return value
+    }
+
+    private suspend fun persistIndex(request: JournalRequest, value: JSONObject) {
         value.put(operationFingerprint(request),request.id.raw)
         records.write(indexKey(request.owner),value.toString().encodeToByteArray())
     }
+
+    private fun isTerminalForIndex(status: String) = status == JournalStatuses.Completed.raw ||
+        status == JournalStatuses.Canceled.raw ||
+        status == JournalStatuses.FailedLocal.raw ||
+        status == JournalStatuses.RevisionConflict.raw ||
+        status == JournalStatuses.Rejected.raw
     private fun operationFingerprint(request: JournalRequest) = DigestMaterial(
         listOf(request.owner.raw,request.kind.raw,request.fingerprint.raw).toString(),
     ).let(::digest)
@@ -316,6 +339,7 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
     private fun digest(value: DigestMaterial) = MessageDigest.getInstance("SHA-256").digest(value.raw.encodeToByteArray()).joinToString("") { "%02x".format(it) }
 
     private companion object {
+        const val MAX_INDEXED_FINGERPRINTS = 10_000
         val OPERATION_ID_PATTERN = Regex("[A-Za-z0-9_-]{8,96}")
     }
 }

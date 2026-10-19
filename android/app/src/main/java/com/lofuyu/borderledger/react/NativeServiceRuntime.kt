@@ -8,6 +8,8 @@ import com.lofuyu.borderledger.ui.ledger.LedgerSnapshotDecoder
 import com.lofuyu.borderledger.ui.ledger.LedgerSnapshotDecodeResult
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.Instant
@@ -19,6 +21,18 @@ typealias OperationId = String
 typealias OperationKind = String
 typealias OperationFingerprint = String
 typealias PendingDestination = String?
+
+/** Waits only through refresh; terminal or signed-out states remain authorization failures. */
+internal suspend fun awaitOwnerGeneration(
+    state: StateFlow<OwnerSessionState>,
+    readIfSignedIn: suspend () -> OwnerGeneration?,
+): OwnerGeneration {
+    while (true) {
+        val generation = readIfSignedIn()
+        if (generation != null) return generation
+        state.first { it !is OwnerSessionState.Refreshing }
+    }
+}
 
 interface NativeServiceHost {
     fun openBrowser(uri: Uri)
@@ -98,10 +112,17 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
     }
     private var sequence = 0L
 
-    suspend fun ownerGeneration(): OwnerGeneration = generationMutex.withLock {
-        if(signingOut || container.ownerSessionManager.state.value !is OwnerSessionState.SignedIn) throw BridgeFailure("not_signed_in")
-        container.bridgeRecords.read(GENERATION)?.decodeToString() ?: UUID.randomUUID().toString().also {
-            container.bridgeRecords.write(GENERATION, it.encodeToByteArray())
+    suspend fun ownerGeneration(): OwnerGeneration = awaitOwnerGeneration(container.ownerSessionManager.state) {
+        generationMutex.withLock {
+            if (signingOut) throw BridgeFailure("not_signed_in")
+            when (container.ownerSessionManager.state.value) {
+                is OwnerSessionState.SignedIn -> container.bridgeRecords.read(GENERATION)?.decodeToString()
+                    ?: UUID.randomUUID().toString().also {
+                        container.bridgeRecords.write(GENERATION, it.encodeToByteArray())
+                    }
+                OwnerSessionState.Refreshing -> null
+                else -> throw BridgeFailure("not_signed_in")
+            }
         }
     }
     suspend fun currentGeneration(): OwnerGeneration? = generationMutex.withLock { if(signingOut) null else container.bridgeRecords.read(GENERATION)?.decodeToString() }

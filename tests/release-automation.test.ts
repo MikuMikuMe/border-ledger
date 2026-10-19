@@ -76,6 +76,13 @@ describe('release automation contract', () => {
     expect(promotionWorkflow).not.toContain('--clobber');
   });
 
+  it('uses gh api endpoints without the unsupported --repo flag', () => {
+    const apiCalls = promotionWorkflow.split('\n').filter(line => line.includes('gh api'));
+    expect(apiCalls.length).toBeGreaterThan(0);
+    expect(apiCalls.every(line => !line.includes('gh api --repo'))).toBe(true);
+    expect(apiCalls.every(line => line.includes('repos/$env:GITHUB_REPOSITORY/'))).toBe(true);
+  });
+
   it('deploys the existing Cloudflare production Worker and fails closed on missing credentials', () => {
     expect(deployWorkflow).toContain('CLOUDFLARE_API_TOKEN');
     expect(deployWorkflow).not.toContain('CLOUDFLARE_ACCOUNT_ID');
