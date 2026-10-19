@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
-const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
+const read = (path: string) => readFileSync(resolve(root, path), 'utf8').replace(/\r\n?/g, '\n');
 const manifest = read('android/app/src/main/AndroidManifest.xml');
 const mainActivity = read('android/app/src/main/java/com/lofuyu/borderledger/MainActivity.kt');
 const reactActivity = read('android/app/src/main/java/com/lofuyu/borderledger/react/BorderLedgerReactActivity.kt');
