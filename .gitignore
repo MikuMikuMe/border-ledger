@@ -20,4 +20,7 @@ android/**/.cxx/
 .impeccable/*.cache.json
 *.local
 
+# Local planning and QA artifacts (screenshots, logs, and test signing material).
+.superpowers/
+
 
