@@ -4,6 +4,9 @@ $androidRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $appRoot = Join-Path $androidRoot 'app'
 $mainRoot = Join-Path $appRoot 'src\main'
 $testRoot = Join-Path $appRoot 'src\test'
+$repoRoot = Split-Path -Parent $androidRoot
+$mobileRoot = Join-Path $repoRoot 'mobile'
+$sharedThreads = Join-Path $repoRoot 'shared\threads'
 
 $required = @(
     'build.gradle.kts',
@@ -19,13 +22,15 @@ $required = @(
     'app\src\main\java\com\lofuyu\borderledger\local\EncryptedRecordStore.kt',
     'app\src\main\java\com\lofuyu\borderledger\local\OutboxDao.kt',
     'app\src\main\java\com\lofuyu\borderledger\local\OwnerReadCache.kt',
-    'app\src\main\java\com\lofuyu\borderledger\ui\theme\BorderLedgerTheme.kt',
+    'app\src\main\java\com\lofuyu\borderledger\ui\theme\ThemeColorSource.kt',
     'app\src\main\java\com\lofuyu\borderledger\ui\theme\MotionPolicy.kt',
-    'app\src\main\java\com\lofuyu\borderledger\ui\login\LoginScreen.kt',
-    'app\src\main\java\com\lofuyu\borderledger\ui\login\LoginFlowBackdrop.kt',
-    'app\src\main\java\com\lofuyu\borderledger\ui\onboarding\CaptureOnboardingScreen.kt',
     'app\src\test\java\com\lofuyu\borderledger\auth\OwnerSessionManagerTest.kt',
-    'app\src\test\java\com\lofuyu\borderledger\auth\CaptureOnboardingCoordinatorTest.kt'
+    'app\src\test\java\com\lofuyu\borderledger\auth\CaptureOnboardingCoordinatorTest.kt',
+    '..\mobile\src\screens\LoginScreen.tsx',
+    '..\mobile\src\features\tools\ToolsViews.tsx',
+    '..\mobile\src\features\tools\ToolsController.ts',
+    '..\mobile\src\components\threads\ThreadField.tsx',
+    '..\shared\threads\ThreadGeometry.ts'
 )
 $missing = $required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $androidRoot $_)) }
 if ($missing) { throw "Missing required Task 5 files: $($missing -join ', ')" }
@@ -57,21 +62,29 @@ $productionText = $productionKotlin + "`n" + (Get-Content -Raw -LiteralPath (Joi
 $versionCatalog = Get-Content -Raw -LiteralPath (Join-Path $androidRoot 'gradle\libs.versions.toml')
 $appContainer = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\AppContainer.kt')
 $mainActivity = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\MainActivity.kt')
+$reactActivity = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\react\BorderLedgerReactActivity.kt')
+$reactServices = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\react\NativeServiceRuntime.kt')
 $outbox = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\local\OutboxDao.kt')
-$captureScreen = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\ui\onboarding\CaptureOnboardingScreen.kt')
-$backdrop = Get-Content -Raw -LiteralPath (Join-Path $mainRoot 'java\com\lofuyu\borderledger\ui\login\LoginFlowBackdrop.kt')
-if ($versionCatalog -notmatch 'compose-foundation\s*=\s*\{\s*module\s*=\s*"androidx\.compose\.foundation:foundation"') { throw 'Compose Foundation catalog alias is missing.' }
+$captureViews = Get-Content -Raw -LiteralPath (Join-Path $mobileRoot 'src\features\tools\ToolsViews.tsx')
+$captureController = Get-Content -Raw -LiteralPath (Join-Path $mobileRoot 'src\features\tools\ToolsController.ts')
+$threadField = Get-Content -Raw -LiteralPath (Join-Path $mobileRoot 'src\components\threads\ThreadField.tsx')
+$threadGeometry = Get-Content -Raw -LiteralPath (Join-Path $sharedThreads 'ThreadGeometry.ts')
+if ($versionCatalog -match 'androidx\.compose|activity-compose|kotlin-compose') { throw 'Legacy Compose dependencies remain after the React Native cutover.' }
 if ($appContainer -match 'UnavailableMobileApi') { throw 'Production AppContainer still defaults capture to UnavailableMobileApi.' }
-if ($appContainer -notmatch 'HttpWorkerCaptureApi' -or $mainActivity -notmatch 'syncOwnerSessionState' -or $mainActivity -notmatch 'refreshApiHealth') { throw 'Capture onboarding is not wired to the signed-in owner/API boundary.' }
+if ($mainActivity -notmatch 'class MainActivity : BorderLedgerReactActivity' -or $reactActivity -notmatch 'class BorderLedgerReactActivity : ReactActivity\(\), NativeServiceHost') { throw 'Production launcher is not hosted by the React Native Activity.' }
+if ($appContainer -notmatch 'HttpWorkerCaptureApi' -or $reactActivity -notmatch 'captureHealth\.refresh' -or $reactServices -notmatch 'captureOnboarding\.syncOwnerSessionState') { throw 'Capture onboarding is not wired to the signed-in owner/API boundary.' }
 if ($productionText -match 'ownerSignedIn\s*=\s*false') { throw 'Capture onboarding still has a production false owner-sign-in default.' }
 if ($outbox -notmatch 'private val mutex = Mutex\(\)' -or $outbox -notmatch 'enqueue\(event: QueuedAlert\): EnqueueResult = mutex\.withLock') { throw 'Outbox enqueue is not protected by its read-modify-write mutex.' }
-if ($captureScreen -match 'onClick\s*=\s*\{\s*coordinator\.[^}]*SourceTestResult\.Passed') { throw 'A source-test button can assert Passed without evidence.' }
-if (($backdrop -notmatch 'MaterialTheme\.colorScheme\.primary' -and $backdrop -notmatch 'colors\.primary') -or ($backdrop -notmatch 'MaterialTheme\.colorScheme\.secondary' -and $backdrop -notmatch 'colors\.secondary')) { throw 'Login backdrop does not derive ribbon colors from MaterialTheme.' }
+$sourceTestAction = 'onPress=\{\(\)=>\{setConsent\(false\);\s*void controller\.requestTest\(\);\}\}'
+if ($captureViews -notmatch 'Only matching listener evidence can pass this test' -or $captureViews -notmatch $sourceTestAction) { throw 'The React Native source-test action is not routed through the native capture boundary.' }
+if ($captureController -match 'sourceTest\s*[:=]\s*["'']Passed|SourceTestResult\.Passed') { throw 'The React Native source-test controller can assert Passed without native evidence.' }
+if ($threadGeometry -notmatch 'THREAD_COUNT\s*=\s*88' -or $threadGeometry -notmatch 'THREAD_SPEED\s*=\s*0\.58' -or $threadGeometry -notmatch 'REDUCED_MOTION_PHASE\s*=\s*1\.8') { throw 'Shared Threads geometry no longer matches the approved original login demo.' }
+if ($threadField -notmatch 'advanceCanonicalThreadPhase' -or $threadField -notmatch 'canonicalThreadPaint' -or $threadField -notmatch 'useFrameCallback') { throw 'Production login does not render the shared Threads geometry through the native Skia animation.' }
 $requiredMarkers = @(
     'AndroidKeyStore', 'AES/GCM/NoPadding', 'noBackupFilesDir', 'SecureStorageException',
     'OwnerAuthInterceptor', 'CaptureAuthInterceptor', 'StateFlow<OwnerSessionState>', 'Mutex',
     'PendingOwnerRotation', 'OWNER_REVOCATIONS', 'OUTBOX_QUEUE', 'retainEncryptedOutbox',
-    'clearOwnerReadCache', 'allowsContinuousMotion', 'FLOW_CYCLE_MILLIS = 18_000',
+    'clearOwnerReadCache', 'allowsContinuousMotion',
     'CaptureHealth.SourceTestRequired', 'CaptureApiHealth', 'OwnerSessionStateProvider',
     'observeSourceTest', 'requestSourceTest', 'explicitConsent = true', 'POST_NOTIFICATIONS'
 )
@@ -105,4 +118,4 @@ foreach ($testName in @('callbackExchangeCommitsBeforeSignedInAndDuplicateCallba
     if ($testText -notmatch [regex]::Escape($testName)) { throw "Missing required test: $testName" }
 }
 
-Write-Output 'TASK5_STATIC_OK production_manifest=ok debug_probe_isolated=ok crypto_storage=ok auth_boundaries=ok ui_motion_onboarding=ok synthetic_tests=present'
+Write-Output 'TASK5_STATIC_OK production_manifest=ok debug_probe_isolated=ok crypto_storage=ok auth_boundaries=ok canonical_threads=ok motion_onboarding=ok synthetic_tests=present'

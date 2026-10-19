@@ -1,0 +1,40 @@
+@import 'tailwindcss';
+@import 'uniwind';
+
+/* Initial semantic tokens from the retained native brand palette. */
+@layer theme {
+  :root {
+    @variant light {
+      --color-background: #f3efe6;
+      --color-foreground: #18201f;
+      --color-primary: #1b6b5b;
+      --color-primary-foreground: #ffffff;
+      --color-secondary: #f5d9cf;
+      --color-secondary-foreground: #18201f;
+      --color-muted: #e8e2d8;
+      --color-muted-foreground: #4f5c56;
+      --color-accent: #d2e9df;
+      --color-accent-foreground: #18201f;
+      --color-destructive: #a83f3f;
+      --color-border: #d2ccc0;
+      --color-input: #d2ccc0;
+      --color-ring: #1b6b5b;
+    }
+    @variant dark {
+      --color-background: #101715;
+      --color-foreground: #eef1e8;
+      --color-primary: #83c9b1;
+      --color-primary-foreground: #07392e;
+      --color-secondary: #663126;
+      --color-secondary-foreground: #eef1e8;
+      --color-muted: #1d2925;
+      --color-muted-foreground: #a5b2aa;
+      --color-accent: #1d5145;
+      --color-accent-foreground: #eef1e8;
+      --color-destructive: #ffb4ab;
+      --color-border: #43534b;
+      --color-input: #43534b;
+      --color-ring: #83c9b1;
+    }
+  }
+}

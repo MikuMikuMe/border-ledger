@@ -1,10 +1,12 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
 const gradle = readFileSync(resolve(root, 'android/app/build.gradle.kts'), 'utf8');
 const releaseWorkflow = readFileSync(resolve(root, '.github/workflows/android-release.yml'), 'utf8');
+const promotionPath = resolve(root, '.github/workflows/android-promote.yml');
+const promotionWorkflow = existsSync(promotionPath) ? readFileSync(promotionPath, 'utf8') : '';
 const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'), 'utf8');
 const wrangler = readFileSync(resolve(root, 'wrangler.jsonc'), 'utf8');
 const productionConfig = wrangler.slice(wrangler.indexOf('"production": {'));
@@ -19,29 +21,66 @@ describe('release automation contract', () => {
     expect(gradle).toContain('buildConfigField("String", "MOBILE_ENVIRONMENT"');
   });
 
-  it('publishes an Android release only from app-owned changes on main', () => {
-    expect(releaseWorkflow).toMatch(/push:\s*\n\s+branches:\s*\[main\]/);
-    expect(releaseWorkflow).toContain('android/**');
-    expect(releaseWorkflow).toContain('src/**');
-    expect(releaseWorkflow).toContain('contracts/**');
-    expect(releaseWorkflow).toContain('package.json');
-    expect(releaseWorkflow).toContain('package-lock.json');
-    expect(releaseWorkflow).toContain('Distinguish app changes from backend-only package changes');
-    expect(releaseWorkflow).toContain('detect-android-release-change.mjs');
-    expect(releaseWorkflow).toContain("needs.detect-app-change.outputs.app_changed == 'true'");
-    expect(releaseWorkflow).toContain("github.ref == 'refs/heads/main'");
-    expect(releaseWorkflow).toContain('if-no-files-found: error');
-    expect(releaseWorkflow).toContain('contents: write');
-    expect(releaseWorkflow).toContain('assembleRelease');
-    expect(releaseWorkflow).toContain('apksigner');
-    expect(releaseWorkflow).toContain('dump xmltree --file AndroidManifest.xml');
-    expect(releaseWorkflow).toContain('gh release');
-    expect(releaseWorkflow).toContain('ANDROID_KEYSTORE_BASE64');
-    expect(releaseWorkflow).toContain('releaseVersionCode');
-    expect(releaseWorkflow).toContain('releaseVersionName');
-    expect(releaseWorkflow).toContain('"-PreleaseVersionCode=');
-    expect(releaseWorkflow).toContain('"-PreleaseVersionName=');
-    expect(releaseWorkflow).toContain('"-PmobileEnvironment=production"');
+  it('blocks debug packaging when its keystore uses the protected production certificate', () => {
+    expect(gradle).toContain('verifyDebugSigningIdentity');
+    expect(gradle).toContain('getCertificate(debugKeyAlias)');
+    expect(gradle).toContain('1FF2A25E39136EEFA79D23CC7531F702B2A162280538410509CA2FF65B4744ED');
+    expect(gradle).toContain('validateSigningDebug');
+    expect(gradle).toMatch(/it\.name\.startsWith\("packageDebug"\)/);
+    expect(gradle).toMatch(/it\.name\.startsWith\("signDebug"\)/);
+    expect(gradle).toContain('borderLedgerDebugKeystore');
+    expect(gradle).not.toContain('validateSigningRelease');
+    expect(gradle).not.toContain('packageRelease');
+  });
+
+  it('builds only an explicit reviewed main SHA without signing material in the build job', () => {
+    expect(releaseWorkflow).toMatch(/^  workflow_dispatch:/m);
+    expect(releaseWorkflow).not.toMatch(/^  push:/m);
+    expect(releaseWorkflow).toContain('source_sha');
+    expect(releaseWorkflow).toContain('must equal the workflow main SHA');
+    const buildJob = releaseWorkflow.split('  sign-and-draft:')[0];
+    expect(buildJob).toContain('build-unsigned:');
+    expect(buildJob).toContain('assembleRelease');
+    expect(buildJob).toContain('releaseVersionCode=1000');
+    expect(buildJob).toContain('releaseVersionName=0.2.0');
+    expect(buildJob).toContain('mobileEnvironment=production');
+    expect(buildJob).toContain('actions/upload-artifact@v4');
+    expect(buildJob).not.toMatch(/secrets\./);
+    expect(buildJob).not.toContain('contents: write');
+  });
+
+  it('signs and drafts from a main-controlled job without checking out candidate code or clobbering a tag', () => {
+    const signer = releaseWorkflow.split('  sign-and-draft:')[1] ?? '';
+    expect(signer).toContain("github.ref == 'refs/heads/main'");
+    expect(signer).toContain('actions/download-artifact@v4');
+    expect(signer).not.toContain('actions/checkout');
+    expect(signer).toContain('EXPECTED_CERT_SHA256');
+    expect(signer).toContain('1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed');
+    expect(signer).toContain('gh release create');
+    expect(signer).toContain('--draft');
+    expect(signer).not.toContain('--clobber');
+    expect(signer).toContain('candidate-manifest.json');
+  });
+
+  it('promotes the accepted draft by verifying the exact source and APK hash without rebuilding or replacing bytes', () => {
+    expect(promotionWorkflow).toMatch(/^  workflow_dispatch:/m);
+    expect(promotionWorkflow).toContain("github.ref == 'refs/heads/main'");
+    expect(promotionWorkflow).toContain('candidate-manifest.json');
+    expect(promotionWorkflow).toContain('SOURCE_SHA');
+    expect(promotionWorkflow).toContain('SHA256SUMS.txt');
+    expect(promotionWorkflow).toContain('gh release edit');
+    expect(promotionWorkflow).toContain('--draft=false');
+    expect(promotionWorkflow).not.toContain('actions/checkout');
+    expect(promotionWorkflow).not.toContain('assembleRelease');
+    expect(promotionWorkflow).not.toContain('apksigner sign');
+    expect(promotionWorkflow).not.toContain('--clobber');
+  });
+
+  it('uses gh api endpoints without the unsupported --repo flag', () => {
+    const apiCalls = promotionWorkflow.split('\n').filter(line => line.includes('gh api'));
+    expect(apiCalls.length).toBeGreaterThan(0);
+    expect(apiCalls.every(line => !line.includes('gh api --repo'))).toBe(true);
+    expect(apiCalls.every(line => line.includes('repos/$env:GITHUB_REPOSITORY/'))).toBe(true);
   });
 
   it('deploys the existing Cloudflare production Worker and fails closed on missing credentials', () => {
@@ -64,6 +103,15 @@ describe('release automation contract', () => {
     expect(deployWorkflow).toContain('mobileAuthConfigured');
     expect(deployWorkflow).not.toContain('configured=false');
     expect(deployWorkflow).not.toContain('deployment skipped');
+  });
+
+  it('verifies the production Android App Links response against the existing release signer after deployment', () => {
+    expect(deployWorkflow).toContain('https://pf.lofuyu.com/.well-known/assetlinks.json');
+    expect(deployWorkflow).toContain('sha256_cert_fingerprints');
+    expect(deployWorkflow).toContain('1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED');
+    expect(deployWorkflow.indexOf('Deploy the named production Worker')).toBeLessThan(
+      deployWorkflow.indexOf('https://pf.lofuyu.com/.well-known/assetlinks.json'),
+    );
   });
 
   it('targets the existing production Worker bindings instead of creating a shadow Worker', () => {

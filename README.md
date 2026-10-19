@@ -63,7 +63,7 @@ npm run build
    $bytes = [byte[]]::new(32); [Security.Cryptography.RandomNumberGenerator]::Fill($bytes); [Convert]::ToBase64String($bytes)
    ```
 
-   Mobile owner sign-in uses one session-encryption secret plus three approved-identity allowlist secrets. `MOBILE_ACCESS_AUTHORIZATION_URL` is declared in the production Wrangler variables as the app URL `https://pf.lofuyu.com/mobile/authorize`; it is not a Cloudflare-generated OAuth URL. `MOBILE_SESSION_ENCRYPTION_KEY` is a separate random Worker-only secret used for short-lived replay protection; generate at least 32 random bytes and never reuse the Plaid encryption key. Set `MOBILE_APPROVED_ACCESS_ISSUERS` to the exact Access JWT issuer, `MOBILE_APPROVED_ACCESS_AUDIENCES` to the exact Access AUD value, and `MOBILE_APPROVED_ACCESS_SUBJECTS` to one or more approved Access subject or email values, comma-separated. The Worker fails closed when any allowlist is absent.
+   Mobile owner sign-in requires one Worker-only session-encryption secret and three approved-identity allowlist secrets. `MOBILE_ACCESS_AUTHORIZATION_URL` is the non-secret production app URL `https://pf.lofuyu.com/mobile/authorize`. Generate `MOBILE_SESSION_ENCRYPTION_KEY` independently with at least 32 random bytes; do not reuse the Plaid encryption key or replace the key during an ordinary deployment. Set `MOBILE_APPROVED_ACCESS_ISSUERS`, `MOBILE_APPROVED_ACCESS_AUDIENCES`, and `MOBILE_APPROVED_ACCESS_SUBJECTS` to the exact approved Cloudflare Access issuer, audience, and subject values. The Worker fails closed when any allowlist is absent.
 
 6. Keep the public welcome page at `/` outside the Access login wall, and protect `/mobile/authorize`, `/app/*`, `/api/mobile-auth/*`, plus the financial API routes. The front page links into `/app`, so Access can return an invited user to the workspace after sign-in. Add the Access team domain (for example `https://your-team.cloudflareaccess.com`) as `ACCESS_TEAM_DOMAIN` and the private Access application AUD tag as `ACCESS_AUDIENCE` in the Worker variables. The browser sends the Access session cookie; it never receives `LEDGER_API_KEY`.
 7. Add an Access Bypass policy for exactly `/api/webhooks/plaid`, because Plaid cannot present your browser session. The Worker verifies Plaid’s signed `Plaid-Verification` header before enqueueing a sync.
@@ -97,7 +97,7 @@ Before connecting a real bank Item, complete these steps in order:
    npx wrangler secret put MOBILE_APPROVED_ACCESS_SUBJECTS --env production
    ```
 
-   Keep the existing `MOBILE_SESSION_ENCRYPTION_KEY` stable; replacing it invalidates sessions and outstanding mobile authorization state. `MOBILE_ACCESS_AUTHORIZATION_URL` is a non-secret production variable declared in `wrangler.jsonc`.
+   Keep the existing `MOBILE_SESSION_ENCRYPTION_KEY` stable; replacing it invalidates sessions and outstanding mobile authorization state. `MOBILE_ACCESS_AUTHORIZATION_URL` is a non-secret production variable declared in `wrangler.jsonc`. Configure the three Access allowlists with the exact approved issuer, audience, and subject values. Never copy Sandbox credentials into production.
 
 3. Apply the versioned migrations to the existing production database:
 

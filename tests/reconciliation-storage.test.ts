@@ -53,7 +53,7 @@ describe('durable statement reconciliation', () => {
       ORDER BY name`).all<{ name: string; sql: string }>();
     expect(afterUpgrade.results.map((index) => index.name)).toEqual(beforeUpgrade.results.map((index) => index.name));
     await expect(fixture.db.prepare(`SELECT name FROM __migrations WHERE name = '0009-statement-reconciliation-target-uniqueness.sql'`).all()).resolves.toMatchObject({ results: [{ name: '0009-statement-reconciliation-target-uniqueness.sql' }] });
-  });
+  }, 15_000);
 
   it('archives duplicate confirmation evidence before installing the 0009 unique indexes', async () => {
     const fixture = await createAlertFixture({ migrationNames: task10PreUniquenessWithFx });

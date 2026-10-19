@@ -1,0 +1,27 @@
+import type {TurboModule, CodegenTypes} from 'react-native';
+import {TurboModuleRegistry} from 'react-native';
+type Operation = {operationId: string; kind: string; status: string; updatedAt: string; resultId: string | null};
+export type AccountPageQuery = {cursor: string | null; limit: number};
+export type ConnectRequest = {operationId: string; reconnectConnectionId: string | null};
+export type CancelConnectRequest = {operationId: string};
+export type SelectAccountsRequest = {operationId: string; pendingConnectionId: string; accountIds: string[]};
+export type CancelPendingRequest = {operationId: string; pendingConnectionId: string};
+export type SyncRequest = {operationId: string};
+export type DisconnectRequest = {operationId: string; connectionId: string};
+export type Account = {providerAccountId: string; name: string; mask: string | null; subtype: string | null; currency: string; kind: string};
+export type AccountPage = {accounts: Account[]; nextCursor: string | null; limit: number};
+export type Connection = {connectionId: string; institution: string | null; state: string; expiresAt: string | null; cleanupState: string | null; lastSyncedAt: string | null; lastError: string | null};
+export type LinkSnapshot = {state: string; outcomeCode: string | null; operationId: string | null; canCancel: boolean; pendingConnectionId: string | null; connectionId: string | null; accounts: Account[]};
+export interface Spec extends TurboModule {
+  getSnapshot(): Promise<LinkSnapshot>;
+  readAccounts(query: AccountPageQuery): Promise<AccountPage>;
+  readConnections(): Promise<Connection[]>;
+  startConnect(request: ConnectRequest): Promise<Operation>;
+  cancelConnect(request: CancelConnectRequest): Promise<Operation>;
+  startSelectAccounts(request: SelectAccountsRequest): Promise<Operation>;
+  startCancelPending(request: CancelPendingRequest): Promise<Operation>;
+  startSync(request: SyncRequest): Promise<Operation>;
+  startDisconnect(request: DisconnectRequest): Promise<Operation>;
+  readonly onStateChanged: CodegenTypes.EventEmitter<LinkSnapshot>;
+}
+export default TurboModuleRegistry.getEnforcing<Spec>('NativeAccounts');

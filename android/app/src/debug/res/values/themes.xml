@@ -1,0 +1,4 @@
+<resources>
+    <!-- ReactActivity requires AppCompat; appearance is controlled by React Native design tokens. -->
+    <style name="Theme.BorderLedger.ReactNative" parent="Theme.AppCompat.DayNight.NoActionBar" />
+</resources>

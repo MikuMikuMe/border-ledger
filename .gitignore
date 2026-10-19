@@ -1,16 +1,26 @@
 node_modules/
+mobile/node_modules/
+mobile/android/
+mobile/build/
+mobile/.metro-health-check*
 dist/
 .wrangler/
 .env
 .env.*
 !.env.example
 coverage/
+android/local.properties
 android/.gradle/
+android/.kotlin/
 android/**/build/
+android/**/.cxx/
 .impeccable/review/
 .impeccable/mocks/
 .impeccable/build/
 .impeccable/*.cache.json
 *.local
+
+# Local planning and QA artifacts (screenshots, logs, and test signing material).
+.superpowers/
 
 

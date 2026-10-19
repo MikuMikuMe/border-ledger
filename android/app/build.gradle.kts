@@ -1,18 +1,107 @@
+import java.io.File
+import java.io.FileInputStream
+import java.security.KeyStore
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
+    id("com.facebook.react")
+}
+
+extra["REACT_NATIVE_NODE_MODULES_DIR"] = file("../../mobile/node_modules/react-native").absolutePath
+
+react {
+    root.set(file("../../mobile"))
+    reactNativeDir.set(file("../../mobile/node_modules/react-native"))
+    codegenDir.set(file("../../mobile/node_modules/@react-native/codegen"))
+    cliFile.set(file("../../mobile/node_modules/react-native/cli.js"))
+    autolinkLibrariesWithApp()
+}
+
+val requestedReleaseEnvironment = providers.gradleProperty("mobileEnvironment")
+val verifyReleaseEnvironment = tasks.register("verifyReleaseEnvironment") {
+    group = "verification"
+    description = "Require an explicit production environment for release artifacts."
+    inputs.property("mobileEnvironment", requestedReleaseEnvironment.orElse(""))
+    doLast {
+        if (requestedReleaseEnvironment.orNull != "production") {
+            throw GradleException("Release builds require -PmobileEnvironment=production; debug defaults to sandbox.")
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" || it.name == "createBundleReleaseJsAndAssets" }.configureEach {
+    dependsOn(verifyReleaseEnvironment)
+}
+
+val productionSigningCertificateSha256 = "1FF2A25E39136EEFA79D23CC7531F702B2A162280538410509CA2FF65B4744ED"
+val verifyDebugSigningIdentity = tasks.register("verifyDebugSigningIdentity") {
+    group = "verification"
+    description = "Prevent debug artifacts from being signed with the production release identity."
+    doLast {
+        val configuredKeystore = providers.gradleProperty("borderLedgerDebugKeystore").orNull
+        val keystoreFile = configuredKeystore?.let(::file)
+            ?: File(System.getProperty("user.home"), ".android/debug.keystore")
+
+        // On a clean CI runner AGP can generate a new debug keystore. There is
+        // no existing identity to reject until that file has been created.
+        if (!keystoreFile.isFile) return@doLast
+
+        val storePassword = providers.gradleProperty("borderLedgerDebugKeystorePassword")
+            .orElse("android")
+            .get()
+        val debugKeyAlias = providers.gradleProperty("borderLedgerDebugKeyAlias")
+            .orElse("androiddebugkey")
+            .get()
+
+        var loadedKeystore: KeyStore? = null
+        var lastLoadFailure: Exception? = null
+        for (type in listOf("JKS", "PKCS12")) {
+            try {
+                val candidate = KeyStore.getInstance(type)
+                FileInputStream(keystoreFile).use { stream ->
+                    candidate.load(stream, storePassword.toCharArray())
+                }
+                loadedKeystore = candidate
+                break
+            } catch (failure: Exception) {
+                lastLoadFailure = failure
+            }
+        }
+        val keystore = loadedKeystore ?: throw GradleException(
+            "Unable to inspect the configured debug keystore. Check its path and store password.",
+            lastLoadFailure,
+        )
+        val certificate = keystore.getCertificate(debugKeyAlias)
+            ?: throw GradleException("The configured debug keystore does not contain the selected key alias.")
+        val actualFingerprint = MessageDigest.getInstance("SHA-256")
+            .digest(certificate.encoded)
+            .joinToString("") { byte -> "%02X".format(byte.toInt() and 0xFF) }
+
+        if (actualFingerprint == productionSigningCertificateSha256) {
+            throw GradleException(
+                "Debug packaging refused: its signing certificate is the production release identity. " +
+                    "Configure a separate borderLedgerDebugKeystore."
+            )
+        }
+    }
+}
+tasks.matching {
+    it.name.startsWith("validateSigningDebug") ||
+        it.name.startsWith("packageDebug") ||
+        it.name.startsWith("signDebug")
+}.configureEach {
+    dependsOn(verifyDebugSigningIdentity)
 }
 
 android {
     namespace = "com.lofuyu.borderledger"
-    compileSdk = 36
+    compileSdk = 37
 
     val releaseVersionCode = providers.gradleProperty("releaseVersionCode")
         .map { value -> value.toIntOrNull() ?: throw GradleException("releaseVersionCode must be an integer") }
-        .orElse(1)
+        .orElse(1000)
     val releaseVersionName = providers.gradleProperty("releaseVersionName")
-        .orElse("0.1-foundation")
+        .orElse("0.2.0")
     val mobileEnvironment = providers.gradleProperty("mobileEnvironment")
         .map { value ->
             value.trim().also {
@@ -29,12 +118,19 @@ android {
         targetSdk = 36
         versionCode = releaseVersionCode.get()
         versionName = releaseVersionName.get()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MOBILE_ENVIRONMENT", "\"${mobileEnvironment.get()}\"")
         buildConfigField("String", "MOBILE_API_ORIGIN", "\"https://pf.lofuyu.com\"")
         buildConfigField("String", "MOBILE_CALLBACK_SCHEME", "\"https\"")
         buildConfigField("String", "MOBILE_CALLBACK_HOST", "\"pf.lofuyu.com\"")
         buildConfigField("String", "MOBILE_CALLBACK_PATH", "\"/android/auth/callback\"")
         manifestPlaceholders["mobileCallbackHost"] = "pf.lofuyu.com"
+        externalNativeBuild {
+            cmake {
+                // Hash generated source paths before Windows Ninja reaches MAX_PATH.
+                arguments += "-DCMAKE_OBJECT_PATH_MAX=250"
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -51,55 +147,35 @@ android {
         }
     }
     buildFeatures {
-        compose = true
         buildConfig = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
-}
-
-// Keep the existing Kotlin tests under the conventional Android `java` test
-// source directory visible to the Kotlin 2.x compiler as well as AGP.
-kotlin {
-    sourceSets.all {
-        if (name.contains("test", ignoreCase = true)) {
-            kotlin.srcDir("src/test/java")
+    externalNativeBuild {
+        cmake {
+            // Windows callers/CI can keep C++ intermediates on a short D-drive path.
+            buildStagingDirectory = file(providers.gradleProperty("borderLedgerCxxRoot").orElse(".cxx"))
         }
     }
-}
-
-// AGP/Kotlin 2.x can otherwise omit Kotlin files stored in the Android
-// `src/test/java` convention directory from the variant compile task.
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-    if (name.endsWith("UnitTestKotlin")) {
-        source(fileTree("src/test/java") { include("**/*.kt") })
-        // This shared synthetic fixture is referenced by parser, capture and
-        // local-store tests. Keep it explicit because the WebDAV-backed
-        // checkout can otherwise omit this newly-added source from the
-        // incremental Kotlin source snapshot.
-        source(file("src/test/java/com/lofuyu/borderledger/capture/SyntheticNotificationFixtures.kt"))
-    }
+    sourceSets.getByName("main").assets.directories.add("../../mobile/assets")
 }
 
 dependencies {
-    implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
-    implementation(libs.compose.foundation)
-    implementation(libs.compose.animation)
-    implementation(libs.compose.material3)
-    implementation(libs.compose.material.icons.extended)
-    implementation(libs.activity.compose)
+    implementation(project(":sharedCore"))
+    implementation("com.facebook.react:react-android")
+    implementation("com.facebook.react:hermes-android")
+    implementation(libs.activity.ktx)
     implementation(libs.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.work.runtime.ktx)
     // Official Plaid Link Android SDK; Link is opened through the coordinator boundary.
     implementation(libs.plaid.link.sdk)
-    debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
     // The Android unit-test runtime exposes throwing org.json stubs. Use the
     // platform-neutral implementation for JVM tests; the APK continues to
     // use Android's bundled org.json implementation.

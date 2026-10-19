@@ -26,9 +26,6 @@ data class MobileRequest(
 
 class CredentialBoundaryException(message: String) : Exception(message)
 
-fun interface OwnerCredentialProvider {
-    suspend fun accessToken(): String?
-}
 
 class OwnerAuthInterceptor(
     private val provider: OwnerCredentialProvider,

@@ -1,13 +1,25 @@
 package com.lofuyu.borderledger.bank
 
 import com.lofuyu.borderledger.accounts.AccountRepository
+import com.lofuyu.borderledger.accounts.AccountSelectionRequest
+import com.lofuyu.borderledger.accounts.ConnectionId
 import com.lofuyu.borderledger.accounts.BankAccount
 import com.lofuyu.borderledger.accounts.ConnectionOperation
+import com.lofuyu.borderledger.accounts.ExchangeRequest
+import com.lofuyu.borderledger.accounts.IdempotencyKey
+import com.lofuyu.borderledger.accounts.LinkTokenRequest
+import com.lofuyu.borderledger.accounts.PendingCancellationRequest
+import com.lofuyu.borderledger.accounts.ProviderAccountId
+import com.lofuyu.borderledger.accounts.ProviderPublicToken
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
+
+private typealias ReconnectTarget = String
+private typealias ErrorMessage = String
+private typealias ProviderAccountSelection = String
 
 /**
  * Result boundary for the official Plaid Android Link SDK adapter.
@@ -43,6 +55,7 @@ sealed interface ConnectionCoordinatorState {
     data class Connected(val operation: ConnectionOperation) : ConnectionCoordinatorState
     data object Canceled : ConnectionCoordinatorState
     data class Unsupported(val message: String) : ConnectionCoordinatorState
+    data object ReconciliationRequired : ConnectionCoordinatorState
     data class Failed(val message: String, val recoverable: Boolean = true) : ConnectionCoordinatorState
 }
 
@@ -65,91 +78,113 @@ class PlaidLinkCoordinator(
         if (this.launcher === launcher) this.launcher = UnsupportedPlaidLinkLauncher
     }
 
-    suspend fun connect(reconnectConnectionId: String? = null) {
-        if (!connectMutex.tryLock()) return
-        try {
+    suspend fun connect(reconnectConnectionId: ReconnectTarget? = null) {
+        runExclusive("The bank connection could not be completed.") {
             _state.value = ConnectionCoordinatorState.LoadingLink
-            try {
-                val link = accounts.createLinkToken(reconnectConnectionId)
-                val linkToken = link.linkToken ?: error("The Worker did not return a Link token.")
-                _state.value = ConnectionCoordinatorState.Linking
-                completeLinkResult(launcher.launch(linkToken), reconnectConnectionId)
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (error: Exception) {
-                _state.value = ConnectionCoordinatorState.Failed(error.message ?: "The bank connection could not be completed.")
-            }
-        } finally {
-            connectMutex.unlock()
+            val link = accounts.createLinkToken(LinkTokenRequest(reconnectConnectionId?.let(::ConnectionId)))
+            val linkToken = link.linkToken ?: error("The Worker did not return a Link token.")
+            _state.value = ConnectionCoordinatorState.Linking
+            completeLinkResult(launcher.launch(linkToken), reconnectConnectionId)
         }
     }
 
     /** Resume a result redelivered to a recreated Activity without a live waiter. */
     suspend fun recover(result: PlaidLinkResult) {
+        runExclusive("The recovered bank connection could not be completed.") {
+            _state.value = ConnectionCoordinatorState.Linking
+            // A recreated Activity cannot safely infer a reconnect target;
+            // the Worker still validates the public token and stages the
+            // resulting Item for explicit account confirmation.
+            completeLinkResult(result, reconnectConnectionId = null)
+        }
+    }
+
+    private suspend fun runExclusive(defaultMessage: ErrorMessage, action: suspend () -> Unit) {
         if (!connectMutex.tryLock()) return
         try {
-            _state.value = ConnectionCoordinatorState.Linking
-            try {
-                // A recreated Activity cannot safely infer a reconnect target;
-                // the Worker still validates the public token and stages the
-                // resulting Item for explicit account confirmation.
-                completeLinkResult(result, reconnectConnectionId = null)
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (error: Exception) {
-                _state.value = ConnectionCoordinatorState.Failed(error.message ?: "The recovered bank connection could not be completed.")
-            }
+            runSafely(defaultMessage, action)
         } finally {
             connectMutex.unlock()
         }
     }
 
-    private suspend fun completeLinkResult(result: PlaidLinkResult, reconnectConnectionId: String?) {
+    private suspend fun runSafely(defaultMessage: ErrorMessage, action: suspend () -> Unit) {
+        try {
+            action()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            _state.value = ConnectionCoordinatorState.Failed(error.message ?: defaultMessage)
+        }
+    }
+
+    private suspend fun completeLinkResult(result: PlaidLinkResult, reconnectConnectionId: ReconnectTarget?) {
         when (result) {
             is PlaidLinkResult.Canceled -> _state.value = ConnectionCoordinatorState.Canceled
             is PlaidLinkResult.Unsupported -> _state.value = ConnectionCoordinatorState.Unsupported(
                 "Official Plaid Link is not configured in this build. No provider token was exchanged.",
             )
             is PlaidLinkResult.Failed -> _state.value = ConnectionCoordinatorState.Failed(result.message)
-            is PlaidLinkResult.Success -> {
-                val pending = accounts.exchange(result.publicToken, idempotencyKey(), reconnectConnectionId)
-                if (pending.state != "pending" || pending.pendingConnectionId == null) {
-                    _state.value = ConnectionCoordinatorState.Failed("The provider connection was not staged safely.")
-                } else {
-                    _state.value = ConnectionCoordinatorState.Pending(pending, pending.accounts)
-                }
-            }
+            is PlaidLinkResult.Success -> stageConnection(result.publicToken, reconnectConnectionId)
         }
     }
 
-    suspend fun confirmSelection(accountIds: List<String>) {
-        val current = _state.value
-        if (current !is ConnectionCoordinatorState.Pending) return
+    private suspend fun stageConnection(publicToken: String, reconnectConnectionId: ReconnectTarget?) {
+        val pending = accounts.exchange(
+            ExchangeRequest(
+                publicToken = ProviderPublicToken(publicToken),
+                idempotencyKey = IdempotencyKey(idempotencyKey()),
+                reconnectConnectionId = reconnectConnectionId?.let(::ConnectionId),
+            ),
+        )
+        _state.value = pendingState(pending)
+    }
+
+    private fun pendingState(operation: ConnectionOperation): ConnectionCoordinatorState {
+        return if (operation.state == "pending" && operation.pendingConnectionId != null) {
+            ConnectionCoordinatorState.Pending(operation, operation.accounts)
+        } else {
+            ConnectionCoordinatorState.Failed("The provider connection was not staged safely.")
+        }
+    }
+
+    suspend fun confirmSelection(accountIds: List<ProviderAccountSelection>) {
+        val current = _state.value as? ConnectionCoordinatorState.Pending ?: return
         if (accountIds.isEmpty()) {
             _state.value = ConnectionCoordinatorState.Failed("Choose at least one account before continuing.")
             return
         }
-        try {
-            val connected = accounts.selectAccounts(current.operation.pendingConnectionId!!, accountIds, idempotencyKey())
-            _state.value = if (connected.state == "connected") ConnectionCoordinatorState.Connected(connected)
-            else ConnectionCoordinatorState.Failed("The Worker did not confirm the selected accounts.")
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (error: Exception) {
-            _state.value = ConnectionCoordinatorState.Failed(error.message ?: "The selected accounts could not be confirmed.")
+        runSafely("The selected accounts could not be confirmed.") {
+            val connected = accounts.selectAccounts(
+                AccountSelectionRequest(
+                    pendingConnectionId = ConnectionId(current.operation.pendingConnectionId!!),
+                    accountIds = accountIds.map(::ProviderAccountId),
+                    idempotencyKey = IdempotencyKey(idempotencyKey()),
+                ),
+            )
+            _state.value = selectionState(connected)
+        }
+    }
+
+    private fun selectionState(operation: ConnectionOperation): ConnectionCoordinatorState {
+        return if (operation.state == "connected") {
+            ConnectionCoordinatorState.Connected(operation)
+        } else {
+            ConnectionCoordinatorState.Failed("The Worker did not confirm the selected accounts.")
         }
     }
 
     suspend fun cancelPending() {
-        val current = _state.value
-        if (current !is ConnectionCoordinatorState.Pending) return
-        try {
-            accounts.cancelPending(current.operation.pendingConnectionId!!)
+        val current = _state.value as? ConnectionCoordinatorState.Pending ?: return
+        runSafely("The pending connection could not be canceled.") {
+            val pendingId = current.operation.pendingConnectionId!!
+            accounts.cancelPending(
+                PendingCancellationRequest(
+                    pendingConnectionId = ConnectionId(pendingId),
+                    idempotencyKey = IdempotencyKey("cancel:$pendingId"),
+                ),
+            )
             _state.value = ConnectionCoordinatorState.Canceled
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (error: Exception) {
-            _state.value = ConnectionCoordinatorState.Failed(error.message ?: "The pending connection could not be canceled.")
         }
     }
 }

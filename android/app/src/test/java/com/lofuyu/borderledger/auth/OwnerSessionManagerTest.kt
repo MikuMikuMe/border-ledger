@@ -67,6 +67,30 @@ class OwnerSessionManagerTest {
     }
 
     @Test
+    fun duplicateCallbackParametersAreRejectedAsAmbiguousInput() = runTest {
+        val duplicateQueries = listOf(
+            "state=first&state=second",
+            "code=first&code=second",
+            "error=first&error=second",
+            "error_description=first&error_description=second",
+            "state=first&s%74ate=second",
+        )
+
+        duplicateQueries.forEach { query ->
+            assertThrows<CallbackValidationException> {
+                callback.verify(Uri.parse("https://pf.example.com/android/auth/callback?$query"))
+            }
+        }
+    }
+
+    @Test
+    fun distinctCallbackParametersMayShareAValue() {
+        val uri = Uri.parse("https://pf.example.com/android/auth/callback?state=shared&code=shared")
+
+        assertEquals(VerifiedCallback("shared", "shared", null), callback.verify(uri))
+    }
+
+    @Test
     fun canceledReturnIsRecoverableAndDoesNotCreateOwnerState() = runTest {
         val store = TestOwnerSessionStore()
         val client = TestOwnerLoginClient()
@@ -81,6 +105,34 @@ class OwnerSessionManagerTest {
         assertTrue(manager.state.value is OwnerSessionState.SignedOut)
         assertEquals(null, store.session)
         assertEquals(0, client.exchangeCalls.get())
+    }
+
+    @Test
+    fun malformedPercentEncodedNamesAreRejectedWithoutExchangingOrConsumingLogin() = runTest {
+        assertMalformedQueriesRejected(listOf("sta%=value", "sta%2=value", "sta%GG=value"))
+    }
+
+    @Test
+    fun malformedPercentEncodedValuesAreRejectedWithoutExchangingOrConsumingLogin() = runTest {
+        assertMalformedQueriesRejected(listOf("code=%", "code=%2", "code=%GG", "error_description=%GG"))
+    }
+
+    private suspend fun assertMalformedQueriesRejected(queries: List<String>) {
+        val store = TestOwnerSessionStore()
+        val client = TestOwnerLoginClient()
+        val manager = manager(store, client)
+        manager.beginLogin(staySignedIn = false, pendingDestination = null)
+        val pending = requireNotNull(store.pendingLogin)
+
+        queries.forEach { query ->
+            val uri = Uri.parse("https://pf.example.com/android/auth/callback?state=${pending.state}&$query")
+            assertThrows<CallbackValidationException> { callback.verify(uri) }
+            assertEquals(CallbackResult.CallbackRejected, manager.handleCallback(uri))
+            assertEquals(OwnerSessionState.CallbackRejected(recoverable = false), manager.state.value)
+            assertEquals(pending, store.pendingLogin)
+            assertEquals(null, store.session)
+            assertEquals(0, client.exchangeCalls.get())
+        }
     }
 
     @Test

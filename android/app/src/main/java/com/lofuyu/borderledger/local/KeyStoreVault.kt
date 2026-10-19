@@ -14,7 +14,6 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-class SecureStorageException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 interface KeyStoreVault {
     fun encrypt(alias: String, plaintext: ByteArray, associatedData: ByteArray): ByteArray
@@ -29,9 +28,12 @@ class AndroidKeyStoreVault(
     override fun encrypt(alias: String, plaintext: ByteArray, associatedData: ByteArray): ByteArray {
         val key = keyFor(alias)
         return try {
-            val iv = ByteArray(GCM_IV_BYTES).also(random::nextBytes)
             val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
+            // Android Keystore requires provider-generated IVs for its default
+            // randomized-encryption policy. Keep that policy and the v1 envelope.
+            cipher.init(Cipher.ENCRYPT_MODE, key, random)
+            val iv = cipher.iv
+            if (iv.size != GCM_IV_BYTES) throw SecureStorageException("Encrypted storage IV is not supported.")
             cipher.updateAAD(associatedData)
             val ciphertext = cipher.doFinal(plaintext)
             ByteArrayOutputStream().use { bytes ->
@@ -102,6 +104,8 @@ class AndroidKeyStoreVault(
         const val GCM_TAG_BITS = 128
         const val ENVELOPE_VERSION = 1
         const val MAX_ENVELOPE_BYTES = 16 * 1024 * 1024
-        val SAFE_ALIAS = Regex("[A-Za-z0-9._-]{1,96}")
+        // Existing RN journal aliases are 17 + 16 + 64 characters. Do not rename
+        // those persisted keys or broaden the accepted alphabet to fit them.
+        val SAFE_ALIAS = Regex("[A-Za-z0-9._-]{1,97}")
     }
 }

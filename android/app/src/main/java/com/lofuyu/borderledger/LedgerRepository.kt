@@ -17,6 +17,9 @@ import com.lofuyu.borderledger.ui.ledger.LedgerSnapshotDecoder
 import com.lofuyu.borderledger.ui.ledger.LedgerTransactionPage
 import com.lofuyu.borderledger.ui.ledger.LedgerTransactionPageDecodeResult
 import java.time.Instant
+import com.lofuyu.borderledger.core.OwnerReadResult
+import com.lofuyu.borderledger.core.OwnerReadRequest
+import com.lofuyu.borderledger.core.ownerRead
 
 /** Owner-authorized read/cache boundary; capture credentials never enter it. */
 class LedgerRepository(
@@ -73,19 +76,22 @@ class LedgerRepository(
             return SnapshotRefreshResult.NotSignedIn
         }
         val api = ownerLedgerApi ?: return SnapshotRefreshResult.Unavailable
+        return refreshSnapshot(api, signedIn, now)
+    }
+
+    private suspend fun refreshSnapshot(
+        api: OwnerLedgerApi,
+        signedIn: OwnerSessionState.SignedIn,
+        now: Instant,
+    ): SnapshotRefreshResult {
         return try {
             val payload = api.readSnapshot()
-            if (payload.isEmpty() || payload.size > 2 * 1024 * 1024) return SnapshotRefreshResult.Unavailable
-            writeOwnerSnapshot(
-                OwnerReadCacheEntry(
-                    ownerLedgerId = "personal",
-                    snapshotAt = now.toString(),
-                    lastAuthenticatedAt = now.toString(),
-                    refreshExpiresAt = signedIn.refreshExpiresAt ?: signedIn.expiresAt,
-                    payload = payload,
-                ),
-            )
-            SnapshotRefreshResult.Refreshed
+            if (!payload.isUsableSnapshot()) {
+                SnapshotRefreshResult.Unavailable
+            } else {
+                writeOwnerSnapshot(snapshotEntry(payload, signedIn, now))
+                SnapshotRefreshResult.Refreshed
+            }
         } catch (_: TransportFailure.Offline) {
             SnapshotRefreshResult.Offline
         } catch (_: TransportFailure.Unauthorized) {
@@ -97,42 +103,71 @@ class LedgerRepository(
         }
     }
 
+    private fun snapshotEntry(
+        payload: ByteArray,
+        signedIn: OwnerSessionState.SignedIn,
+        now: Instant,
+    ) = OwnerReadCacheEntry(
+        ownerLedgerId = "personal",
+        snapshotAt = now.toString(),
+        lastAuthenticatedAt = now.toString(),
+        refreshExpiresAt = signedIn.refreshExpiresAt ?: signedIn.expiresAt,
+        payload = payload,
+    )
+
+    private fun ByteArray.isUsableSnapshot(): Boolean = isNotEmpty() && size <= MAX_SNAPSHOT_BYTES
+
     suspend fun refreshOwnerReport(query: OwnerReportQuery): ReportRefreshResult {
-        ownerSession.state.value as? OwnerSessionState.SignedIn ?: return ReportRefreshResult.NotSignedIn
-        val api = ownerLedgerApi ?: return ReportRefreshResult.Unavailable
-        return try {
-            when (val decoded = LedgerSnapshotDecoder.decodeReportSummary(api.readReport(query), query.includeProvisional)) {
-                is LedgerReportDecodeResult.Ready -> ReportRefreshResult.Refreshed(decoded.report)
-                is LedgerReportDecodeResult.Unsupported -> ReportRefreshResult.Unavailable
-            }
-        } catch (_: TransportFailure.Offline) {
-            ReportRefreshResult.Offline
-        } catch (_: TransportFailure.Unauthorized) {
-            readCache.clear()
-            ownerSession.markRemoteAuthorizationFailure()
-            ReportRefreshResult.Unauthorized
-        } catch (_: TransportFailure) {
-            ReportRefreshResult.Unavailable
-        }
+        return refreshOwnerRead(
+            read = { requireNotNull(ownerLedgerApi).readReport(query) },
+            decode = { (LedgerSnapshotDecoder.decodeReportSummary(it, query.includeProvisional) as? LedgerReportDecodeResult.Ready)?.report },
+            result = ::reportRefreshResult,
+        )
     }
 
     suspend fun readOwnerTransactions(query: OwnerTransactionQuery = OwnerTransactionQuery()): ActivityRefreshResult {
-        ownerSession.state.value as? OwnerSessionState.SignedIn ?: return ActivityRefreshResult.NotSignedIn
-        val api = ownerLedgerApi ?: return ActivityRefreshResult.Unavailable
-        return try {
-            when (val decoded = LedgerSnapshotDecoder.decodeTransactions(api.readTransactions(query))) {
-                is LedgerTransactionPageDecodeResult.Ready -> ActivityRefreshResult.Refreshed(decoded.page)
-                is LedgerTransactionPageDecodeResult.Unsupported -> ActivityRefreshResult.Unavailable
-            }
-        } catch (_: TransportFailure.Offline) {
-            ActivityRefreshResult.Offline
-        } catch (_: TransportFailure.Unauthorized) {
-            readCache.clear()
-            ownerSession.markRemoteAuthorizationFailure()
-            ActivityRefreshResult.Unauthorized
-        } catch (_: TransportFailure) {
-            ActivityRefreshResult.Unavailable
-        }
+        return refreshOwnerRead(
+            read = { requireNotNull(ownerLedgerApi).readTransactions(query) },
+            decode = { (LedgerSnapshotDecoder.decodeTransactions(it) as? LedgerTransactionPageDecodeResult.Ready)?.page },
+            result = ::activityRefreshResult,
+        )
+    }
+
+    private suspend fun <Value : Any, Result> refreshOwnerRead(
+        read: suspend () -> ByteArray,
+        decode: suspend (ByteArray) -> Value?,
+        result: (OwnerReadResult<Value>) -> Result,
+    ): Result = result(
+        ownerRead(
+            OwnerReadRequest(
+                signedIn = ownerSession.state.value is OwnerSessionState.SignedIn,
+                available = ownerLedgerApi != null,
+                unauthorized = ::invalidateOwnerAuthorization,
+                read = read,
+                decode = decode,
+            ),
+        ),
+    )
+
+    private fun reportRefreshResult(result: OwnerReadResult<LedgerReport>): ReportRefreshResult = when (result) {
+        is OwnerReadResult.Ready -> ReportRefreshResult.Refreshed(result.value)
+        OwnerReadResult.NotSignedIn -> ReportRefreshResult.NotSignedIn
+        OwnerReadResult.Unavailable -> ReportRefreshResult.Unavailable
+        OwnerReadResult.Offline -> ReportRefreshResult.Offline
+        OwnerReadResult.Unauthorized -> ReportRefreshResult.Unauthorized
+    }
+
+    private fun activityRefreshResult(result: OwnerReadResult<LedgerTransactionPage>): ActivityRefreshResult = when (result) {
+        is OwnerReadResult.Ready -> ActivityRefreshResult.Refreshed(result.value)
+        OwnerReadResult.NotSignedIn -> ActivityRefreshResult.NotSignedIn
+        OwnerReadResult.Unavailable -> ActivityRefreshResult.Unavailable
+        OwnerReadResult.Offline -> ActivityRefreshResult.Offline
+        OwnerReadResult.Unauthorized -> ActivityRefreshResult.Unauthorized
+    }
+
+    private suspend fun invalidateOwnerAuthorization() {
+        readCache.clear()
+        ownerSession.markRemoteAuthorizationFailure()
     }
 
     suspend fun syncCapture(): UploadSyncResult {
@@ -146,5 +181,9 @@ class LedgerRepository(
         is UploadSyncResult.Partial -> acknowledgementCount > 0
         is UploadSyncResult.Quarantined -> eventIds.isNotEmpty()
         else -> false
+    }
+
+    private companion object {
+        const val MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024
     }
 }

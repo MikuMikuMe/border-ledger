@@ -9,6 +9,43 @@ import org.junit.Test
 
 class LedgerExportCoordinatorTest {
     @Test
+    fun failedDestinationClosesItsStreamAndDeletesPartialOutputWithoutReceipt() = runTest {
+        var closed=false
+        var deleted=false
+        val destination=object: ExportDestination {
+            override val uri=Uri.parse("content://test/broken.csv")
+            override fun openOutputStream()=object: java.io.OutputStream() {
+                override fun write(value: Int) { throw java.io.IOException("full") }
+                override fun close() { closed=true }
+            }
+            override fun delete(): Boolean { deleted=true;return true }
+        }
+        val coordinator=LedgerExportCoordinator(RecordingExportGateway(WorkerExportReceipt("cannot-confirm",1)))
+        val result=coordinator.export(LedgerExportRequest(ExportSelection.All),destination,ExportHandoff.Save)
+        assertEquals("export_failed",(result as ExportState.Error).failure.code)
+        assertTrue(closed)
+        assertTrue(deleted)
+    }
+
+    @Test
+    fun invalidCanonicalHeaderDeletesOutputEvenWhenWorkerSuppliesReceipt() = runTest {
+        var deleted=false
+        val destination=object: ExportDestination {
+            override val uri=Uri.parse("content://test/not-canonical.csv")
+            override fun openOutputStream()=ByteArrayOutputStream()
+            override fun delete(): Boolean { deleted=true;return true }
+        }
+        val gateway=object: OwnerLedgerExportGateway {
+            override suspend fun streamLedgerCsv(request: LedgerExportRequest,sink:suspend(ByteArray)->Unit):WorkerExportReceipt? {
+                sink("Not,a,ledger\n".toByteArray())
+                return WorkerExportReceipt("cannot-confirm",1)
+            }
+        }
+        val result=LedgerExportCoordinator(gateway).export(LedgerExportRequest(ExportSelection.All),destination,ExportHandoff.Save)
+        assertEquals("invalid_worker_csv",(result as ExportState.Error).failure.code)
+        assertTrue(deleted)
+    }
+    @Test
     fun canonicalCsvPreservesMinorUnitsAndEscapesFormulaLikeChineseText() {
         assertEquals("\"北京,\'=SUM(A1)\"", canonicalCsvCell("北京,=SUM(A1)"))
         assertEquals("-1234", canonicalCsvCell("-1234", numeric = true))
@@ -96,6 +133,23 @@ class LedgerExportCoordinatorTest {
         )
 
         assertEquals("invalid_currency", (state as ExportState.Error).failure.code)
+    }
+
+    @Test
+    fun resetDropsThePriorOwnersReceipt() = runTest {
+        val coordinator = LedgerExportCoordinator(
+            RecordingExportGateway(receipt = WorkerExportReceipt("owner-a-receipt", 1)),
+        )
+        coordinator.export(
+            request = LedgerExportRequest(ExportSelection.All),
+            destination = RecordingExportDestination(),
+            handoff = ExportHandoff.Save,
+        )
+        assertTrue(coordinator.state.value is ExportState.Completed)
+
+        coordinator.reset()
+
+        assertEquals(ExportState.Idle, coordinator.state.value)
     }
 
     private class RecordingExportGateway(

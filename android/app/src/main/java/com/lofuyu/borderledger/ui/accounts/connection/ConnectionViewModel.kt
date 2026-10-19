@@ -1,8 +1,12 @@
 package com.lofuyu.borderledger.ui.accounts.connection
 
 import com.lofuyu.borderledger.accounts.AccountRepository
+import com.lofuyu.borderledger.accounts.ConnectionId
 import com.lofuyu.borderledger.accounts.BankAccount
 import com.lofuyu.borderledger.accounts.ConnectionStatus
+import com.lofuyu.borderledger.accounts.DisconnectRequest
+import com.lofuyu.borderledger.accounts.IdempotencyKey
+import com.lofuyu.borderledger.accounts.SyncRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,7 +50,7 @@ class ConnectionViewModel(
     fun sync() {
         _state.value = _state.value.copy(loading = true, actionConnectionId = "sync", error = null)
         scope.launch {
-            runCatching { repository.sync() }
+            runCatching { repository.sync(SyncRequest(IdempotencyKey(java.util.UUID.randomUUID().toString()))) }
                 .onSuccess { load() }
                 .onFailure { error ->
                     _state.value = _state.value.copy(loading = false, actionConnectionId = null, error = error.message ?: "Bank synchronization could not be requested.")
@@ -57,7 +61,9 @@ class ConnectionViewModel(
     fun disconnect(connectionId: String) {
         _state.value = _state.value.copy(loading = true, actionConnectionId = connectionId, error = null)
         scope.launch {
-            runCatching { repository.disconnect(connectionId) }
+            runCatching {
+                repository.disconnect(DisconnectRequest(ConnectionId(connectionId), IdempotencyKey("disconnect:$connectionId")))
+            }
                 .onSuccess { load() }
                 .onFailure { error ->
                     _state.value = _state.value.copy(loading = false, actionConnectionId = null, error = error.message ?: "The bank connection could not be disconnected.")

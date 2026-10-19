@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,6 +99,41 @@ jobs:
           const body = JSON.parse(fs.readFileSync(process.env.HEALTH_FILE, 'utf8'));
           if (body.ok !== true || body.service !== 'border-ledger-api' || body.deploymentRevision !== process.env.GITHUB_SHA || body.mobileAuthConfigured !== true) {
             console.error('::error::The public health endpoint did not identify this production Worker deployment.');
+            process.exit(1);
+          }
+          NODE
+
+      - name: Verify public Android App Links and mobile API Access bypasses
+        shell: bash
+        run: |
+          set -euo pipefail
+          assetlinks_file="$RUNNER_TEMP/border-ledger-assetlinks.json"
+          curl --fail --silent --show-error --max-time 30 \
+            --output "$assetlinks_file" https://pf.lofuyu.com/.well-known/assetlinks.json
+          ASSET_LINKS_FILE="$assetlinks_file" node - <<'NODE'
+          const fs = require('node:fs');
+          const links = JSON.parse(fs.readFileSync(process.env.ASSET_LINKS_FILE, 'utf8'));
+          const expected = '1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED';
+          const verified = links.filter((link) => link.target?.namespace === 'android_app' && link.target.package_name === 'com.lofuyu.borderledger');
+          if (verified.length !== 1 || !verified[0].relation?.includes('delegate_permission/common.handle_all_urls') || !verified[0].target.sha256_cert_fingerprints?.includes(expected)) {
+            console.error('::error::Production App Links JSON does not match the Android package and existing release signer.');
+            process.exit(1);
+          }
+          NODE
+
+          mobile_status_file="$RUNNER_TEMP/border-ledger-mobile-auth.json"
+          status_code="$(curl --silent --show-error --max-time 30 \
+            --output "$mobile_status_file" --write-out '%{http_code}' \
+            'https://pf.lofuyu.com/api/mobile/v1/status?eventId=00000000-0000-4000-8000-000000000001')"
+          if [[ "$status_code" != 401 ]]; then
+            echo "::error::Unauthenticated mobile status returned HTTP $status_code instead of reaching Worker bearer authentication (401)."
+            exit 1
+          fi
+          MOBILE_STATUS_FILE="$mobile_status_file" node - <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.env.MOBILE_STATUS_FILE, 'utf8'));
+          if (body.code !== 'unauthorized' || body.message !== 'A mobile bearer credential is required.') {
+            console.error('::error::The mobile status path did not reach native Worker bearer authentication.');
             process.exit(1);
           }
           NODE

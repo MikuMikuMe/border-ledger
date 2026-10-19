@@ -1,0 +1,268 @@
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve, join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const packageId = 'com.lofuyu.borderledger';
+const assetLinksUrl = 'https://pf.lofuyu.com/.well-known/assetlinks.json';
+const sourceSha = 'a'.repeat(40);
+const apkSha256 = 'b'.repeat(64);
+const certificateSha256 = '1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED';
+const temporaryDirectories: string[] = [];
+
+function sha256(value: Buffer | string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function writeEvidence(directory: string, path: string, content: Buffer | string) {
+  const fullPath = join(directory, path);
+  writeFileSync(fullPath, content);
+  return { path, sha256: sha256(Buffer.isBuffer(content) ? content : Buffer.from(content)) };
+}
+
+function attestEvidence(evidence: ReturnType<typeof writeEvidence>, gateId: string) {
+  return {
+    ...evidence,
+    attestation: {
+      sourceSha,
+      gateId,
+      capturedAt: new Date(Date.now() - 60_000).toISOString(),
+      device: 'Pixel 10 Pro API 37',
+      evidenceType: 'test-report',
+    },
+  };
+}
+
+function validAssetLinks(certificate = certificateSha256) {
+  return JSON.stringify([{
+    relation: ['delegate_permission/common.handle_all_urls'],
+    target: {
+      namespace: 'android_app',
+      package_name: packageId,
+      sha256_cert_fingerprints: [certificate],
+    },
+  }]);
+}
+
+function createAcceptanceFixture() {
+  const directory = mkdtempSync(join(tmpdir(), 'border-ledger-acceptance-'));
+  temporaryDirectories.push(directory);
+
+  const assetLinksBody = validAssetLinks();
+  const appLinksEvidence = writeEvidence(directory, 'assetlinks.json', assetLinksBody);
+  const upgradeEvidenceBody = JSON.stringify({
+    packageId,
+    fromVersionCode: 999,
+    toVersionCode: 1000,
+    signingCertificateSha256: certificateSha256,
+    upgradedExistingInstallation: true,
+    existingAppDataPreserved: true,
+  });
+  const upgradeEvidence = writeEvidence(directory, 'upgrade.json', upgradeEvidenceBody);
+  const gates = Object.fromEntries(Array.from({ length: 18 }, (_, index) => {
+    const id = 'F' + String(index + 1).padStart(2, '0');
+    const evidence = writeEvidence(directory, id + '.txt', 'sanitized acceptance evidence for ' + id);
+    return [id, { status: 'passed', evidence: [attestEvidence(evidence, id)] }];
+  }));
+
+  const manifestPath = join(directory, 'acceptance-manifest.json');
+  const manifest = {
+    schemaVersion: 1,
+    sourceSha,
+    apkSha256,
+    packageId,
+    mobileEnvironment: 'production',
+    signingCertificateSha256: certificateSha256,
+    versionCode: 1000,
+    appLinks: {
+      status: 'passed',
+      url: assetLinksUrl,
+      packageId,
+      signingCertificateSha256: certificateSha256,
+      responseSha256: appLinksEvidence.sha256,
+      responseEvidence: appLinksEvidence,
+    },
+    inPlaceUpgrade: {
+      status: 'passed',
+      packageId,
+      signingCertificateSha256: certificateSha256,
+      fromVersionCode: 999,
+      toVersionCode: 1000,
+      evidence: upgradeEvidence,
+    },
+    gates,
+  };
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  return { directory, manifestPath, manifest, assetLinksBody };
+}
+
+function testFetch(body: string) {
+  return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  }));
+}
+
+async function verify(fixture: ReturnType<typeof createAcceptanceFixture>, options: {
+  expectedSourceSha?: string;
+  liveAssetLinksBody?: string;
+} = {}) {
+  const { verifyAndroidAcceptance } = await import('../scripts/verify-android-acceptance.mjs');
+  return verifyAndroidAcceptance({
+    manifestPath: fixture.manifestPath,
+    evidenceDirectory: fixture.directory,
+    expectedSourceSha: options.expectedSourceSha ?? sourceSha,
+    expectedApkSha256: apkSha256,
+    expectedSigningCertificateSha256: certificateSha256,
+    expectedVersionCode: 1000,
+    fetchImpl: testFetch(options.liveAssetLinksBody ?? fixture.assetLinksBody),
+  });
+}
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+describe('Android release acceptance evidence', () => {
+  it('accepts a source-bound F01–F18 record only when device and live App Links evidence agree', async () => {
+    const fixture = createAcceptanceFixture();
+
+    await expect(verify(fixture)).resolves.toEqual({
+      verified: true,
+      featureGateCount: 18,
+    });
+  });
+
+  it('rejects a pending feature gate even when it has a file attached', async () => {
+    const fixture = createAcceptanceFixture();
+    fixture.manifest.gates.F18.status = 'pending';
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 must be passed');
+  });
+
+  it('rejects evidence whose bytes no longer match the recorded digest', async () => {
+    const fixture = createAcceptanceFixture();
+    writeFileSync(join(fixture.directory, 'F18.txt'), 'changed after acceptance');
+
+    await expect(verify(fixture)).rejects.toThrow('evidence checksum mismatch');
+  });
+
+  it('rejects empty evidence even when its empty-file digest is correct', async () => {
+    const fixture = createAcceptanceFixture();
+    const emptyEvidence = writeEvidence(fixture.directory, 'F18-empty.txt', '');
+    fixture.manifest.gates.F18.evidence = [attestEvidence(emptyEvidence, 'F18')];
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 evidence 1 must not be empty');
+  });
+
+  it('requires each gate evidence attestation to bind source, gate, capture time, device, and evidence type', async () => {
+    const fixture = createAcceptanceFixture();
+    fixture.manifest.gates.F18.evidence[0].attestation.sourceSha = 'c'.repeat(40);
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 evidence 1 attestation source SHA does not match');
+  });
+
+  it('rejects gate evidence with an incomplete capture attestation', async () => {
+    const fixture = createAcceptanceFixture();
+    fixture.manifest.gates.F18.evidence[0].attestation.device = '  ';
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 evidence 1 attestation device must be a non-empty string');
+  });
+
+  it('rejects evidence attributed to a different feature gate', async () => {
+    const fixture = createAcceptanceFixture();
+    fixture.manifest.gates.F18.evidence[0].attestation.gateId = 'F01';
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 evidence 1 attestation gate ID does not match');
+  });
+
+  it('rejects malformed or future capture timestamps', async () => {
+    const malformed = createAcceptanceFixture();
+    malformed.manifest.gates.F18.evidence[0].attestation.capturedAt = 'not-a-timestamp';
+    writeFileSync(malformed.manifestPath, JSON.stringify(malformed.manifest));
+    await expect(verify(malformed)).rejects.toThrow('F18 evidence 1 attestation capture time must be a valid UTC ISO-8601 timestamp');
+
+    const future = createAcceptanceFixture();
+    future.manifest.gates.F18.evidence[0].attestation.capturedAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    writeFileSync(future.manifestPath, JSON.stringify(future.manifest));
+    await expect(verify(future)).rejects.toThrow('F18 evidence 1 attestation capture time cannot be in the future');
+  });
+
+  it('rejects acceptance evidence captured more than 30 days ago', async () => {
+    const fixture = createAcceptanceFixture();
+    fixture.manifest.gates.F18.evidence[0].attestation.capturedAt = new Date(Date.now() - 31 * 24 * 60 * 60_000).toISOString();
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 evidence 1 attestation capture time is older than 30 days');
+  });
+
+  it('requires an evidence type with a lowercase slug', async () => {
+    const fixture = createAcceptanceFixture();
+    fixture.manifest.gates.F18.evidence[0].attestation.evidenceType = 'Screen capture';
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 evidence 1 attestation evidence type must be a lowercase slug');
+  });
+
+  it('rejects one evidence file reused to claim multiple feature gates', async () => {
+    const fixture = createAcceptanceFixture();
+    fixture.manifest.gates.F18.evidence = fixture.manifest.gates.F01.evidence;
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 evidence reuses a file already assigned to F01');
+  });
+
+  it('rejects duplicated evidence content under different paths', async () => {
+    const fixture = createAcceptanceFixture();
+    const duplicateEvidence = writeEvidence(fixture.directory, 'F18-copy.txt', 'sanitized acceptance evidence for F01');
+    fixture.manifest.gates.F18.evidence = [attestEvidence(duplicateEvidence, 'F18')];
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('F18 evidence reuses identical content already assigned to F01');
+  });
+
+  it('rejects an acceptance record for a different reviewed source SHA', async () => {
+    const fixture = createAcceptanceFixture();
+
+    await expect(verify(fixture, { expectedSourceSha: 'c'.repeat(40) }))
+      .rejects.toThrow('source SHA does not match');
+  });
+
+  it('rejects a live App Links response with the wrong release certificate', async () => {
+    const fixture = createAcceptanceFixture();
+
+    await expect(verify(fixture, { liveAssetLinksBody: validAssetLinks('00'.repeat(32)) }))
+      .rejects.toThrow('live App Links response does not authorize the release certificate');
+  });
+
+  it('rejects evidence paths that escape the acceptance bundle', async () => {
+    const fixture = createAcceptanceFixture();
+    fixture.manifest.gates.F18.evidence[0].path = '../outside.txt';
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('evidence path must stay inside the bundle');
+  });
+
+  it('wires the acceptance verifier before the release-publish step', () => {
+    const workflow = readFileSync(resolve(process.cwd(), '.github/workflows/android-promote.yml'), 'utf8');
+    const verifier = workflow.indexOf('verify-android-acceptance.mjs');
+    const publish = workflow.indexOf('Publish the exact accepted APK bytes');
+
+    expect(workflow).toContain('acceptance_manifest_sha256:');
+    expect(workflow).toContain('acceptance-evidence.zip');
+    expect(workflow).toContain('apksigner verify');
+    expect(workflow).toContain('$certificateMatches.Count -ne 1');
+    expect(workflow).toContain('aapt2 dump badging');
+    expect(workflow).toContain('APK package ID does not match candidate');
+    expect(workflow).toContain('APK versionCode does not match candidate');
+    expect(verifier).toBeGreaterThanOrEqual(0);
+    expect(publish).toBeGreaterThan(verifier);
+  });
+});

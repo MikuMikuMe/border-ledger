@@ -3,7 +3,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import MobileAuthorizationPage from '../src/MobileAuthorizationPage';
+import MobileAuthorizationPage, { type MobileAuthorizationFetch } from '../src/MobileAuthorizationPage';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,7 +47,7 @@ describe('mobile Access authorization page', () => {
   }
 
   it('fails closed when the authorization link is incomplete', () => {
-    const fetchImpl = vi.fn<typeof fetch>();
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>();
     renderPage({ requestId: null, state: null, fetchImpl });
 
     expect(container?.querySelector('[role="alert"]')?.textContent).toContain('authorization link is incomplete');
@@ -55,7 +55,7 @@ describe('mobile Access authorization page', () => {
   });
 
   it('approves the request once and returns to the exact callback with the original state', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>().mockResolvedValue(new Response(JSON.stringify({
       approved: true,
       code: CODE,
       callbackUrl: `${ORIGIN}/android/auth/callback`,
@@ -84,7 +84,7 @@ describe('mobile Access authorization page', () => {
     const pendingApproval = new Promise<Response>((resolve) => {
       resolveApproval = resolve;
     });
-    const fetchImpl = vi.fn(async () => pendingApproval) as unknown as typeof fetch;
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>(() => pendingApproval);
     renderPage({ fetchImpl, navigate: vi.fn() });
     const continueButton = button('Continue to app');
 
@@ -104,7 +104,7 @@ describe('mobile Access authorization page', () => {
   });
 
   it('can retry after a transient approval response failure', async () => {
-    const fetchImpl = vi.fn<typeof fetch>()
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>()
       .mockRejectedValueOnce(new Error('temporary network failure'))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         approved: true,
@@ -132,7 +132,7 @@ describe('mobile Access authorization page', () => {
   });
 
   it('returns a cancellation result to the app without contacting the Worker', () => {
-    const fetchImpl = vi.fn<typeof fetch>();
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>();
     const navigate = vi.fn();
     renderPage({ fetchImpl, navigate });
 
@@ -148,7 +148,7 @@ describe('mobile Access authorization page', () => {
   });
 
   it('rejects a callback that is not the configured HTTPS app callback', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>().mockResolvedValue(new Response(JSON.stringify({
       approved: true,
       code: CODE,
       callbackUrl: 'https://evil.example/android/auth/callback',
@@ -167,7 +167,7 @@ describe('mobile Access authorization page', () => {
 
   it('rejects explicit empty fragments before redirecting', async () => {
     const navigate = vi.fn();
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>().mockResolvedValue(new Response(JSON.stringify({
       approved: true,
       code: CODE,
       callbackUrl: `${ORIGIN}/android/auth/callback#`,
@@ -185,7 +185,7 @@ describe('mobile Access authorization page', () => {
 
   it('rejects an incomplete success schema before redirecting', async () => {
     const navigate = vi.fn();
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>().mockResolvedValue(new Response(JSON.stringify({
       approved: true,
       code: CODE,
       callbackUrl: `${ORIGIN}/android/auth/callback`,
@@ -202,7 +202,7 @@ describe('mobile Access authorization page', () => {
 
   it('rejects a successful response served with a non-JSON content type', async () => {
     const navigate = vi.fn();
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>().mockResolvedValue(new Response(JSON.stringify({
       approved: true,
       code: CODE,
       callbackUrl: `${ORIGIN}/android/auth/callback`,
@@ -219,7 +219,7 @@ describe('mobile Access authorization page', () => {
   });
 
   it('shows a useful error when the approval endpoint returns non-JSON failure content', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response('<html>Access denied</html>', { status: 502, headers: { 'content-type': 'text/html' } }));
+    const fetchImpl = vi.fn<MobileAuthorizationFetch>().mockResolvedValue(new Response('<html>Access denied</html>', { status: 502, headers: { 'content-type': 'text/html' } }));
     renderPage({ fetchImpl });
 
     await act(async () => {

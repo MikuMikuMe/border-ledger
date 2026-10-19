@@ -15,9 +15,6 @@ import com.lofuyu.borderledger.auth.CallbackConfiguration
 import com.lofuyu.borderledger.auth.EncryptedCaptureCredentialProvider
 import com.lofuyu.borderledger.auth.EncryptedOwnerSessionStore
 import com.lofuyu.borderledger.auth.OwnerSessionManager
-import com.lofuyu.borderledger.bank.PlaidLinkCoordinator
-import com.lofuyu.borderledger.bank.PlaidLinkLauncher
-import com.lofuyu.borderledger.bank.UnsupportedPlaidLinkLauncher
 import com.lofuyu.borderledger.accounts.AccountRepository
 import com.lofuyu.borderledger.accounts.HttpWorkerAccountConnectionGateway
 import com.lofuyu.borderledger.capture.BankNotificationListenerRuntime
@@ -61,12 +58,13 @@ class AppContainer(
     captureApi: CaptureApi? = null,
     /** Empty by default; production capture stays disabled until approved configuration is injected. */
     captureProfileProvider: CaptureSourceProfileProvider = MutableSourceProfileRegistry(),
-    /** Injectable official Plaid Link bridge; the safe default reports unsupported. */
-    plaidLinkLauncher: PlaidLinkLauncher = UnsupportedPlaidLinkLauncher,
     deviceId: String = deviceIdentity(context),
 ) {
     private val appContext = context.applicationContext
     private val records = FileEncryptedRecordStore(appContext, AndroidKeyStoreVault())
+    val bridgeOperations = com.lofuyu.borderledger.react.BridgeOperationJournal(records)
+    // A local generation binds operations to this login without exposing or hashing credentials.
+    internal val bridgeRecords: com.lofuyu.borderledger.core.SecureRecordPort get() = records
 
     val ownerSessionStore = EncryptedOwnerSessionStore(records)
     private val storedCaptureCredentialProvider = EncryptedCaptureCredentialProvider(records)
@@ -157,7 +155,6 @@ class AppContainer(
             ownerCredentials = ownerSessionManager,
         ),
     )
-    val plaidLinkCoordinator = PlaidLinkCoordinator(accountRepository, plaidLinkLauncher)
     val reportingPreferencesRepository: ReportingPreferencesRepository = HttpWorkerReportingPreferencesRepository(
         origin = BuildConfig.MOBILE_API_ORIGIN,
         environment = BuildConfig.MOBILE_ENVIRONMENT,

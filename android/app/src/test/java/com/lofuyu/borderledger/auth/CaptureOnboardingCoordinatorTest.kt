@@ -12,6 +12,25 @@ import org.junit.Test
 import java.time.Instant
 
 class CaptureOnboardingCoordinatorTest {
+    @Test
+    fun changingSelectedScopeRequiresNewMatchingListenerEvidenceBeforeAuthorization() = runTest {
+        val client=FakeCaptureApi()
+        val owner=TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z",emptyList(),null))
+        val coordinator=CaptureOnboardingCoordinator(owner,client)
+        coordinator.setProfiles(listOf(profile))
+        coordinator.select(profile,"CAD")
+        coordinator.setNotificationAccess(NotificationAccessState.Granted)
+        coordinator.observeSourceTest(evidence())
+        assertEquals(SourceTestResult.Passed,coordinator.state.value.sourceTest)
+        coordinator.select(profile,"CNY")
+        coordinator.authorizeCapture(consent=true)
+        assertEquals(SourceTestResult.NotRun,coordinator.state.value.sourceTest)
+        assertEquals(0,client.issueCalls)
+        coordinator.observeSourceTest(evidence().copy(currency="CNY"))
+        coordinator.authorizeCapture(consent=true)
+        assertEquals(1,client.issueCalls)
+        assertEquals("CNY",client.lastRequest?.sourceScopes?.single()?.currency)
+    }
     private val profile = CaptureSourceProfile(
         sourceProfileId = "synthetic-source",
         displayName = "Approved source profile",

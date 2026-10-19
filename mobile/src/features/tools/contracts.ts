@@ -1,0 +1,19 @@
+import type {Operation} from '../finance/contracts';
+// DOM/RN-free projections; ToolsScreen structurally checks the Codegen adapters.
+export type CaptureSnapshot={health:string;apiHealth:string;profiles:{sourceProfileId:string;displayName:string;accountId:string;instrumentLabel:string;currencies:string[]}[];selectedSourceProfileId:string|null;selectedCurrency:string|null;notificationAccess:string;appNotificationPermission:string;sourceTest:string;consentRecorded:boolean;credentialExpiresAt:string|null;sourceConfigRevision:number|null;sourceSetupStatus:string};
+export type RuntimeHealth={listenerPermission:string;listenerConnected:boolean;appPostingNotificationPermission:string;firstUnlock:string;storage:string;source:string;intake:string;upload:string;pendingCount:number;storedIntakeCount:number;pendingLimit:number;uploadRetryAttempt:number;uploadRetryMaxAttempts:number;uploadRetryAt:string|null;lastSuccessfulUploadAt:string|null;lastCacheSnapshotAt:string|null;pairingRenewalRequired:boolean};
+export type Device={id:string;name:string;platform:string;status:string;credentialExpiresAt:string|null;revokedAt:string|null;sourceMappings:{sourceProfileId:string;accountId:string;allowedCurrencies:string[];instrumentHint:{kind:string;value:string}|null}[];revision:number};
+export type FileSnapshot={importState:string;exportState:string;previewId:string|null;revision:number|null;expiresAt:string|null;rowCount:number;selectedRowCount:number;duplicates:{id:string;statementTransactionId:string;candidateTransactionId:string;score:number;reasonCodes:string[];status:string}[];errors:string[];importReceiptId:string|null;exportReceiptId:string|null};
+export type RowPage={items:{rowId:string;rowIndex:number;accountId:string;date:string;merchant:string;amountMinor:string;currency:string;category:string;kind:string;status:string;selected:boolean}[];offset:number;total:number};
+export type Display={appearanceMode:string;filter:string;reducedMotion:boolean};
+export type ReportingUpdate={reportingTimezone:string;weekStart:number;preferredCurrency:string|null};
+export type Reporting=ReportingUpdate&{revision:number;updatedAt:string|null};
+export type ImportAccount={id:string;displayName:string;currencies:string[]};
+type Event<T>=(cb:(value:T)=>void)=>{remove():void};
+export type ToolsPorts={
+ capture:{getSnapshot():Promise<CaptureSnapshot>;getRuntimeHealth():Promise<RuntimeHealth>;refresh():Promise<CaptureSnapshot>;readDevices():Promise<Device[]>;selectSource(id:string,currency:string):Promise<CaptureSnapshot>;requestSourceTest():Promise<CaptureSnapshot>;openNotificationSettings():Promise<void>;openAppNotificationSettings():Promise<void>;startAuthorizeCapture(op:string,consent:boolean):Promise<Operation>;startRevokeDevice(op:string,id:string):Promise<Operation>;onStateChanged:Event<CaptureSnapshot>;onHealthChanged:Event<RuntimeHealth>};
+ files:{getSnapshot():Promise<FileSnapshot>;readImportRows(offset:number,limit:number):Promise<RowPage>;startPickImport(op:string,account:string):Promise<Operation>;setRowSelected(id:string,selected:boolean):Promise<FileSnapshot>;startDecideDuplicate(op:string,id:string,decision:string):Promise<Operation>;startCommitImport(op:string):Promise<Operation>;startCancelImport(op:string):Promise<Operation>;startExport(op:string,request:{selection:string;currency:string|null;startDate:string|null;endDate:string|null;share:boolean}):Promise<Operation>;onStateChanged:Event<FileSnapshot>};
+ preferences:{getSnapshot():Promise<Display>;updateDisplay(value:Display):Promise<Display>;readReporting():Promise<Reporting>;startUpdateReporting(op:string,revision:number,value:ReportingUpdate):Promise<Operation>;onChanged:Event<Display>};
+ ledger:{getSnapshot():Promise<{accounts:ImportAccount[]}|null>;refreshSnapshot():Promise<{accounts:ImportAccount[]}|null>};
+ session:{readOperations(offset:number,limit:number):Promise<Operation[]>;queryOperation(id:string):Promise<Operation|null>};
+};

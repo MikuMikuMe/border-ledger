@@ -1,5 +1,10 @@
 # Android validation baseline
 
+The React Native migration's current cutover gates and repeatable checks are in
+[react-native-validation.md](react-native-validation.md). Historical validation
+below remains evidence for its stated revision; it does not close the RN
+production-session, App Link, accessibility or signed-upgrade gates.
+
 ## Final local verification update — 2026-10-15
 
 The recovered local checkout has now passed the native Android gate with the installed SDK and wrapper: `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleRelease` all succeeded. The release APK was produced unsigned as expected for the local gate. A disposable debug keystore may be used only for local installation checks; no signing material belongs in this repository.
@@ -123,6 +128,71 @@ Each row needs a reachable native path, real service behavior, and an owner-capt
 - [ ] Verify stable application/package identity, App Link/redirect registrations, release manifest permissions, absence of debug-only probe components, and separate owner/capture authorization.
 - [ ] Run `assembleRelease`, `apksigner verify`, SHA-256 output, and actual installation/update/recovery evidence with an available Gradle wrapper/SDK. This workspace has not met those conditions.
 - [ ] Confirm the private release workflow remains credential/toolchain-gated. A missing wrapper JAR or signing secret must fail or gate with an explicit message; it must never produce a success-shaped placeholder.
+
+### Production promotion acceptance bundle
+
+The signed candidate workflow creates an unpublished draft only. The promotion
+workflow now requires an owner-captured `acceptance-manifest.json`, the
+matching `acceptance-evidence.zip`, and the manifest SHA-256 as an explicit
+input. Before making a draft public, it checks that the manifest is bound to
+the exact `main` source SHA, APK digest, production package, version, and
+existing release certificate; every F01–F18 gate is marked passed and points
+to checksum-verified evidence; the evidence contains a preserved-data in-place
+upgrade from a lower version; and the production App Links endpoint currently
+serves the same checksummed association response authorizing that package and
+certificate. Missing, stale, modified, or mismatched evidence fails closed.
+
+The manifest is JSON with `schemaVersion: 1`, exact `sourceSha`, `apkSha256`,
+`packageId`, `mobileEnvironment`, `signingCertificateSha256`, `versionCode`,
+`appLinks`, `inPlaceUpgrade`, and `gates` objects. Each gate F01–F18 has
+`status: "passed"` and a nonempty `evidence` list; each evidence item has a
+bundle-relative `path`, lowercase hexadecimal `sha256`, and an `attestation`
+with matching `sourceSha` and `gateId`, UTC `capturedAt`, `device`, and
+lowercase-slug `evidenceType`. Capture attestations must be no more than 30
+days old. Evidence files must be nonempty, checksum-valid, and unique by path
+and content across the F01–F18 gates. The App Links record
+includes the production URL, package/certificate, response digest, and an
+evidence-file reference. The in-place upgrade record includes source and
+target version codes, package/certificate, and a checksummed JSON evidence
+file confirming both upgrade and existing-data preservation. Capture evidence
+without personal financial data, credentials, or signing material.
+
+### Attaching the owner acceptance bundle
+
+The signed-candidate workflow creates the draft with only its APK, checksum,
+and candidate manifest. After all owner checks are complete, create the
+acceptance manifest and evidence ZIP from sanitized artifacts, then upload only
+those two acceptance files to the same still-draft release:
+
+```powershell
+$tag = '<exact draft candidate tag from the GitHub release>'
+$candidateDir = Join-Path (Get-Location) "candidate-download-$([guid]::NewGuid().ToString('N'))"
+if (Test-Path -LiteralPath $candidateDir) { throw 'Use a fresh candidate download directory.' }
+New-Item -ItemType Directory -Path $candidateDir | Out-Null
+gh release download $tag --repo MikuMikuMe/border-ledger `
+  --pattern candidate-manifest.json --dir $candidateDir
+$candidate = Get-Content -Raw -LiteralPath (Join-Path $candidateDir 'candidate-manifest.json') | ConvertFrom-Json
+Compress-Archive -Path .\acceptance-evidence\* -DestinationPath .\acceptance-evidence.zip -Force
+gh release upload $tag .\acceptance-manifest.json .\acceptance-evidence.zip `
+  --repo MikuMikuMe/border-ledger
+$manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath .\acceptance-manifest.json).Hash.ToLowerInvariant()
+gh workflow run android-promote.yml --repo MikuMikuMe/border-ledger --ref main `
+  -f tag=$tag `
+  -f "source_sha=$($candidate.sourceSha)" `
+  -f "apk_sha256=$($candidate.apkSha256)" `
+  -f "acceptance_manifest_sha256=$manifestHash"
+```
+
+Replace the tag placeholder with the exact still-draft candidate release tag.
+The commands derive the source and APK digests from that candidate's manifest
+and compute the acceptance manifest digest locally. Do not replace the
+candidate APK, checksum, or candidate manifest. Promotion independently verifies the downloaded APK's
+cryptographic signer with `apksigner` and its package/version metadata with
+`aapt2`; it also binds the owner manifest to the exact source and APK digests.
+The draft and its acceptance assets remain unpublished until that protected
+workflow succeeds. All F01–F18 rows above remain **Pending** until the owner
+performs and records the actual checks; automated wiring and fixtures are not
+acceptance evidence.
 
 ### CMB outcome
 
