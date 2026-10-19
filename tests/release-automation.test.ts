@@ -33,12 +33,14 @@ describe('release automation contract', () => {
     expect(gradle).not.toContain('packageRelease');
   });
 
-  it('builds only an explicit reviewed main SHA without signing material in the build job', () => {
+  it('builds unsigned APKs on app pushes and reserves signing for a reviewed main SHA', () => {
     expect(releaseWorkflow).toMatch(/^  workflow_dispatch:/m);
-    expect(releaseWorkflow).not.toMatch(/^  push:/m);
+    expect(releaseWorkflow).toMatch(/^  push:\s*\n\s+branches:\s+\[main\]\s*\n\s+paths:/m);
+    expect(releaseWorkflow).toContain('mobile/**');
+    expect(releaseWorkflow).toContain('inputs.source_sha || github.sha');
     expect(releaseWorkflow).toContain('source_sha');
     expect(releaseWorkflow).toContain('must equal the workflow main SHA');
-    const buildJob = releaseWorkflow.split('  sign-and-draft:')[0];
+    const buildJob = releaseWorkflow.split('  sign-artifact:')[0];
     expect(buildJob).toContain('build-unsigned:');
     expect(buildJob).toContain('assembleRelease');
     expect(buildJob).toContain('releaseVersionCode=1000');
@@ -49,17 +51,28 @@ describe('release automation contract', () => {
     expect(buildJob).not.toContain('contents: write');
   });
 
-  it('signs and drafts from a main-controlled job without checking out candidate code or clobbering a tag', () => {
-    const signer = releaseWorkflow.split('  sign-and-draft:')[1] ?? '';
-    expect(signer).toContain("github.ref == 'refs/heads/main'");
+  it('signs main builds with the protected environment and reserves release publishing for manual dispatch', () => {
+    const signer = releaseWorkflow.split('  sign-artifact:')[1]?.split('  create-candidate-draft:')[0] ?? '';
+    expect(signer).toContain("if: github.ref == 'refs/heads/main'");
+    expect(signer).toContain('environment: android-production-signing');
     expect(signer).toContain('actions/download-artifact@v4');
-    expect(signer).not.toContain('actions/checkout');
+    expect(signer).toContain('apksigner sign');
     expect(signer).toContain('EXPECTED_CERT_SHA256');
-    expect(signer).toContain('1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed');
-    expect(signer).toContain('gh release create');
-    expect(signer).toContain('--draft');
-    expect(signer).not.toContain('--clobber');
-    expect(signer).toContain('candidate-manifest.json');
+    expect(signer).toContain('android-signed-${{ github.run_id }}');
+    expect(signer).toContain('actions/upload-artifact@v4');
+    expect(signer).not.toContain('actions/checkout');
+    expect(signer).not.toContain('contents: write');
+    expect(signer).not.toContain('gh release create');
+  });
+
+  it('creates a draft release only from a manual main-branch dispatch', () => {
+    const draftRelease = releaseWorkflow.split('  create-candidate-draft:')[1] ?? '';
+    expect(draftRelease).toContain("github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'");
+    expect(draftRelease).toContain('contents: write');
+    expect(draftRelease).toContain('gh release create');
+    expect(draftRelease).toContain('--draft');
+    expect(draftRelease).not.toContain('--clobber');
+    expect(draftRelease).toContain('candidate-manifest.json');
   });
 
   it('promotes the accepted draft by verifying the exact source and APK hash without rebuilding or replacing bytes', () => {
