@@ -1,6 +1,12 @@
 package com.lofuyu.borderledger.react
 
+import android.net.Uri
 import com.lofuyu.borderledger.core.SecureRecordPort
+import com.lofuyu.borderledger.exports.ExportHandoff
+import com.lofuyu.borderledger.exports.ExportFailure
+import com.lofuyu.borderledger.exports.ExportSelection
+import com.lofuyu.borderledger.exports.ExportState
+import com.lofuyu.borderledger.exports.LedgerExportRequest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -178,6 +184,37 @@ class BridgeOperationJournalTest {
         assertTrue(savedIndex.has(indexFingerprint(pendingRequest)))
         assertTrue(savedIndex.length() <= 2)
         assertEquals(1, writes)
+    }
+
+    @Test fun definitiveExportErrorsAreTerminalButMissingWorkerReceiptsRemainUnresolved() = runTest {
+        val journal = BridgeOperationJournal(MemoryRecords())
+        val failedRequest = BridgeOperationRequest("export-failure-1", "export_picker", "csv", "owner")
+        journal.awaitExternal(failedRequest)
+        val failed = journal.completeExternal(BridgeOperationKey(failedRequest.id, failedRequest.owner)) {
+            BridgeExportOperations.requireReceipt(
+                ExportState.Error(null, ExportFailure("export_failed", "The destination could not be written.")),
+            ).receiptId
+        }
+        val nextWrite = journal.start(BridgeOperationRequest("settings-write-1", "settings_write", "theme=dark", "owner")) {
+            "settings-receipt"
+        }
+
+        val pendingRequest = BridgeOperationRequest("export-pending-1", "export_picker", "csv-pending", "owner")
+        journal.awaitExternal(pendingRequest)
+        val pending = journal.completeExternal(BridgeOperationKey(pendingRequest.id, pendingRequest.owner)) {
+            BridgeExportOperations.requireReceipt(
+                ExportState.AwaitingWorkerReceipt(
+                    LedgerExportRequest(ExportSelection.All),
+                    Uri.parse("content://test/export.csv"),
+                    128,
+                    ExportHandoff.Save,
+                ),
+            ).receiptId
+        }
+
+        assertEquals("failed_local", failed.status)
+        assertEquals("completed", nextWrite.status)
+        assertEquals("reconciliation_required", pending.status)
     }
 
     @Test fun mismatchedPayloadAndOwnerCannotReuseOrInspectOperation() = runTest {

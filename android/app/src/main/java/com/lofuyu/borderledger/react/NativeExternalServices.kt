@@ -382,14 +382,14 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
             ContentResolverExportDestination(r.applicationContext.contentResolver, destination),
             if (share) ExportHandoff.Share else ExportHandoff.Save,
         )
-        check(result is ExportState.Completed)
+        val receipt = BridgeExportOperations.requireReceipt(result)
         if (share && ownerMatches(handoff.value)) {
             r.applicationContext.startActivity(
                 r.container.exportCoordinator.createShareIntent(destination)
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }
-        return result.receipt.receiptId
+        return receipt.receiptId
     }
 
     suspend fun handlePlaid(result: PlaidLinkResult, operationId: String?=null) {
