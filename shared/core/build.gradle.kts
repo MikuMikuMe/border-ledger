@@ -9,8 +9,8 @@ kotlin {
     jvmToolchain(17)
     android {
         namespace = "com.lofuyu.borderledger.core"
-        compileSdk = 37
-        compileSdkMinor = 0
+        // The Android-KMP DSL does not expose a minor API level; shared core uses stable APIs.
+        compileSdk = 36
         minSdk = 26
         compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
         withHostTestBuilder {}.configure {}

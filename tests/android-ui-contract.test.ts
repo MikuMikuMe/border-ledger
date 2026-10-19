@@ -122,7 +122,8 @@ describe('Android React Native production surface', () => {
     const androidRelease = read('.github/workflows/android-release.yml');
     const iosCore = androidCi.split('  ios-core:')[1]?.split('  android-instrumentation:')[0] ?? '';
     expect(androidGradle).toContain('compileSdkMinor = 0');
-    expect(sharedCoreGradle).toContain('compileSdkMinor = 0');
+    expect(sharedCoreGradle).toContain('compileSdk = 36');
+    expect(sharedCoreGradle).not.toContain('compileSdkMinor');
     expect(androidGradle).toContain('arguments += "-DCMAKE_OBJECT_PATH_MAX=250"');
     expect(androidGradle).toContain('buildStagingDirectory = file(providers.gradleProperty("borderLedgerCxxRoot")');
     for (const workflow of [appBuild, androidCi, androidRelease]) {
