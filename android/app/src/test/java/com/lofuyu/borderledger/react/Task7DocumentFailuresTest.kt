@@ -10,28 +10,28 @@ class Task7DocumentFailuresTest {
     @Test fun oversizedSelectionIsRejectedBeforeAnyRunningRecordOrSubmissionAndSurvivesReload()=runTest {
         val disk=Records();var writes=0
         val draft=ImportDraft(preview(501),emptyList(),(1..501).map { "row-$it" }.toSet())
-        val result=BridgeOperationJournal(disk).startValidated("oversize-1","import_commit","501","owner",{BridgeImportOperations.requireCommit(draft)}) { writes++;"wrong" }
+        val result=BridgeOperationJournal(disk).startValidated(BridgeOperationRequest("oversize-1","import_commit","501","owner"),{BridgeImportOperations.requireCommit(draft)}) { writes++;"wrong" }
         assertEquals("failed_local",result.status)
         assertEquals(0,writes)
         assertFalse(disk.writes.any { it.contains("\"status\":\"running\"") })
-        assertEquals("failed_local",BridgeOperationJournal(disk).list("owner",0,50).single().status)
+        assertEquals("failed_local",BridgeOperationJournal(disk).list(BridgeOperationPage("owner",0,50)).single().status)
     }
 
     @Test fun corruptDocumentIsTerminalAndAnotherPickerCanPrepareANewDocumentWithoutReplayingTheFailure()=runTest {
         val disk=Records();val gateway=Gateway();val repository=ImportRepository(gateway)
         val journal=BridgeOperationJournal(disk)
-        journal.awaitExternal("picker-bad","import_picker","same-account","owner")
+        journal.awaitExternal(BridgeOperationRequest("picker-bad","import_picker","same-account","owner"))
         val corrupt=readCsv("Date,Description,Amount,Currency\n2026-10-17,\"unterminated,-1.00,CAD")
         assertEquals(DocumentReadResult.Corrupt("invalid_csv"),corrupt)
-        val failure=journal.completeExternal("picker-bad","owner") { BridgeImportOperations.preview(repository,corrupt,"account","picker-bad") }
+        val failure=journal.completeExternal(BridgeOperationKey("picker-bad","owner")) { BridgeImportOperations.preview(repository,corrupt,"account","picker-bad") }
         assertEquals("failed_local",failure.status)
         assertEquals("corrupt_document",(repository.state.value as ImportState.Error).failure.code)
         assertEquals(0,gateway.requests)
         val restored=BridgeOperationJournal(disk)
-        assertEquals("failed_local",restored.list("owner",0,50).single().status)
-        assertTrue(BridgeImportOperations.canReplaceUndrainedPicker("import_picker",restored.query("picker-bad","owner")?.status))
-        assertEquals("picker-new",restored.awaitExternal("picker-new","import_picker","same-account","owner").operationId)
-        val result=restored.completeExternal("picker-new","owner") { BridgeImportOperations.preview(repository,document(),"account","picker-new") }
+        assertEquals("failed_local",restored.list(BridgeOperationPage("owner",0,50)).single().status)
+        assertTrue(BridgeImportOperations.canReplaceUndrainedPicker("import_picker",restored.query(BridgeOperationKey("picker-bad","owner"))?.status))
+        assertEquals("picker-new",restored.awaitExternal(BridgeOperationRequest("picker-new","import_picker","same-account","owner")).operationId)
+        val result=restored.completeExternal(BridgeOperationKey("picker-new","owner")) { BridgeImportOperations.preview(repository,document(),"account","picker-new") }
         assertEquals("completed",result.status)
         assertEquals(1,gateway.requests)
     }
@@ -39,13 +39,13 @@ class Task7DocumentFailuresTest {
     @Test fun unknownFailureAfterPreviewSubmissionRemainsBlockedAcrossReloadAndCannotReplay()=runTest {
         val disk=Records();val gateway=Gateway(fail=true);val repository=ImportRepository(gateway)
         val journal=BridgeOperationJournal(disk)
-        journal.awaitExternal("picker-lost","import_picker","same-account","owner")
-        val failure=journal.completeExternal("picker-lost","owner") { BridgeImportOperations.preview(repository,document(),"account","picker-lost") }
+        journal.awaitExternal(BridgeOperationRequest("picker-lost","import_picker","same-account","owner"))
+        val failure=journal.completeExternal(BridgeOperationKey("picker-lost","owner")) { BridgeImportOperations.preview(repository,document(),"account","picker-lost") }
         assertEquals("reconciliation_required",failure.status)
         assertEquals(1,gateway.requests)
         val restored=BridgeOperationJournal(disk)
-        assertEquals("picker-lost",restored.awaitExternal("picker-retry","import_picker","same-account","owner").operationId)
-        restored.completeExternal("picker-lost","owner") { fail("Ambiguous submission must never be replayed");null }
+        assertEquals("picker-lost",restored.awaitExternal(BridgeOperationRequest("picker-retry","import_picker","same-account","owner")).operationId)
+        restored.completeExternal(BridgeOperationKey("picker-lost","owner")) { fail("Ambiguous submission must never be replayed");null }
         assertEquals(1,gateway.requests)
     }
 
@@ -67,11 +67,11 @@ class Task7DocumentFailuresTest {
     @Test fun exactCommitLimitIsAllowedAndEmptyOrMissingSelectionsAreLocalFailures()=runTest {
         val disk=Records();var writes=0
         val valid=ImportDraft(preview(500),emptyList(),(1..500).map { "row-$it" }.toSet())
-        val allowed=BridgeOperationJournal(disk).startValidated("allowed-500","import_commit","500","owner",{BridgeImportOperations.requireCommit(valid)}) { writes++;"receipt" }
+        val allowed=BridgeOperationJournal(disk).startValidated(BridgeOperationRequest("allowed-500","import_commit","500","owner"),{BridgeImportOperations.requireCommit(valid)}) { writes++;"receipt" }
         assertEquals("completed",allowed.status)
         assertEquals(1,writes)
         for((id,draft) in listOf("missing-1" to null,"empty-111" to valid.copy(selectedRowIds=emptySet()))) {
-            val rejected=BridgeOperationJournal(disk).startValidated(id,"import_commit",id,"owner",{BridgeImportOperations.requireCommit(draft)}) { fail("Invalid selection submitted");null }
+            val rejected=BridgeOperationJournal(disk).startValidated(BridgeOperationRequest(id,"import_commit",id,"owner"),{BridgeImportOperations.requireCommit(draft)}) { fail("Invalid selection submitted");null }
             assertEquals("failed_local",rejected.status)
         }
     }

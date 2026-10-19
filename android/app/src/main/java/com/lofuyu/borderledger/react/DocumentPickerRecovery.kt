@@ -12,13 +12,18 @@ internal object DocumentPickerRecovery {
     private val PICKER_KINDS = setOf("import_picker", "export_picker")
 }
 
+internal data class PlaidHandoffState(
+    val state: String,
+    val operationStatus: String?,
+    val providerMayBeOpen: Boolean,
+    val providerReturned: Boolean,
+    val callbackInProgress: Boolean,
+)
+
 internal object PlaidHandoffAvailability {
-    fun canCancel(
-        state: String,
-        operationStatus: String?,
-        providerMayBeOpen: Boolean,
-        providerReturned: Boolean,
-        callbackInProgress: Boolean,
-    ): Boolean = state == "linking" && operationStatus == "awaiting_result" &&
-        !callbackInProgress && (!providerMayBeOpen || providerReturned)
+    fun canCancel(handOff: PlaidHandoffState): Boolean =
+        handOff.state == "linking" &&
+            handOff.operationStatus == "awaiting_result" &&
+            !handOff.callbackInProgress &&
+            (!handOff.providerMayBeOpen || handOff.providerReturned)
 }

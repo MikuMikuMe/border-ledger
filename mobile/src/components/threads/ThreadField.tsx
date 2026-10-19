@@ -30,7 +30,7 @@ type Size={width:number;height:number};
 function ThreadCanvas({width,height,active,reducedMotion}:Size&{active:boolean;reducedMotion:boolean}){
   const phase=useSharedValue(reducedMotion?REDUCED_MOTION_PHASE:0);
   const frameBudgetMs=useSharedValue(0);
-  const frame=useFrameCallback(info=>{'worklet';const budget=consumeCanonicalThreadFrameBudget(frameBudgetMs.value,info.timeSincePreviousFrame??0);frameBudgetMs.value=budget.pendingMs;if(budget.shouldRender)phase.value=advanceCanonicalThreadPhase(phase.value,budget.elapsedMs,{active:true,reducedMotion:false});},false);
+  const frame=useFrameCallback(info=>{'worklet';const budget=consumeCanonicalThreadFrameBudget({pendingMs:frameBudgetMs.value,elapsedMs:info.timeSincePreviousFrame??0});frameBudgetMs.value=budget.pendingMs;if(budget.shouldRender)phase.value=advanceCanonicalThreadPhase({currentPhase:phase.value,elapsedMs:budget.elapsedMs,active:true,reducedMotion:false});},false);
   useEffect(()=>{if(reducedMotion)phase.value=REDUCED_MOTION_PHASE;frameBudgetMs.value=0;frame.setActive(active&&!reducedMotion);return()=>{frame.setActive(false);frameBudgetMs.value=0;};},[active,reducedMotion,frame,frameBudgetMs,phase]);
   const inks=useMemo(()=>Array.from({length:THREAD_COUNT},(_,index)=>{
     const ink=canonicalThreadPaint(index);
@@ -38,7 +38,7 @@ function ThreadCanvas({width,height,active,reducedMotion}:Size&{active:boolean;r
     const glow=paint.copy();glow.setColor(Skia.Color(`rgba(203,244,220,${ink.alpha*.7})`));glow.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal,ink.shadowBlur/2,true));
     return{paint,glow};
   }),[]);
-  const prepared=useMemo(()=>prepareCanonicalThreads(width,height),[width,height]);
+  const prepared=useMemo(()=>prepareCanonicalThreads({width,height}),[width,height]);
   // One UI-runtime derived picture replaces 88 independent path worklets.
   const picture=useDerivedValue(()=>{
     const recorder=Skia.PictureRecorder();const canvas=recorder.beginRecording(Skia.XYWHRect(0,0,width,height));

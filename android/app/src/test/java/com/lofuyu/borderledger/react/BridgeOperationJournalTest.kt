@@ -10,11 +10,11 @@ import org.junit.Test
 class BridgeOperationJournalTest {
     @Test fun recreatedRuntimeCanDiscoverLostOperationIdsWithoutJsStorage()=runTest {
         val disk=MemoryRecords()
-        BridgeOperationJournal(disk).start("discover-1","review","p","owner") { error("lost response") }
-        val list=BridgeOperationJournal(disk).list("owner",0,50)
+        BridgeOperationJournal(disk).start(BridgeOperationRequest("discover-1","review","p","owner")) { error("lost response") }
+        val list=BridgeOperationJournal(disk).list(BridgeOperationPage("owner",0,50))
         assertEquals(listOf("discover-1"),list.map { it.operationId })
         assertEquals("reconciliation_required",list.single().status)
-        assertTrue(BridgeOperationJournal(disk).list("other-owner",0,50).isEmpty())
+        assertTrue(BridgeOperationJournal(disk).list(BridgeOperationPage("other-owner",0,50)).isEmpty())
     }
     @Test fun lostRecurringResponseRemainsUnresolvedWithoutRepeatingTheRepositoryMutation()=runTest {
         val disk=MemoryRecords()
@@ -30,46 +30,46 @@ class BridgeOperationJournalTest {
             }
         })
         val submit: suspend () -> String? = { repository.classify("stream-1",3,"bill"); null }
-        BridgeOperationJournal(disk).start("recurring-1","recurring_classify","stream-1:3:bill","owner",submit)
-        val result=BridgeOperationJournal(disk).start("recurring-2","recurring_classify","stream-1:3:bill","owner",submit)
+        BridgeOperationJournal(disk).start(BridgeOperationRequest("recurring-1","recurring_classify","stream-1:3:bill","owner"),submit)
+        val result=BridgeOperationJournal(disk).start(BridgeOperationRequest("recurring-2","recurring_classify","stream-1:3:bill","owner"),submit)
         assertEquals(1,applied)
         assertEquals("recurring-1",result.operationId)
         assertEquals("reconciliation_required",result.status)
     }
     @Test fun aConfirmedRevisionConflictIsNotAnAmbiguousSuccess()=runTest {
-        val result=BridgeOperationJournal(MemoryRecords()).start("conflict-1","recurring_classify","p","owner") { throw com.lofuyu.borderledger.recurring.RecurringRevisionConflict(4) }
+        val result=BridgeOperationJournal(MemoryRecords()).start(BridgeOperationRequest("conflict-1","recurring_classify","p","owner")) { throw com.lofuyu.borderledger.recurring.RecurringRevisionConflict(4) }
         assertEquals("revision_conflict",result.status)
         assertNull(result.resultId)
     }
     @Test fun aNewJsRequestIdCannotRetryAnUnresolvedIdenticalWrite() = runTest {
         val disk=MemoryRecords(); var writes=0
-        BridgeOperationJournal(disk).start("original-1","review","payload","owner") { writes++; error("timeout") }
-        val result=BridgeOperationJournal(disk).start("new-id-22","review","payload","owner") { writes++; "wrong" }
+        BridgeOperationJournal(disk).start(BridgeOperationRequest("original-1","review","payload","owner")) { writes++; error("timeout") }
+        val result=BridgeOperationJournal(disk).start(BridgeOperationRequest("new-id-22","review","payload","owner")) { writes++; "wrong" }
         assertEquals(1,writes)
         assertEquals("original-1",result.operationId)
         assertEquals("reconciliation_required",result.status)
     }
     @Test fun externalCallbackAfterRecreationIsClaimedOnceAndCancelDiscardsLateResult() = runTest {
         val disk=MemoryRecords()
-        BridgeOperationJournal(disk).awaitExternal("external-1", "import", "a", "owner")
+        BridgeOperationJournal(disk).awaitExternal(BridgeOperationRequest("external-1", "import", "a", "owner"))
         val restored=BridgeOperationJournal(disk)
         var writes=0
-        assertEquals("completed", restored.completeExternal("external-1", "owner") { writes++; "receipt" }.status)
-        restored.completeExternal("external-1", "owner") { writes++; "wrong" }
+        assertEquals("completed", restored.completeExternal(BridgeOperationKey("external-1", "owner")) { writes++; "receipt" }.status)
+        restored.completeExternal(BridgeOperationKey("external-1", "owner")) { writes++; "wrong" }
         assertEquals(1,writes)
-        restored.awaitExternal("external-2", "import", "a", "owner")
-        assertEquals("canceled", restored.cancel("external-2", "owner")?.status)
-        restored.completeExternal("external-2", "owner") { writes++; "wrong" }
+        restored.awaitExternal(BridgeOperationRequest("external-2", "import", "a", "owner"))
+        assertEquals("canceled", restored.cancel(BridgeOperationKey("external-2", "owner"))?.status)
+        restored.completeExternal(BridgeOperationKey("external-2", "owner")) { writes++; "wrong" }
         assertEquals(1,writes)
     }
 
     @Test fun claimedCallbackWithLostProcessRemainsAmbiguousAndNeverResubmits() = runTest {
         val disk=MemoryRecords()
         val first=BridgeOperationJournal(disk)
-        first.awaitExternal("external-3", "plaid", "a", "owner")
-        first.completeExternal("external-3", "owner") { error("lost response") }
+        first.awaitExternal(BridgeOperationRequest("external-3", "plaid", "a", "owner"))
+        first.completeExternal(BridgeOperationKey("external-3", "owner")) { error("lost response") }
         var writes=0
-        val result=BridgeOperationJournal(disk).completeExternal("external-3", "owner") { writes++; "wrong" }
+        val result=BridgeOperationJournal(disk).completeExternal(BridgeOperationKey("external-3", "owner")) { writes++; "wrong" }
         assertEquals("reconciliation_required",result.status)
         assertEquals(0,writes)
     }
@@ -77,13 +77,13 @@ class BridgeOperationJournalTest {
     @Test fun plaidRecoveryReplaysOnlyTheSameIdempotentExternalOperation() = runTest {
         val disk = MemoryRecords()
         val first = BridgeOperationJournal(disk)
-        first.awaitExternal("plaid-replay-1", "plaid", "{}", "owner")
-        assertEquals("reconciliation_required", first.completeExternal("plaid-replay-1", "owner") {
+        first.awaitExternal(BridgeOperationRequest("plaid-replay-1", "plaid", "{}", "owner"))
+        assertEquals("reconciliation_required", first.completeExternal(BridgeOperationKey("plaid-replay-1", "owner")) {
             error("response lost after the request was submitted")
         }.status)
 
         var calls = 0
-        val recovered = BridgeOperationJournal(disk).retryExternalWithSameIdempotency("plaid-replay-1", "owner") {
+        val recovered = BridgeOperationJournal(disk).retryExternalWithSameIdempotency(BridgeOperationKey("plaid-replay-1", "owner")) {
             calls += 1
             "pending-connection-1"
         }
@@ -95,11 +95,11 @@ class BridgeOperationJournalTest {
 
     @Test fun plaidRecoveryDoesNotRaceAnExchangeThatIsStillActive() = runTest {
         val journal = BridgeOperationJournal(MemoryRecords())
-        journal.awaitExternal("plaid-active-1", "plaid", "{}", "owner")
+        journal.awaitExternal(BridgeOperationRequest("plaid-active-1", "plaid", "{}", "owner"))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val first = async {
-            journal.completeExternal("plaid-active-1", "owner") {
+            journal.completeExternal(BridgeOperationKey("plaid-active-1", "owner")) {
                 entered.complete(Unit)
                 release.await()
                 "pending-connection-1"
@@ -107,7 +107,7 @@ class BridgeOperationJournalTest {
         }
         entered.await()
         var retries = 0
-        val duplicate = journal.retryExternalWithSameIdempotency("plaid-active-1", "owner") {
+        val duplicate = journal.retryExternalWithSameIdempotency(BridgeOperationKey("plaid-active-1", "owner")) {
             retries += 1
             "wrong"
         }
@@ -120,8 +120,8 @@ class BridgeOperationJournalTest {
     @Test fun lostPromiseAndRecreationNeverReplayFinancialWrite() = runTest {
         val disk = MemoryRecords()
         var writes = 0
-        BridgeOperationJournal(disk).start("request-1", "review", "same", "owner") { writes++; error("secret token") }
-        val result = BridgeOperationJournal(disk).start("request-1", "review", "same", "owner") { writes++; "receipt" }
+        BridgeOperationJournal(disk).start(BridgeOperationRequest("request-1", "review", "same", "owner")) { writes++; error("secret token") }
+        val result = BridgeOperationJournal(disk).start(BridgeOperationRequest("request-1", "review", "same", "owner")) { writes++; "receipt" }
         assertEquals(1, writes)
         assertEquals("reconciliation_required", result.status)
         assertFalse(result.toString().contains("secret"))
@@ -132,9 +132,9 @@ class BridgeOperationJournalTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var writes = 0
-        val first = async { journal.start("request-2", "sync", "same", "owner") { writes++; entered.complete(Unit); release.await(); "receipt" } }
+        val first = async { journal.start(BridgeOperationRequest("request-2", "sync", "same", "owner")) { writes++; entered.complete(Unit); release.await(); "receipt" } }
         entered.await()
-        val second = journal.start("request-2", "sync", "same", "owner") { writes++; "wrong" }
+        val second = journal.start(BridgeOperationRequest("request-2", "sync", "same", "owner")) { writes++; "wrong" }
         assertEquals("running", second.status)
         release.complete(Unit)
         assertEquals("completed", first.await().status)
@@ -143,15 +143,15 @@ class BridgeOperationJournalTest {
 
     @Test fun mismatchedPayloadAndOwnerCannotReuseOrInspectOperation() = runTest {
         val journal = BridgeOperationJournal(MemoryRecords())
-        journal.start("request-3", "sync", "a", "owner") { "receipt" }
-        try { journal.start("request-3", "sync", "b", "owner") { "wrong" }; fail() } catch (_: IllegalArgumentException) { }
-        assertNull(journal.query("request-3", "different-owner"))
+        journal.start(BridgeOperationRequest("request-3", "sync", "a", "owner")) { "receipt" }
+        try { journal.start(BridgeOperationRequest("request-3", "sync", "b", "owner")) { "wrong" }; fail() } catch (_: IllegalArgumentException) { }
+        assertNull(journal.query(BridgeOperationKey("request-3", "different-owner")))
     }
 
     @Test fun cancellationNeverClaimsToUndoSubmittedWrite() = runTest {
         val journal = BridgeOperationJournal(MemoryRecords())
-        journal.start("request-4", "review", "same", "owner") { error("offline") }
-        assertEquals("reconciliation_required", journal.cancel("request-4", "owner")?.status)
+        journal.start(BridgeOperationRequest("request-4", "review", "same", "owner")) { error("offline") }
+        assertEquals("reconciliation_required", journal.cancel(BridgeOperationKey("request-4", "owner"))?.status)
     }
 
     private class MemoryRecords : SecureRecordPort {

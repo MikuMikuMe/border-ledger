@@ -27,6 +27,18 @@ export type ShellDestination = 'overview' | 'activity' | 'recurring' | 'review' 
 const BUSY_STATES = new Set<SafeSessionState>(['restoring', 'signing_in', 'exchanging', 'refreshing', 'signing_out']);
 const DESTINATIONS = new Set<ShellDestination>(['overview', 'activity', 'recurring', 'review', 'accounts', 'settings', 'capture']);
 
+const STATUS_BY_STATE: Partial<Record<SafeSessionState, string>> = {
+  restoring: 'Restoring a protected session…',
+  signing_in: 'Opening secure browser approval…',
+  awaiting_browser: 'Approve access in the verified browser, then return here.',
+  exchanging: 'Completing the secure return…',
+  refreshing: 'Refreshing the owner session…',
+  signing_out: 'Signing out and hiding financial data…',
+  expired: 'The owner session expired. Sign in again.',
+  callback_rejected: 'The return link could not be verified. Start sign-in again.',
+  storage_failure: 'Secure storage is unavailable. Financial data remains locked.',
+};
+
 export function initialAuthControls() {
   return { staySignedIn: false, pendingDestination: CAPTURE_DESTINATION } as const;
 }
@@ -45,30 +57,29 @@ export function shellDestination(value: string | null): ShellDestination {
 }
 
 export function presentationForSession(snapshot: SafeSessionSnapshot) {
-  const status = (() => {
-    switch (snapshot.state) {
-      case 'restoring': return 'Restoring a protected session…';
-      case 'signing_in': return 'Opening secure browser approval…';
-      case 'awaiting_browser': return 'Approve access in the verified browser, then return here.';
-      case 'exchanging': return 'Completing the secure return…';
-      case 'refreshing': return 'Refreshing the owner session…';
-      case 'signing_out': return 'Signing out and hiding financial data…';
-      case 'expired': return 'The owner session expired. Sign in again.';
-      case 'callback_rejected': return 'The return link could not be verified. Start sign-in again.';
-      case 'storage_failure': return 'Secure storage is unavailable. Financial data remains locked.';
-      case 'signed_out':
-        if (snapshot.reason === 'Canceled') return 'Sign-in was canceled. You can try again.';
-        if (snapshot.reason === 'Offline' && snapshot.pendingRevocations > 0) return 'Signed out locally. Remote revocation will continue when the network returns.';
-        if (snapshot.reason === 'StartFailed') return 'Sign-in could not start. Check your connection and try again.';
-        return '';
-      case 'signed_in': return '';
-    }
-  })();
+  const status = statusForSession(snapshot);
 
   return {
     busy: BUSY_STATES.has(snapshot.state),
-    retryable: snapshot.state === 'expired' || snapshot.state === 'callback_rejected' ||
-      snapshot.state === 'storage_failure' || snapshot.state === 'signed_out',
+    retryable: isRetryable(snapshot.state),
     status,
   };
+}
+
+function statusForSession(snapshot: SafeSessionSnapshot): string {
+  if (snapshot.state !== 'signed_out') return STATUS_BY_STATE[snapshot.state] ?? '';
+  return signedOutStatus(snapshot);
+}
+
+function signedOutStatus(snapshot: SafeSessionSnapshot): string {
+  if (snapshot.reason === 'Canceled') return 'Sign-in was canceled. You can try again.';
+  if (snapshot.reason === 'Offline' && snapshot.pendingRevocations > 0) {
+    return 'Signed out locally. Remote revocation will continue when the network returns.';
+  }
+  if (snapshot.reason === 'StartFailed') return 'Sign-in could not start. Check your connection and try again.';
+  return '';
+}
+
+function isRetryable(state: SafeSessionState): boolean {
+  return state === 'expired' || state === 'callback_rejected' || state === 'storage_failure' || state === 'signed_out';
 }

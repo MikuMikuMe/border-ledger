@@ -12,8 +12,11 @@ export type CanonicalThreadFrameBudget = {
   pendingMs: number;
 };
 
+export type ThreadDimensions = Readonly<{ width: number; height: number }>;
+export type CanonicalFrameTiming = Readonly<{ pendingMs: number; elapsedMs: number }>;
+
 /** Accumulates display time and releases at most one render per 30fps interval. */
-export function consumeCanonicalThreadFrameBudget(pendingMs: number, elapsedMs: number): CanonicalThreadFrameBudget {
+export function consumeCanonicalThreadFrameBudget({ pendingMs, elapsedMs }: CanonicalFrameTiming): CanonicalThreadFrameBudget {
   'worklet';
   const totalMs = Math.max(0, pendingMs) + Math.max(0, elapsedMs);
   if (totalMs + 0.000001 < CANONICAL_THREAD_FRAME_INTERVAL_MS) {
@@ -26,6 +29,26 @@ export type ThreadPhaseOptions = {
   active: boolean;
   reducedMotion: boolean;
   pausedPhase?: number;
+};
+
+export type ThreadPhaseInput = ThreadPhaseOptions & Readonly<{ elapsedMs: number }>;
+export type ThreadPhaseAdvanceInput = Pick<ThreadPhaseOptions, 'active' | 'reducedMotion'> & Readonly<{
+  currentPhase: number;
+  elapsedMs: number;
+}>;
+
+export type ThreadGeometryInput = Readonly<{
+  index: number;
+  size: ThreadDimensions;
+  phase: number;
+}>;
+
+export type CanonicalThreadPointInput = {
+  index: number;
+  step: number;
+  size: ThreadDimensions;
+  phase: number;
+  pointer?: CanonicalPointer;
 };
 
 export type ThreadGeometry = {
@@ -46,7 +69,41 @@ const roundFixture = (value: number) => {
   return Math.round(value * 1_000_000) / 1_000_000;
 };
 
-export function threadPhase(elapsedMs: number, options: ThreadPhaseOptions): number {
+function assertThreadIndex(index: number, errorMessage: string): void {
+  'worklet';
+  if (!Number.isInteger(index)) throw new RangeError(errorMessage);
+  if (index < 0) throw new RangeError(errorMessage);
+  if (index >= THREAD_COUNT) throw new RangeError(errorMessage);
+}
+
+function assertThreadDimensions(
+  { width, height }: ThreadDimensions,
+  errorMessage = 'Thread dimensions must be finite and non-negative.',
+): void {
+  'worklet';
+  assertThreadDimension(width, errorMessage);
+  assertThreadDimension(height, errorMessage);
+}
+
+function assertThreadDimension(value: number, errorMessage: string): void {
+  'worklet';
+  if (!Number.isFinite(value)) throw new RangeError(errorMessage);
+  if (value < 0) throw new RangeError(errorMessage);
+}
+
+function assertCanonicalThreadStep(step: number): void {
+  'worklet';
+  if (!Number.isInteger(step)) throw new RangeError('Invalid thread vertex.');
+  if (step < 0) throw new RangeError('Invalid thread vertex.');
+  if (step > CANONICAL_THREAD_STEPS) throw new RangeError('Invalid thread vertex.');
+}
+
+function assertFinitePhase(phase: number): void {
+  'worklet';
+  if (!Number.isFinite(phase)) throw new RangeError('Invalid thread dimensions or phase.');
+}
+
+export function threadPhase({ elapsedMs, ...options }: ThreadPhaseInput): number {
   'worklet';
   if (options.reducedMotion) return REDUCED_MOTION_PHASE;
   if (!options.active) return options.pausedPhase ?? 0;
@@ -61,11 +118,7 @@ export function threadPhaseFromCycleProgress(progress: number): number {
 }
 
 /** Advances an existing radians phase without losing its position across app pauses. */
-export function advanceThreadPhase(
-  currentPhase: number,
-  elapsedMs: number,
-  options: Pick<ThreadPhaseOptions, 'active' | 'reducedMotion'>,
-): number {
+export function advanceThreadPhase({ currentPhase, elapsedMs, ...options }: ThreadPhaseAdvanceInput): number {
   'worklet';
   if (options.reducedMotion) return REDUCED_MOTION_PHASE;
   if (!options.active) return currentPhase;
@@ -77,19 +130,11 @@ export function advanceThreadPhase(
  * Compose, Canvas, DOM, or Skia dependencies. Coordinates are rounded only to
  * make deterministic web/native fixtures stable across JS engines.
  */
-export function threadGeometry(
-  index: number,
-  width: number,
-  height: number,
-  phase: number,
-): ThreadGeometry {
+export function threadGeometry({ index, size, phase }: ThreadGeometryInput): ThreadGeometry {
   'worklet';
-  if (index < 0 || index >= THREAD_COUNT || !Number.isInteger(index)) {
-    throw new RangeError(`Thread index must be an integer from 0 to ${THREAD_COUNT - 1}.`);
-  }
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 0 || height < 0) {
-    throw new RangeError('Thread dimensions must be finite and non-negative.');
-  }
+  assertThreadIndex(index, `Thread index must be an integer from 0 to ${THREAD_COUNT - 1}.`);
+  assertThreadDimensions(size);
+  const { width, height } = size;
 
   const position = index / (THREAD_COUNT - 1);
   const strandPhase = position * 4.8;
@@ -117,7 +162,7 @@ export type CanonicalPointer = { x: number; y: number };
 
 export function canonicalThreadPaint(index: number) {
   'worklet';
-  if (!Number.isInteger(index) || index < 0 || index >= THREAD_COUNT) throw new RangeError('Invalid thread index.');
+  assertThreadIndex(index, 'Invalid thread index.');
   const lane = index / (THREAD_COUNT - 1) - 0.5;
   const alpha = 0.055 + 0.14 * Math.pow(1 - Math.abs(lane * 1.5), 2);
   const champagne = Math.max(0, 1 - Math.abs(lane - 0.22) * 5);
@@ -128,22 +173,26 @@ export function canonicalThreadPaint(index: number) {
   };
 }
 
-export function canonicalThreadPoint(index: number, step: number, width: number, height: number, phase: number, pointer: CanonicalPointer = { x: 0.5, y: 0.32 }) {
+export function canonicalThreadPoint({ index, step, size, phase, pointer }: CanonicalThreadPointInput) {
   'worklet';
-  if (!Number.isInteger(index) || index < 0 || index >= THREAD_COUNT || !Number.isInteger(step) || step < 0 || step > CANONICAL_THREAD_STEPS) throw new RangeError('Invalid thread vertex.');
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 0 || height < 0 || !Number.isFinite(phase)) throw new RangeError('Invalid thread dimensions or phase.');
+  assertThreadIndex(index, 'Invalid thread vertex.');
+  assertCanonicalThreadStep(step);
+  assertThreadDimensions(size, 'Invalid thread dimensions or phase.');
+  assertFinitePhase(phase);
+  const { width, height } = size;
+  const pointerPosition = pointer ?? { x: 0.5, y: 0.32 };
   const lane = index / (THREAD_COUNT - 1) - 0.5;
   const progress = step / CANONICAL_THREAD_STEPS;
   const focus = Math.exp(-Math.pow(progress - 0.58, 2) / 0.085);
   const wave = Math.sin(progress * 7.2 + phase * 2.2 + lane * 2.7) * 24;
   const fray = Math.sin(progress * 23 + phase * 3.1 + index * 0.34) * 2.7;
-  const pointerPull = (pointer.y - 0.42) * 34 * Math.exp(-Math.pow(progress - pointer.x, 2) / 0.04);
+  const pointerPull = (pointerPosition.y - 0.42) * 34 * Math.exp(-Math.pow(progress - pointerPosition.x, 2) / 0.04);
   const center = height * (0.34 + progress * 0.11) + Math.sin(phase * 1.3) * 18;
   const spread = lane * (34 + focus * 185);
   return { x: -width * 0.15 + progress * width * 1.3, y: center + spread + wave * (1 - focus * 0.28) + fray + pointerPull };
 }
 
-export function advanceCanonicalThreadPhase(currentPhase: number, elapsedMs: number, options: Pick<ThreadPhaseOptions, 'active' | 'reducedMotion'>) {
+export function advanceCanonicalThreadPhase({ currentPhase, elapsedMs, ...options }: ThreadPhaseAdvanceInput) {
   'worklet';
   if (options.reducedMotion) return REDUCED_MOTION_PHASE;
   if (!options.active) return currentPhase;
@@ -151,10 +200,10 @@ export function advanceCanonicalThreadPhase(currentPhase: number, elapsedMs: num
   return currentPhase + Math.max(0, elapsedMs) * 0.00022 * THREAD_SPEED;
 }
 
-export type CanonicalPreparedVertex = {x:number;base:number;waveSin:number;waveCos:number;fraySin:number;frayCos:number};
+export type CanonicalPreparedVertex = { x: number; base: number; waveSin: number; waveCos: number; fraySin: number; frayCos: number };
 /** Prepare only invariant terms; no vertex removal, quantization or new curves. */
-export function prepareCanonicalThreads(width:number,height:number):CanonicalPreparedVertex[][] {
-  if(!Number.isFinite(width)||!Number.isFinite(height)||width<0||height<0)throw new RangeError('Invalid thread dimensions.');
+export function prepareCanonicalThreads({ width, height }: ThreadDimensions): CanonicalPreparedVertex[][] {
+  assertThreadDimensions({ width, height }, 'Invalid thread dimensions.');
   return Array.from({length:THREAD_COUNT},(_,index)=>Array.from({length:CANONICAL_THREAD_STEPS+1},(_,step)=>{
     const lane=index/(THREAD_COUNT-1)-.5,progress=step/CANONICAL_THREAD_STEPS;
     const focus=Math.exp(-Math.pow(progress-.58,2)/.085),wave=progress*7.2+lane*2.7,fray=progress*23+index*.34;

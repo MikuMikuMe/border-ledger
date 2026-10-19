@@ -1,6 +1,7 @@
 package com.lofuyu.borderledger.react
 
 import com.lofuyu.borderledger.bank.PlaidCallbackIdentity
+import com.lofuyu.borderledger.bank.PlaidOperationId
 import com.lofuyu.borderledger.auth.OwnerSessionState
 import com.lofuyu.borderledger.core.SecureRecordPort
 import kotlinx.coroutines.CompletableDeferred
@@ -104,20 +105,20 @@ class Task3ExternalOwnershipTest {
     @Test
     fun recreatedPlaidCallbackRequiresThePersistedMatchingOperation() {
         val original = PlaidCallbackIdentity()
-        original.begin("flow-a")
+        original.begin(PlaidOperationId("flow-a"))
         val savedOperationId = original.snapshot()
 
         val recreated = PlaidCallbackIdentity(savedOperationId)
-        assertNull(recreated.claim("flow-b"))
-        assertEquals("flow-a", recreated.claim(null))
+        assertNull(recreated.claim(PlaidOperationId("flow-b")))
+        assertEquals("flow-a", recreated.claim(null)?.value)
         assertNull(recreated.claim(null))
 
         val orphaned = PlaidCallbackIdentity()
         assertNull(orphaned.claim(null))
 
         val completed = PlaidCallbackIdentity()
-        completed.begin("flow-c")
-        completed.complete("flow-c")
+        completed.begin(PlaidOperationId("flow-c"))
+        completed.complete(PlaidOperationId("flow-c"))
         assertNull(completed.snapshot())
         assertNull(completed.claim(null))
     }
@@ -139,7 +140,7 @@ class Task3ExternalOwnershipTest {
             signedIn = { sessionState is OwnerSessionState.SignedIn },
         )
         val journal = BridgeOperationJournal(MemoryRecords())
-        journal.awaitExternal("plaid-restored", "plaid", "{}", "owner-restored")
+        journal.awaitExternal(BridgeOperationRequest("plaid-restored", "plaid", "{}", "owner-restored"))
         val callbackClaim = RestoredPlaidCallbackClaim(
             pending = {
                 JSONObject()
@@ -153,7 +154,7 @@ class Task3ExternalOwnershipTest {
 
         suspend fun deliverCallback() {
             val claimed = callbackClaim.claim("plaid-restored") ?: return
-            journal.completeExternal(claimed.getString("operationId"), claimed.getString("owner")) {
+            journal.completeExternal(BridgeOperationKey(claimed.getString("operationId"), claimed.getString("owner"))) {
                 exchanges += 1
                 "pending-connection"
             }
@@ -164,7 +165,7 @@ class Task3ExternalOwnershipTest {
         deliverCallback()
         assertEquals(2, restores)
         assertEquals(1, exchanges)
-        assertEquals("completed", journal.query("plaid-restored", "owner-restored")?.status)
+        assertEquals("completed", journal.query(BridgeOperationKey("plaid-restored", "owner-restored"))?.status)
     }
 
     @Test
@@ -177,7 +178,7 @@ class Task3ExternalOwnershipTest {
             signedIn = { sessionState is OwnerSessionState.SignedIn },
         )
         val journal = BridgeOperationJournal(MemoryRecords())
-        journal.awaitExternal("plaid-pending", "plaid", "{}", "owner-restored")
+        journal.awaitExternal(BridgeOperationRequest("plaid-pending", "plaid", "{}", "owner-restored"))
         val callbackClaim = RestoredPlaidCallbackClaim(
             pending = {
                 JSONObject()
@@ -190,7 +191,7 @@ class Task3ExternalOwnershipTest {
         var exchanges = 0
 
         callbackClaim.claim("plaid-pending")?.let { claimed ->
-            journal.completeExternal(claimed.getString("operationId"), claimed.getString("owner")) {
+            journal.completeExternal(BridgeOperationKey(claimed.getString("operationId"), claimed.getString("owner"))) {
                 exchanges += 1
                 "wrong"
             }
@@ -198,8 +199,8 @@ class Task3ExternalOwnershipTest {
 
         assertEquals(1, restores)
         assertEquals(0, exchanges)
-        assertEquals("awaiting_result", journal.query("plaid-pending", "owner-restored")?.status)
-        assertNull(journal.query("plaid-pending", "new-owner"))
+        assertEquals("awaiting_result", journal.query(BridgeOperationKey("plaid-pending", "owner-restored"))?.status)
+        assertNull(journal.query(BridgeOperationKey("plaid-pending", "new-owner")))
     }
 
     @Test

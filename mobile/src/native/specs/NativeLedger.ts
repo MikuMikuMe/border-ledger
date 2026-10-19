@@ -2,6 +2,7 @@ import type {TurboModule, CodegenTypes} from 'react-native';
 import {TurboModuleRegistry} from 'react-native';
 type Change = {sequence: number; observedAt: string};
 type Operation = {operationId: string; kind: string; status: string; updatedAt: string; resultId: string | null};
+export type CaptureSyncRequest = {operationId: string};
 export type Transaction = {id: string; occurredAt: string; currency: string; signedMinorUnits: string; merchant: string | null; accountLabel: string | null; status: string; sourceLabel: string | null; category: string | null; note: string | null; kind: string; revision: number; accountId: string | null};
 export type Transactions = {items: Transaction[]; nextCursor: string | null; limit: number};
 export type ActivityQuery = {cursor: string | null; limit: number; query: string | null; currency: string | null; status: string | null; source: string | null; category: string | null};
@@ -23,7 +24,7 @@ export interface Spec extends TurboModule {
   refreshSnapshot(): Promise<Snapshot | null>;
   readTransactions(query: ActivityQuery): Promise<Transactions>;
   readReport(query: ReportQuery): Promise<Report>;
-  startCaptureSync(operationId: string): Promise<Operation>;
+  startCaptureSync(request: CaptureSyncRequest): Promise<Operation>;
   readonly onChanged: CodegenTypes.EventEmitter<Change>;
 }
 export default TurboModuleRegistry.getEnforcing<Spec>('NativeLedger');

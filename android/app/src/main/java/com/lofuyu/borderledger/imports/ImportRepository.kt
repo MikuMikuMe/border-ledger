@@ -161,6 +161,20 @@ data class ImportDraft(
     val parseErrors: List<String> = emptyList(),
 )
 
+@JvmInline
+private value class ImportAccountId(val raw: String)
+
+@JvmInline
+private value class ImportIdempotencyKey(val raw: String)
+
+@JvmInline
+private value class StageOperationId(val raw: String)
+
+private data class DuplicateDecisionInput(
+    val candidateId: String,
+    val decision: String,
+)
+
 sealed interface ImportState {
     data object Idle : ImportState
     data class Previewing(val fileName: String) : ImportState
@@ -232,55 +246,19 @@ class ImportRepository(
         accountId: String,
         idempotencyKey: String = idGenerator(),
     ): ImportState {
-        if (accountId.isBlank()) return fail(ImportFailure("invalid_account", "Choose an owner account before previewing the statement."))
-        if (document.fileSizeBytes <= 0L || document.fileSizeBytes > MAX_IMPORT_FILE_BYTES) {
-            return fail(ImportFailure("file_too_large", "CSV files are limited to 10 MiB."))
-        }
-        if (document.rows.isEmpty()) {
-            return fail(ImportFailure("no_valid_rows", "No valid statement rows are available to preview."))
-        }
-        if (document.rows.size > MAX_IMPORT_ROWS) {
-            return fail(ImportFailure("too_many_rows", "Imports are limited to $MAX_IMPORT_ROWS rows."))
-        }
+        val input = PreviewInput(
+            document = document,
+            accountId = ImportAccountId(accountId),
+            idempotencyKey = ImportIdempotencyKey(idempotencyKey),
+        )
+        validatePreview(input)?.let { return fail(it) }
 
-        val rows = document.rows.map { it.toOwnerRow(accountId) }
+        val rows = document.rows.map { it.toOwnerRow(input.accountId) }
         _state.value = ImportState.Previewing(document.fileName)
         return try {
-            val request = CreateImportPreviewRequest(
-                accountId = accountId,
-                fileName = document.fileName,
-                fileSizeBytes = document.fileSizeBytes,
-                fileSha256 = document.fileSha256,
-                rowCount = rows.size,
-                idempotencyKey = idempotencyKey,
-            )
-            var remotePreview = gateway.createImportPreview(request)
-            val stageOperationId = "stage-$idempotencyKey"
-            val chunks = ImportChunker.chunk(rows)
-            var rowStart = 0
-            chunks.forEachIndexed { index, chunk ->
-                val draft = ImportDraft(remotePreview, rows, rows.map { it.rowId }.toSet(), document.errors)
-                _state.value = ImportState.Staging(draft)
-                remotePreview = gateway.stageImportChunk(
-                    StageImportChunkRequest(
-                        previewId = remotePreview.id,
-                        chunkIndex = index,
-                        operationId = stageOperationId,
-                        rowStart = rowStart,
-                        rows = chunk,
-                    ),
-                )
-                rowStart += chunk.size
-            }
-            val draft = ImportDraft(
-                preview = remotePreview,
-                rows = rows,
-                selectedRowIds = rows.map { it.rowId }.toSet(),
-                parseErrors = document.errors,
-            )
-            val ready = ImportState.Ready(draft)
-            _state.value = ready
-            ready
+            val remotePreview = gateway.createImportPreview(input.createRequest(rows))
+            val stagedPreview = stageRows(remotePreview, rows, document.errors, input.stageOperationId)
+            readyState(stagedPreview, rows, document.errors)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -308,21 +286,22 @@ class ImportRepository(
     }
 
     suspend fun decideDuplicate(candidateId: String, decision: String): ImportState {
-        val draft = draftForSelection() ?: return fail(ImportFailure("no_preview", "Preview the statement before deciding a duplicate."))
-        if (decision != "resolve" && decision != "keep_separate") return fail(ImportFailure("invalid_decision", "The duplicate decision is not supported."), draft)
-        val candidate = draft.preview.duplicateCandidates.firstOrNull { it.id == candidateId }
-            ?: return fail(ImportFailure("candidate_not_found", "The duplicate candidate is no longer in this preview."), draft)
-        if (candidate.status != "open") return ImportState.Ready(draft)
+        val draft = draftForSelection()
+            ?: return fail(ImportFailure("no_preview", "Preview the statement before deciding a duplicate."))
+        val input = DuplicateDecisionInput(candidateId, decision)
+        return when (val plan = duplicateDecisionPlan(draft, input)) {
+            is DuplicateDecisionPlan.Rejected -> fail(plan.failure, draft)
+            DuplicateDecisionPlan.AlreadyResolved -> ImportState.Ready(draft)
+            is DuplicateDecisionPlan.Submit -> submitDuplicateDecision(draft, plan.request)
+        }
+    }
+
+    private suspend fun submitDuplicateDecision(
+        draft: ImportDraft,
+        request: DecideImportDuplicateRequest,
+    ): ImportState {
         return try {
-            val updated = gateway.decideDuplicate(
-                DecideImportDuplicateRequest(
-                    previewId = draft.preview.id,
-                    candidateId = candidateId,
-                    expectedRevision = draft.preview.revision,
-                    decision = decision,
-                    idempotencyKey = "duplicate-${draft.preview.id}-${candidateId}-${decision}",
-                ),
-            )
+            val updated = gateway.decideDuplicate(request)
             val next = ImportState.Ready(draft.copy(preview = updated))
             _state.value = next
             next
@@ -334,18 +313,7 @@ class ImportRepository(
     }
 
     suspend fun commit(operationId: String? = null): ImportCommitReceipt? {
-        val draft = draftForSelection() ?: run {
-            fail(ImportFailure("no_preview", "Preview the statement before committing it."))
-            return null
-        }
-        if (draft.selectedRowIds.isEmpty()) {
-            fail(ImportFailure("invalid_selection", "Select at least one row to commit."), draft)
-            return null
-        }
-        if (draft.selectedRowIds.size > MAX_COMMIT_ROWS) {
-            fail(ImportFailure("invalid_selection", "Select no more than $MAX_COMMIT_ROWS rows to commit."), draft)
-            return null
-        }
+        val draft = draftForCommit() ?: return null
         val stableOperationId = operationId ?: commitOperationId ?: "commit-${draft.preview.id}-${idGenerator()}"
         commitOperationId = stableOperationId
         _state.value = ImportState.Committing(draft)
@@ -358,31 +326,7 @@ class ImportRepository(
                     operationId = stableOperationId,
                 ),
             )
-            val receiptId = response.receiptId?.takeIf { it.isNotBlank() }
-            if (receiptId == null) {
-                fail(
-                    ImportFailure(
-                        "missing_worker_receipt",
-                        "The Worker did not return a commit receipt; the import is not reported as committed.",
-                        retryable = true,
-                    ),
-                    draft,
-                )
-                null
-            } else {
-                val receipt = ImportCommitReceipt(
-                    receiptId = receiptId,
-                    importId = response.importId,
-                    publishedRows = response.publishedRows,
-                    duplicateRows = response.duplicateRows,
-                    needsReview = response.needsReview,
-                    revision = response.revision,
-                    committedAt = response.committedAt,
-                    duplicateCandidates = response.duplicateCandidates,
-                )
-                _state.value = ImportState.Committed(receipt)
-                receipt
-            }
+            finalizeCommit(response, draft)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -414,6 +358,151 @@ class ImportRepository(
 
     suspend fun retryCommit(): ImportCommitReceipt? = commit(commitOperationId)
 
+    private fun draftForCommit(): ImportDraft? {
+        val draft = draftForSelection()
+        if (draft == null) {
+            fail(ImportFailure("no_preview", "Preview the statement before committing it."))
+            return null
+        }
+        if (draft.selectedRowIds.isEmpty()) {
+            fail(ImportFailure("invalid_selection", "Select at least one row to commit."), draft)
+            return null
+        }
+        if (draft.selectedRowIds.size > MAX_COMMIT_ROWS) {
+            fail(ImportFailure("invalid_selection", "Select no more than $MAX_COMMIT_ROWS rows to commit."), draft)
+            return null
+        }
+        return draft
+    }
+
+    private fun finalizeCommit(response: ImportCommitResponse, draft: ImportDraft): ImportCommitReceipt? {
+        val receiptId = response.receiptId?.takeIf { it.isNotBlank() }
+        if (receiptId == null) {
+            fail(
+                ImportFailure(
+                    "missing_worker_receipt",
+                    "The Worker did not return a commit receipt; the import is not reported as committed.",
+                    retryable = true,
+                ),
+                draft,
+            )
+            return null
+        }
+        val receipt = ImportCommitReceipt(
+            receiptId = receiptId,
+            importId = response.importId,
+            publishedRows = response.publishedRows,
+            duplicateRows = response.duplicateRows,
+            needsReview = response.needsReview,
+            revision = response.revision,
+            committedAt = response.committedAt,
+            duplicateCandidates = response.duplicateCandidates,
+        )
+        _state.value = ImportState.Committed(receipt)
+        return receipt
+    }
+
+    private fun validatePreview(input: PreviewInput): ImportFailure? = when {
+        input.accountId.raw.isBlank() -> ImportFailure("invalid_account", "Choose an owner account before previewing the statement.")
+        input.document.fileSizeBytes <= 0L || input.document.fileSizeBytes > MAX_IMPORT_FILE_BYTES ->
+            ImportFailure("file_too_large", "CSV files are limited to 10 MiB.")
+        input.document.rows.isEmpty() -> ImportFailure("no_valid_rows", "No valid statement rows are available to preview.")
+        input.document.rows.size > MAX_IMPORT_ROWS -> ImportFailure("too_many_rows", "Imports are limited to $MAX_IMPORT_ROWS rows.")
+        else -> null
+    }
+
+    private suspend fun stageRows(
+        initialPreview: ImportPreview,
+        rows: List<OwnerImportRow>,
+        parseErrors: List<String>,
+        operationId: StageOperationId,
+    ): ImportPreview {
+        var remotePreview = initialPreview
+        var rowStart = 0
+        ImportChunker.chunk(rows).forEachIndexed { index, chunk ->
+            _state.value = ImportState.Staging(
+                ImportDraft(remotePreview, rows, rows.map { it.rowId }.toSet(), parseErrors),
+            )
+            remotePreview = gateway.stageImportChunk(
+                StageImportChunkRequest(
+                    previewId = remotePreview.id,
+                    chunkIndex = index,
+                    operationId = operationId.raw,
+                    rowStart = rowStart,
+                    rows = chunk,
+                ),
+            )
+            rowStart += chunk.size
+        }
+        return remotePreview
+    }
+
+    private fun readyState(
+        preview: ImportPreview,
+        rows: List<OwnerImportRow>,
+        parseErrors: List<String>,
+    ): ImportState.Ready {
+        val draft = ImportDraft(preview, rows, rows.map { it.rowId }.toSet(), parseErrors)
+        return ImportState.Ready(draft).also { _state.value = it }
+    }
+
+    private fun duplicateDecisionPlan(
+        draft: ImportDraft,
+        input: DuplicateDecisionInput,
+    ): DuplicateDecisionPlan {
+        val duplicateDecision = input.toDuplicateDecision()
+            ?: return DuplicateDecisionPlan.Rejected(
+                ImportFailure("invalid_decision", "The duplicate decision is not supported."),
+            )
+        val candidate = draft.preview.duplicateCandidates.firstOrNull { it.id == input.candidateId }
+            ?: return DuplicateDecisionPlan.Rejected(
+                ImportFailure("candidate_not_found", "The duplicate candidate is no longer in this preview."),
+            )
+        if (candidate.status != "open") return DuplicateDecisionPlan.AlreadyResolved
+        return DuplicateDecisionPlan.Submit(
+            DecideImportDuplicateRequest(
+                previewId = draft.preview.id,
+                candidateId = input.candidateId,
+                expectedRevision = draft.preview.revision,
+                decision = duplicateDecision.wireValue,
+                idempotencyKey = "duplicate-${draft.preview.id}-${input.candidateId}-${duplicateDecision.wireValue}",
+            ),
+        )
+    }
+
+    private data class PreviewInput(
+        val document: DocumentReadResult.Success,
+        val accountId: ImportAccountId,
+        val idempotencyKey: ImportIdempotencyKey,
+    ) {
+        fun createRequest(rows: List<OwnerImportRow>): CreateImportPreviewRequest = CreateImportPreviewRequest(
+            accountId = accountId.raw,
+            fileName = document.fileName,
+            fileSizeBytes = document.fileSizeBytes,
+            fileSha256 = document.fileSha256,
+            rowCount = rows.size,
+            idempotencyKey = idempotencyKey.raw,
+        )
+
+        val stageOperationId: StageOperationId get() = StageOperationId("stage-${idempotencyKey.raw}")
+    }
+
+    private sealed interface DuplicateDecisionPlan {
+        data object AlreadyResolved : DuplicateDecisionPlan
+        data class Rejected(val failure: ImportFailure) : DuplicateDecisionPlan
+        data class Submit(val request: DecideImportDuplicateRequest) : DuplicateDecisionPlan
+    }
+
+    private enum class DuplicateDecision(val wireValue: String) {
+        RESOLVE("resolve"),
+        KEEP_SEPARATE("keep_separate"),
+        ;
+
+    }
+
+    private fun DuplicateDecisionInput.toDuplicateDecision(): DuplicateDecision? =
+        DuplicateDecision.entries.firstOrNull { it.wireValue == decision }
+
     private fun draftForSelection(): ImportDraft? = when (val current = _state.value) {
         is ImportState.Ready -> current.draft
         is ImportState.Error -> current.draft
@@ -428,10 +517,10 @@ class ImportRepository(
         return next
     }
 
-    private fun StatementRow.toOwnerRow(accountId: String): OwnerImportRow = OwnerImportRow(
+    private fun StatementRow.toOwnerRow(accountId: ImportAccountId): OwnerImportRow = OwnerImportRow(
         rowId = rowId,
         rowIndex = rowIndex,
-        accountId = accountId,
+        accountId = accountId.raw,
         date = date,
         merchant = merchant,
         amountMinor = amountMinor,
@@ -462,64 +551,116 @@ object ImportChunker {
         maxBytes: Int = MAX_CHUNK_BYTES,
         maxRows: Int = MAX_CHUNK_ROWS,
     ): List<List<OwnerImportRow>> {
-        require(maxBytes > 2) { "The chunk byte limit is too small." }
-        require(maxRows > 0) { "The chunk row limit must be positive." }
-        val encoded = rows.map(::encodeRow)
-        val chunks = mutableListOf<List<OwnerImportRow>>()
-        var currentRows = mutableListOf<OwnerImportRow>()
-        var currentBytes = 2
-        encoded.forEachIndexed { index, json ->
-            val bytes = json.toByteArray(StandardCharsets.UTF_8).size
-            val nextBytes = currentBytes + bytes + if (currentRows.isEmpty()) 0 else 1
-            if (bytes + 2 > maxBytes) throw IllegalArgumentException("Import row ${index + 1} exceeds the chunk byte limit.")
-            if (currentRows.isNotEmpty() && (currentRows.size >= maxRows || nextBytes > maxBytes)) {
-                chunks += currentRows
-                currentRows = mutableListOf()
-                currentBytes = 2
-            }
-            currentRows += rows[index]
-            currentBytes += bytes + if (currentRows.size == 1) 0 else 1
+        val limits = ChunkLimits(ChunkByteLimit(maxBytes), ChunkRowLimit(maxRows))
+        val accumulator = ChunkAccumulator(limits)
+        rows.mapIndexed { index, row -> EncodedChunkRow(index, row, encodeRow(row)) }.forEach { entry ->
+            accumulator.add(entry)
         }
-        if (currentRows.isNotEmpty()) chunks += currentRows
-        return chunks
+        return accumulator.finish()
+    }
+
+    @JvmInline
+    private value class ChunkByteLimit(val value: Int)
+
+    @JvmInline
+    private value class ChunkRowLimit(val value: Int)
+
+    private data class ChunkLimits(
+        val maxBytes: ChunkByteLimit,
+        val maxRows: ChunkRowLimit,
+    ) {
+        init {
+            require(maxBytes.value > JSON_ARRAY_OVERHEAD_BYTES) { "The chunk byte limit is too small." }
+            require(maxRows.value > 0) { "The chunk row limit must be positive." }
+        }
+    }
+
+    private data class EncodedChunkRow(
+        val index: Int,
+        val row: OwnerImportRow,
+        val json: String,
+    )
+
+    private class ChunkAccumulator(private val limits: ChunkLimits) {
+        private val chunks = mutableListOf<List<OwnerImportRow>>()
+        private var currentRows = mutableListOf<OwnerImportRow>()
+        private var currentBytes = JSON_ARRAY_OVERHEAD_BYTES
+
+        fun add(entry: EncodedChunkRow) {
+            val rowBytes = entry.json.toByteArray(StandardCharsets.UTF_8).size
+            require(rowBytes + JSON_ARRAY_OVERHEAD_BYTES <= limits.maxBytes.value) {
+                "Import row ${entry.index + 1} exceeds the chunk byte limit."
+            }
+            if (requiresFlush(entry)) flush()
+            currentRows += entry.row
+            currentBytes += rowBytes + if (currentRows.size == 1) 0 else JSON_SEPARATOR_BYTES
+        }
+
+        fun finish(): List<List<OwnerImportRow>> {
+            if (currentRows.isNotEmpty()) flush()
+            return chunks
+        }
+
+        private fun requiresFlush(entry: EncodedChunkRow): Boolean = currentRows.isNotEmpty() && (
+            currentRows.size >= limits.maxRows.value ||
+                currentBytes + entry.json.toByteArray(StandardCharsets.UTF_8).size + JSON_SEPARATOR_BYTES > limits.maxBytes.value
+            )
+
+        private fun flush() {
+            chunks += currentRows
+            currentRows = mutableListOf()
+            currentBytes = JSON_ARRAY_OVERHEAD_BYTES
+        }
     }
 
     private fun encodeRow(row: OwnerImportRow): String = buildString {
         append('{')
-        field("rowId", row.rowId)
-        field("rowIndex", row.rowIndex)
-        field("accountId", row.accountId)
-        field("date", row.date)
-        field("merchant", row.merchant)
-        field("amountMinor", row.amountMinor)
-        field("currency", row.currency)
-        field("category", row.category)
-        field("kind", row.kind)
-        field("status", row.status)
-        field("source", row.source)
-        field("fingerprint", row.fingerprint)
-        field("note", row.note)
-        field("bankReference", row.bankReference)
+        field(JsonField("rowId", row.rowId))
+        field(JsonField("rowIndex", row.rowIndex))
+        field(JsonField("accountId", row.accountId))
+        field(JsonField("date", row.date))
+        field(JsonField("merchant", row.merchant))
+        field(JsonField("amountMinor", row.amountMinor))
+        field(JsonField("currency", row.currency))
+        field(JsonField("category", row.category))
+        field(JsonField("kind", row.kind))
+        field(JsonField("status", row.status))
+        field(JsonField("source", row.source))
+        field(JsonField("fingerprint", row.fingerprint))
+        field(JsonField("note", row.note))
+        field(JsonField("bankReference", row.bankReference))
         row.sourceIdentity?.let {
-            field("sourceIdentity", "{\"bankSourceId\":${jsonString(it.bankSourceId)},\"bankRowId\":${jsonString(it.bankRowId)}}", raw = true)
+            field(JsonField(
+                "sourceIdentity",
+                "{\"bankSourceId\":${jsonString(JsonText(it.bankSourceId))},\"bankRowId\":${jsonString(JsonText(it.bankRowId))}}",
+                raw = true,
+            ))
         }
         if (last() == ',') setLength(length - 1)
         append('}')
     }
 
-    private fun StringBuilder.field(name: String, value: Any?, raw: Boolean = false) {
-        append(jsonString(name)).append(':')
-        append(if (raw) value.toString() else jsonValue(value))
+    private data class JsonField(
+        val name: String,
+        val value: Any?,
+        val raw: Boolean = false,
+    )
+
+    private fun StringBuilder.field(field: JsonField) {
+        append(jsonString(JsonText(field.name))).append(':')
+        append(if (field.raw) field.value.toString() else jsonValue(field.value))
         append(',')
     }
 
     private fun jsonValue(value: Any?): String = when (value) {
         null -> "null"
         is Number -> value.toString()
-        else -> jsonString(value.toString())
+        else -> jsonString(JsonText(value.toString()))
     }
 
-    private fun jsonString(value: String?): String = value?.let {
+    private data class JsonText(val value: String?)
+
+    private fun jsonString(value: JsonText): String = value.value?.let {
         buildString {
             append('"')
             it.forEach { character ->
@@ -537,4 +678,7 @@ object ImportChunker {
             append('"')
         }
     } ?: "null"
+
+    private const val JSON_ARRAY_OVERHEAD_BYTES = 2
+    private const val JSON_SEPARATOR_BYTES = 1
 }

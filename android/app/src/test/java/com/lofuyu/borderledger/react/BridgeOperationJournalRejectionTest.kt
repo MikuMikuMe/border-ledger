@@ -11,10 +11,10 @@ class BridgeOperationJournalRejectionTest {
     @Test fun definitiveServerRejectionIsTerminalAndDoesNotBlockTheNextReviewedAction() = runTest {
         val records = MemoryRecords()
         val journal = BridgeOperationJournal(records)
-        val rejected = journal.start("reject-account-1", "account_select", "payload-a", "owner-a") {
+        val rejected = journal.start(BridgeOperationRequest("reject-account-1", "account_select", "payload-a", "owner-a")) {
             throw com.lofuyu.borderledger.accounts.AccountRequestRejected(409)
         }
-        val later = journal.start("next-account-01", "account_select", "payload-a", "owner-a") { "receipt-1" }
+        val later = journal.start(BridgeOperationRequest("next-account-01", "account_select", "payload-a", "owner-a")) { "receipt-1" }
 
         assertEquals("rejected", rejected.status)
         assertEquals("completed", later.status)

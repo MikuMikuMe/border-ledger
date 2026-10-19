@@ -10,88 +10,214 @@ import java.time.Instant
 
 data class BridgeOperation(val operationId: String, val kind: String, val status: String, val updatedAt: String, val resultId: String? = null)
 
+/** Stable identity and idempotency inputs for one journal operation. */
+data class BridgeOperationRequest(
+    val id: String,
+    val kind: String,
+    val fingerprint: String,
+    val owner: String,
+)
+
+data class BridgeOperationKey(val id: String, val owner: String)
+
+data class BridgeOperationPage(val owner: String, val offset: Int, val limit: Int)
+
+@JvmInline
+private value class JournalOperationId(val raw: String)
+
+@JvmInline
+private value class JournalOwnerId(val raw: String)
+
+@JvmInline
+private value class JournalOperationKind(val raw: String)
+
+@JvmInline
+private value class JournalFingerprint(val raw: String)
+
+@JvmInline
+private value class JournalStatus(val raw: String)
+
+@JvmInline
+private value class DigestMaterial(val raw: String)
+
+private data class JournalRequest(
+    val id: JournalOperationId,
+    val kind: JournalOperationKind,
+    val fingerprint: JournalFingerprint,
+    val owner: JournalOwnerId,
+)
+
+private data class JournalKey(
+    val id: JournalOperationId,
+    val owner: JournalOwnerId,
+)
+
+private data class JournalPage(
+    val owner: JournalOwnerId,
+    val offset: Int,
+    val limit: Int,
+)
+
+private data class JournalCompletion(
+    val status: JournalStatus,
+    val receipt: String?,
+)
+
+private object JournalStatuses {
+    val Running = JournalStatus("running")
+    val AwaitingResult = JournalStatus("awaiting_result")
+    val Completed = JournalStatus("completed")
+    val Canceled = JournalStatus("canceled")
+    val FailedLocal = JournalStatus("failed_local")
+    val ReconciliationRequired = JournalStatus("reconciliation_required")
+    val RevisionConflict = JournalStatus("revision_conflict")
+    val Rejected = JournalStatus("rejected")
+}
+
+private fun BridgeOperationRequest.domain() = JournalRequest(
+    id = JournalOperationId(id),
+    kind = JournalOperationKind(kind),
+    fingerprint = JournalFingerprint(fingerprint),
+    owner = JournalOwnerId(owner),
+)
+
+private fun BridgeOperationKey.domain() = JournalKey(
+    id = JournalOperationId(id),
+    owner = JournalOwnerId(owner),
+)
+
 /** Separate v1 encrypted records. Persist BEFORE submission, never resume a write from disk. */
 class BridgeOperationJournal(private val records: SecureRecordPort) {
     private val mutex = Mutex()
-    private val active = mutableSetOf<String>()
+    private val active = mutableSetOf<JournalOperationId>()
 
-    suspend fun start(id: String, kind: String, fingerprint: String, owner: String, write: suspend () -> String?): BridgeOperation =
-        startValidated(id,kind,fingerprint,owner,{},write)
+    suspend fun start(request: BridgeOperationRequest, write: suspend () -> String?): BridgeOperation =
+        startValidated(request, {}, write)
 
-    internal suspend fun startValidated(id: String, kind: String, fingerprint: String, owner: String, validate: () -> Unit, write: suspend () -> String?): BridgeOperation {
-        require(id.matches(Regex("[A-Za-z0-9_-]{8,96}")))
-        val existing = mutex.withLock {
-            read(id)?.let { stored ->
-                require(stored.getString("owner") == owner && stored.getString("kind") == kind && stored.getString("fingerprint") == digest(fingerprint))
-                return@withLock decode(stored, id)
-            }
-            unresolved(kind,fingerprint,owner)?.let { return@withLock it }
-            // Validation is local and runs before any running/submitted record.
-            // Persist its terminal result so a lost JS promise can discover it.
-            val rejected=try { validate(); false } catch(_: BridgeLocalFailure) { true }
-            val pending = JSONObject().put("version", 1).put("owner", owner).put("kind", kind)
-                .put("fingerprint", digest(fingerprint)).put("status", if(rejected) "failed_local" else "running").put("updatedAt", Instant.now().toString())
-            records.write(key(id), pending.toString().encodeToByteArray())
-            index(id,kind,fingerprint,owner)
-            if(rejected) return@withLock decode(pending,id)
-            active.add(id)
-            null
+    internal suspend fun startValidated(
+        request: BridgeOperationRequest,
+        validate: () -> Unit,
+        write: suspend () -> String?,
+    ): BridgeOperation = startValidated(request.domain(), validate, write)
+
+    private suspend fun startValidated(
+        request: JournalRequest,
+        validate: () -> Unit,
+        write: suspend () -> String?,
+    ): BridgeOperation {
+        requireValidId(request.id)
+        val existing = prepare(request, validate)
+        return existing ?: execute(request, write)
+    }
+
+    private suspend fun prepare(request: JournalRequest, validate: () -> Unit): BridgeOperation? = mutex.withLock {
+        read(request.id)?.let { stored ->
+            requireMatches(stored, request)
+            return@withLock decode(stored, request.id)
         }
-        if (existing != null) return existing
-        try {
-            val receipt = write()
-            return finish(id, "completed", receipt)
+        unresolved(request)?.let { return@withLock it }
+        // Validation is local and runs before any running/submitted record.
+        // Persist its terminal result so a lost JS promise can discover it.
+        val rejected = isRejected(validate)
+        val pending = operationRecord(request, if (rejected) JournalStatuses.FailedLocal else JournalStatuses.Running)
+        records.write(key(request.id), pending.toString().encodeToByteArray())
+        index(request)
+        if (rejected) return@withLock decode(pending, request.id)
+        active.add(request.id)
+        null
+    }
+
+    private suspend fun execute(request: JournalRequest, write: suspend () -> String?): BridgeOperation {
+        return try {
+            finish(request.id, JournalCompletion(JournalStatuses.Completed, write()))
         } catch (error: CancellationException) {
             // Durable running state is deliberately left ambiguous if the process/coroutine dies.
-            mutex.withLock { active.remove(id) }
+            mutex.withLock { active.remove(request.id) }
             throw error
         } catch (error: Exception) {
-            return finish(id, failureStatus(error), null)
+            finish(request.id, JournalCompletion(failureStatus(error), null))
         }
     }
 
-    suspend fun query(id: String, owner: String): BridgeOperation? = mutex.withLock {
-        val value = read(id)?.takeIf { it.getString("owner") == owner } ?: return@withLock null
-        decode(value, id)
+    private fun isRejected(validate: () -> Unit): Boolean = try {
+        validate()
+        false
+    } catch (_: BridgeLocalFailure) {
+        true
+    }
+
+    private fun operationRecord(request: JournalRequest, status: JournalStatus) = JSONObject()
+        .put("version", 1)
+        .put("owner", request.owner.raw)
+        .put("kind", request.kind.raw)
+        .put("fingerprint", digest(DigestMaterial(request.fingerprint.raw)))
+        .put("status", status.raw)
+        .put("updatedAt", Instant.now().toString())
+
+    private fun requireValidId(id: JournalOperationId) {
+        require(id.raw.matches(OPERATION_ID_PATTERN))
+    }
+
+    private fun requireMatches(stored: JSONObject, request: JournalRequest) {
+        require(
+            stored.getString("owner") == request.owner.raw &&
+                stored.getString("kind") == request.kind.raw &&
+                stored.getString("fingerprint") == digest(DigestMaterial(request.fingerprint.raw)),
+        )
+    }
+
+    suspend fun query(key: BridgeOperationKey): BridgeOperation? = query(key.domain())
+
+    private suspend fun query(key: JournalKey): BridgeOperation? = mutex.withLock {
+        val value = read(key.id)?.takeIf { it.getString("owner") == key.owner.raw } ?: return@withLock null
+        decode(value, key.id)
     }
 
     /** Initial recovery page for a JS runtime that lost every in-memory request ID. */
-    suspend fun list(owner: String, offset: Int, limit: Int): List<BridgeOperation> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        require(offset>=0 && limit in 1..100)
+    suspend fun list(page: BridgeOperationPage): List<BridgeOperation> = list(
+        JournalPage(JournalOwnerId(page.owner), page.offset, page.limit),
+    )
+
+    private suspend fun list(page: JournalPage): List<BridgeOperation> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        require(page.offset >= 0 && page.limit in 1..100)
         mutex.withLock {
-            val index=records.read(indexKey(owner))?.let { JSONObject(it.decodeToString()) } ?: return@withLock emptyList()
+            val index=records.read(indexKey(page.owner))?.let { JSONObject(it.decodeToString()) } ?: return@withLock emptyList()
             val ids=index.keys().asSequence().map { index.getString(it) }.distinct().toList()
-            ids.mapNotNull { id -> read(id)?.takeIf { it.getString("owner")==owner }?.let { decode(it,id) } }
-                .sortedByDescending { Instant.parse(it.updatedAt) }.drop(offset).take(limit)
+            ids.mapNotNull { id -> read(JournalOperationId(id))?.takeIf { it.getString("owner")==page.owner.raw }?.let { decode(it,JournalOperationId(id)) } }
+                .sortedByDescending { Instant.parse(it.updatedAt) }.drop(page.offset).take(page.limit)
         }
     }
 
-    suspend fun awaitExternal(id: String, kind: String, fingerprint: String, owner: String): BridgeOperation = mutex.withLock {
-        require(id.matches(Regex("[A-Za-z0-9_-]{8,96}")))
-        read(id)?.let {
-            require(it.getString("owner") == owner && it.getString("kind") == kind && it.getString("fingerprint") == digest(fingerprint))
-            return@withLock decode(it,id)
+    suspend fun awaitExternal(request: BridgeOperationRequest): BridgeOperation = awaitExternal(request.domain())
+
+    private suspend fun awaitExternal(request: JournalRequest): BridgeOperation = mutex.withLock {
+        requireValidId(request.id)
+        read(request.id)?.let {
+            requireMatches(it, request)
+            return@withLock decode(it,request.id)
         }
-        unresolved(kind,fingerprint,owner)?.let { return@withLock it }
-        val value=JSONObject().put("version",1).put("owner",owner).put("kind",kind).put("fingerprint",digest(fingerprint))
-            .put("status","awaiting_result").put("updatedAt",Instant.now().toString())
-        records.write(key(id),value.toString().encodeToByteArray())
-        index(id,kind,fingerprint,owner)
-        decode(value,id)
+        unresolved(request)?.let { return@withLock it }
+        val value=operationRecord(request, JournalStatuses.AwaitingResult)
+        records.write(key(request.id),value.toString().encodeToByteArray())
+        index(request)
+        decode(value,request.id)
     }
 
-    suspend fun completeExternal(id: String, owner: String, write: suspend () -> String?): BridgeOperation {
+    suspend fun completeExternal(operationKey: BridgeOperationKey, write: suspend () -> String?): BridgeOperation =
+        completeExternal(operationKey.domain(), write)
+
+    private suspend fun completeExternal(operationKey: JournalKey, write: suspend () -> String?): BridgeOperation {
         val existing=mutex.withLock {
-            val value=requireNotNull(read(id)); require(value.getString("owner")==owner)
-            if(value.getString("status")!="awaiting_result") return@withLock decode(value,id)
+            val value=requireNotNull(read(operationKey.id)); require(value.getString("owner")==operationKey.owner.raw)
+            if(value.getString("status")!=JournalStatuses.AwaitingResult.raw) return@withLock decode(value,operationKey.id)
             value.put("status","running").put("updatedAt",Instant.now().toString())
-            records.write(key(id),value.toString().encodeToByteArray()); active.add(id)
+            records.write(key(operationKey.id),value.toString().encodeToByteArray()); active.add(operationKey.id)
             null
         }
         if(existing!=null) return existing
-        return try { finish(id,"completed",write()) }
-        catch(error: CancellationException) { mutex.withLock { active.remove(id) }; throw error }
-        catch(error: Exception) { finish(id,failureStatus(error),null) }
+        return try { finish(operationKey.id,JournalCompletion(JournalStatuses.Completed,write())) }
+        catch(error: CancellationException) { mutex.withLock { active.remove(operationKey.id) }; throw error }
+        catch(error: Exception) { finish(operationKey.id,JournalCompletion(failureStatus(error),null)) }
     }
 
     /**
@@ -100,82 +226,96 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
      * this is not a general retry path for ambiguous writes.
      */
     internal suspend fun retryExternalWithSameIdempotency(
-        id: String,
-        owner: String,
+        operationKey: BridgeOperationKey,
+        write: suspend () -> String?,
+    ): BridgeOperation = retryExternalWithSameIdempotency(operationKey.domain(), write)
+
+    private suspend fun retryExternalWithSameIdempotency(
+        operationKey: JournalKey,
         write: suspend () -> String?,
     ): BridgeOperation {
         val existing = mutex.withLock {
-            val value = requireNotNull(read(id))
-            require(value.getString("owner") == owner)
+            val value = requireNotNull(read(operationKey.id))
+            require(value.getString("owner") == operationKey.owner.raw)
             val stored = value.getString("status")
-            if (stored == "running" && id in active) return@withLock decode(value, id)
-            require(stored == "running" || stored == "reconciliation_required") {
+            if (stored == JournalStatuses.Running.raw && operationKey.id in active) return@withLock decode(value, operationKey.id)
+            require(stored == JournalStatuses.Running.raw || stored == JournalStatuses.ReconciliationRequired.raw) {
                 "Only an unresolved external operation can be reconciled."
             }
             value.put("status", "running").put("updatedAt", Instant.now().toString())
-            records.write(key(id), value.toString().encodeToByteArray())
-            active.add(id)
+            records.write(key(operationKey.id), value.toString().encodeToByteArray())
+            active.add(operationKey.id)
             null
         }
         if (existing != null) return existing
         return try {
-            finish(id, "completed", write())
+            finish(operationKey.id, JournalCompletion(JournalStatuses.Completed, write()))
         } catch (error: CancellationException) {
-            mutex.withLock { active.remove(id) }
+            mutex.withLock { active.remove(operationKey.id) }
             throw error
         } catch (error: Exception) {
-            finish(id, failureStatus(error), null)
+            finish(operationKey.id, JournalCompletion(failureStatus(error), null))
         }
     }
 
     /** Only an external action that has not submitted work can be canceled. */
-    suspend fun cancel(id: String, owner: String): BridgeOperation? = mutex.withLock {
-        val value=read(id)?.takeIf { it.getString("owner")==owner } ?: return@withLock null
-        if(value.getString("status")=="awaiting_result") {
-            value.put("status","canceled").put("updatedAt",Instant.now().toString())
-            records.write(key(id),value.toString().encodeToByteArray())
+    suspend fun cancel(operationKey: BridgeOperationKey): BridgeOperation? = cancel(operationKey.domain())
+
+    private suspend fun cancel(operationKey: JournalKey): BridgeOperation? = mutex.withLock {
+        val value=read(operationKey.id)?.takeIf { it.getString("owner")==operationKey.owner.raw } ?: return@withLock null
+        if(value.getString("status")==JournalStatuses.AwaitingResult.raw) {
+            value.put("status",JournalStatuses.Canceled.raw).put("updatedAt",Instant.now().toString())
+            records.write(key(operationKey.id),value.toString().encodeToByteArray())
         }
-        decode(value,id)
+        decode(value,operationKey.id)
     }
 
-    private suspend fun finish(id: String, status: String, receipt: String?): BridgeOperation = mutex.withLock {
-        val value = requireNotNull(read(id)).put("status", status).put("updatedAt", Instant.now().toString())
-        value.put("resultId", receipt ?: JSONObject.NULL)
+    private suspend fun finish(id: JournalOperationId, completion: JournalCompletion): BridgeOperation = mutex.withLock {
+        val value = requireNotNull(read(id)).put("status", completion.status.raw).put("updatedAt", Instant.now().toString())
+        value.put("resultId", completion.receipt ?: JSONObject.NULL)
         records.write(key(id), value.toString().encodeToByteArray())
         active.remove(id)
         decode(value, id)
     }
 
-    private fun decode(value: JSONObject, id: String): BridgeOperation {
+    private fun decode(value: JSONObject, id: JournalOperationId): BridgeOperation {
         require(value.getInt("version") == 1)
         val stored = value.getString("status")
-        return BridgeOperation(id, value.getString("kind"), if (stored == "running" && id !in active) "reconciliation_required" else stored,
+        val status = JournalStatus(stored)
+        return BridgeOperation(id.raw, value.getString("kind"), if (status == JournalStatuses.Running && id !in active) JournalStatuses.ReconciliationRequired.raw else status.raw,
             value.getString("updatedAt"), value.optString("resultId").takeUnless { it.isNullOrBlank() || it == "null" })
     }
 
-    private suspend fun read(id: String): JSONObject? = records.read(key(id))?.let { JSONObject(it.decodeToString()) }
-    private fun failureStatus(error: Exception): String = when(error) {
-        is BridgeLocalFailure -> "failed_local"
-        is com.lofuyu.borderledger.accounts.AccountRequestRejected -> "rejected"
+    private suspend fun read(id: JournalOperationId): JSONObject? = records.read(key(id))?.let { JSONObject(it.decodeToString()) }
+    private fun failureStatus(error: Exception): JournalStatus = when(error) {
+        is BridgeLocalFailure -> JournalStatuses.FailedLocal
+        is com.lofuyu.borderledger.accounts.AccountRequestRejected -> JournalStatuses.Rejected
         is com.lofuyu.borderledger.recurring.RecurringRevisionConflict,
         is com.lofuyu.borderledger.review.ReviewRevisionConflict,
         is com.lofuyu.borderledger.ui.accounts.devices.DeviceRevisionConflict,
-        is com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.RevisionConflict -> "revision_conflict"
-        else -> "reconciliation_required"
+        is com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.RevisionConflict -> JournalStatuses.RevisionConflict
+        else -> JournalStatuses.ReconciliationRequired
     }
-    private suspend fun unresolved(kind: String, fingerprint: String, owner: String): BridgeOperation? {
-        val index=records.read(indexKey(owner))?.let { JSONObject(it.decodeToString()) } ?: return null
-        val id=index.optString(digest(listOf(owner,kind,fingerprint).toString())).takeIf { it.isNotBlank() } ?: return null
+    private suspend fun unresolved(request: JournalRequest): BridgeOperation? {
+        val index=records.read(indexKey(request.owner))?.let { JSONObject(it.decodeToString()) } ?: return null
+        val id=index.optString(operationFingerprint(request)).takeIf { it.isNotBlank() }?.let(::JournalOperationId) ?: return null
         val value=read(id) ?: error("Missing operation")
-        return decode(value,id).takeIf { it.status in setOf("running","awaiting_result","reconciliation_required") }
+        return decode(value,id).takeIf { it.status in setOf(JournalStatuses.Running.raw,JournalStatuses.AwaitingResult.raw,JournalStatuses.ReconciliationRequired.raw) }
     }
-    private suspend fun index(id: String, kind: String, fingerprint: String, owner: String) {
-        val value=records.read(indexKey(owner))?.let { JSONObject(it.decodeToString()) } ?: JSONObject()
+    private suspend fun index(request: JournalRequest) {
+        val value=records.read(indexKey(request.owner))?.let { JSONObject(it.decodeToString()) } ?: JSONObject()
         require(value.length()<10000)
-        value.put(digest(listOf(owner,kind,fingerprint).toString()),id)
-        records.write(indexKey(owner),value.toString().encodeToByteArray())
+        value.put(operationFingerprint(request),request.id.raw)
+        records.write(indexKey(request.owner),value.toString().encodeToByteArray())
     }
-    private fun indexKey(owner: String)="rn_op_index_v1_${digest(owner)}"
-    private fun key(id: String) = "rn_operation_v1_${digest(id)}"
-    private fun digest(value: String) = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+    private fun operationFingerprint(request: JournalRequest) = DigestMaterial(
+        listOf(request.owner.raw,request.kind.raw,request.fingerprint.raw).toString(),
+    ).let(::digest)
+    private fun indexKey(owner: JournalOwnerId)="rn_op_index_v1_${digest(DigestMaterial(owner.raw))}"
+    private fun key(id: JournalOperationId) = "rn_operation_v1_${digest(DigestMaterial(id.raw))}"
+    private fun digest(value: DigestMaterial) = MessageDigest.getInstance("SHA-256").digest(value.raw.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+
+    private companion object {
+        val OPERATION_ID_PATTERN = Regex("[A-Za-z0-9_-]{8,96}")
+    }
 }

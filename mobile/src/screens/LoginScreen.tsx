@@ -15,24 +15,18 @@ type Props = {
   onAppearance(mode: DisplaySnapshot['appearanceMode']): Promise<void>; onAbout(): void;
 };
 
-export function LoginScreen({ session, display, active, onSignIn, onAppearance, onAbout }: Props) {
-  const [staySignedIn, setStaySignedIn] = useState<boolean>(initialAuthControls().staySignedIn);
-  const [optionsOpen, setOptionsOpen] = useState(false);
-  const [localStatus, setLocalStatus] = useState('');
-  const brandOpacity = useSharedValue(display.reducedMotion ? 1 : 0);
-  const brandOffset = useSharedValue(display.reducedMotion ? 0 : -8);
-  const heroOpacity = useSharedValue(display.reducedMotion ? 1 : 0);
-  const heroOffset = useSharedValue(display.reducedMotion ? 0 : 16);
-  const cardOpacity = useSharedValue(display.reducedMotion ? 1 : 0);
-  const cardOffset = useSharedValue(display.reducedMotion ? 0 : 24);
-  const cardScale = useSharedValue(display.reducedMotion ? 1 : 0.985);
-  const { height, fontScale } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
-  const presentation = presentationForSession(session);
-  const status = localStatus || presentation.status;
+function useLoginEntrance(reducedMotion: boolean) {
+  const brandOpacity = useSharedValue(reducedMotion ? 1 : 0);
+  const brandOffset = useSharedValue(reducedMotion ? 0 : -8);
+  const heroOpacity = useSharedValue(reducedMotion ? 1 : 0);
+  const heroOffset = useSharedValue(reducedMotion ? 0 : 16);
+  const cardOpacity = useSharedValue(reducedMotion ? 1 : 0);
+  const cardOffset = useSharedValue(reducedMotion ? 0 : 24);
+  const cardScale = useSharedValue(reducedMotion ? 1 : 0.985);
+
   useEffect(() => {
     const values = [brandOpacity, brandOffset, heroOpacity, heroOffset, cardOpacity, cardOffset, cardScale];
-    if (display.reducedMotion) {
+    if (reducedMotion) {
       brandOpacity.value = heroOpacity.value = cardOpacity.value = 1;
       brandOffset.value = heroOffset.value = cardOffset.value = 0;
       cardScale.value = 1;
@@ -51,13 +45,71 @@ export function LoginScreen({ session, display, active, onSignIn, onAppearance, 
       cardScale.value = withDelay(140, withTiming(1, { duration: 580, easing: ORIGINAL_ENTRANCE_EASING }));
     }
     return () => values.forEach((value) => cancelAnimation(value));
-  }, [display.reducedMotion, brandOpacity, brandOffset, heroOpacity, heroOffset, cardOpacity, cardOffset, cardScale]);
-  const brandEntrance = useAnimatedStyle(() => ({ opacity: brandOpacity.value, transform: [{ translateY: brandOffset.value }] }));
-  const heroEntrance = useAnimatedStyle(() => ({ opacity: heroOpacity.value, transform: [{ translateY: heroOffset.value }] }));
-  const cardEntrance = useAnimatedStyle(() => ({ opacity: cardOpacity.value, transform: [{ translateY: cardOffset.value }, { scale: cardScale.value }] }));
+  }, [reducedMotion, brandOpacity, brandOffset, heroOpacity, heroOffset, cardOpacity, cardOffset, cardScale]);
+
+  return {
+    brand: useAnimatedStyle(() => ({ opacity: brandOpacity.value, transform: [{ translateY: brandOffset.value }] })),
+    hero: useAnimatedStyle(() => ({ opacity: heroOpacity.value, transform: [{ translateY: heroOffset.value }] })),
+    card: useAnimatedStyle(() => ({ opacity: cardOpacity.value, transform: [{ translateY: cardOffset.value }, { scale: cardScale.value }] })),
+  };
+}
+
+function loginHeroGap(fontScale: number, height: number, insetTop: number): number {
+  if (fontScale > 1.3 || height < 600) return 24;
+  return Math.max(24, height * 0.43 + Math.max(0, insetTop - 34) - insetTop - 48);
+}
+
+function SignInButton({ busy, onPress }: { busy: boolean; onPress(): void }) {
+  return <Pressable onPress={onPress} disabled={busy} accessibilityRole="button" accessibilityLabel="Sign in securely" accessibilityHint="Opens approval in your verified browser" accessibilityState={{ disabled: busy, busy }} style={({ pressed }) => [styles.signInButton, (pressed || busy) && styles.pressed]}>
+    <LoginIcon name="fingerprint" size={24} color="#fff9ea" />
+    <Text style={styles.signInText}>{busy ? 'Preparing secure sign-in…' : 'Sign in securely'}</Text>
+    <View style={styles.arrow}><LoginIcon name="arrow" size={24} color="#fff9ea" /></View>
+  </Pressable>;
+}
+
+function StaySignedIn({ checked, onToggle }: { checked: boolean; onToggle(): void }) {
+  return <Pressable onPress={onToggle} accessibilityRole="checkbox" accessibilityState={{ checked }} accessibilityLabel="Stay signed in for up to 30 days" style={({ pressed }) => [styles.checkRow, pressed && styles.pressed]}>
+    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>{checked ? <Text style={styles.checkmark}>✓</Text> : null}</View>
+    <View style={styles.checkCopy}><Text style={styles.checkTitle}>Stay signed in</Text><Text style={styles.checkBody}>Only on this device.</Text></View>
+  </Pressable>;
+}
+
+function AuthCard({ presentation, status, staySignedIn, onToggle, onSignIn }: { presentation: ReturnType<typeof presentationForSession>; status: string; staySignedIn: boolean; onToggle(): void; onSignIn(): void }) {
+  return <View style={styles.card}>
+    <View style={styles.cardHeader}><View style={styles.cardHeading}><Text style={styles.cardTitle}>Welcome back</Text><Text style={styles.browserNote}>Continue in your verified browser.</Text></View><View style={styles.badge}><Text style={styles.badgeText}>Passkey ready</Text></View></View>
+    <View style={styles.cardContent}>
+      <SignInButton busy={presentation.busy} onPress={onSignIn} />
+      {status ? <View style={styles.status} accessibilityLiveRegion="polite" accessibilityRole="alert"><Text style={styles.statusText}>{status}</Text></View> : null}
+      <StaySignedIn checked={staySignedIn} onToggle={onToggle} />
+    </View>
+    <View style={styles.separator} />
+    <View style={styles.boundary}><LoginIcon name="shield" size={14} color="#317057" /><Text style={styles.boundaryText}>Bank passwords never enter Border Ledger.</Text></View>
+  </View>;
+}
+
+function LoginOptions({ open, display, onClose, onAppearance, onAbout }: { open: boolean; display: DisplaySnapshot; onClose(): void; onAppearance(mode: DisplaySnapshot['appearanceMode']): Promise<void>; onAbout(): void }) {
+  return <Modal visible={open} transparent animationType={display.reducedMotion ? 'none' : 'fade'} onRequestClose={onClose}>
+    <View style={styles.modalBackdrop}><View style={styles.menu} accessibilityViewIsModal><ScrollView>
+      <Text style={styles.menuTitle}>Appearance</Text>
+      {APPEARANCES.map(mode => <Pressable key={mode} accessibilityRole="radio" accessibilityLabel={`Appearance: ${mode}`} accessibilityState={{ selected: display.appearanceMode === mode }} style={[styles.menuItem, display.appearanceMode === mode && styles.menuItemSelected]} onPress={async () => { onClose(); await onAppearance(mode); }}><Text style={styles.menuItemText}>{mode}</Text></Pressable>)}
+      <Pressable accessibilityRole="button" accessibilityLabel="About" style={styles.menuItem} onPress={() => { onClose(); onAbout(); }}><Text style={styles.menuItemText}>About</Text></Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Close login options" style={styles.menuItem} onPress={onClose}><Text style={styles.menuItemText}>Close</Text></Pressable>
+    </ScrollView></View></View>
+  </Modal>;
+}
+
+export function LoginScreen({ session, display, active, onSignIn, onAppearance, onAbout }: Props) {
+  const [staySignedIn, setStaySignedIn] = useState<boolean>(initialAuthControls().staySignedIn);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [localStatus, setLocalStatus] = useState('');
+  const { height, fontScale } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const presentation = presentationForSession(session);
+  const status = localStatus || presentation.status;
+  const entrance = useLoginEntrance(display.reducedMotion);
   // Original frame has a 34px simulated status area. Real cutout space replaces
   // that area, rather than adding a second status bar. Compact/large text flows.
-  const heroGap = fontScale > 1.3 || height < 600 ? 24 : Math.max(24, height * 0.43 + Math.max(0, insets.top - 34) - insets.top - 48);
+  const heroGap = loginHeroGap(fontScale, height, insets.top);
   const signIn = async () => {
     setLocalStatus('');
     try { await onSignIn(staySignedIn); }
@@ -67,40 +119,21 @@ export function LoginScreen({ session, display, active, onSignIn, onAppearance, 
     <ThreadField active={active} reducedMotion={display.reducedMotion} />
     <SafeAreaView style={styles.safe} edges={['top','bottom','left','right']}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} bounces={false}>
-        <Animated.View style={[styles.brandRow, brandEntrance]}>
+        <Animated.View style={[styles.brandRow, entrance.brand]}>
           <Text style={styles.brand}>Border Ledger</Text>
           <Pressable accessibilityRole="button" accessibilityLabel="Login options" accessibilityHint="Appearance and About" onPress={()=>setOptionsOpen(true)} style={({pressed})=>[styles.options,pressed&&styles.pressed]}><Text style={styles.optionsText}>•••</Text></Pressable>
         </Animated.View>
-        <Animated.View style={[styles.hero,{marginTop:heroGap},heroEntrance]}>
+        <Animated.View style={[styles.hero,{marginTop:heroGap},entrance.hero]}>
           <Text style={styles.kicker}>Personal finance, composed.</Text>
           <Text accessibilityRole="header" style={styles.heroTitle}>See the flow.{`\n`}Keep the perspective.</Text>
         </Animated.View>
         <View style={styles.cardSpacer}/>
-        <Animated.View style={[styles.card,cardEntrance]}>
-          <View style={styles.cardHeader}><View style={styles.cardHeading}><Text style={styles.cardTitle}>Welcome back</Text><Text style={styles.browserNote}>Continue in your verified browser.</Text></View><View style={styles.badge}><Text style={styles.badgeText}>Passkey ready</Text></View></View>
-          <View style={styles.cardContent}>
-            <Pressable onPress={signIn} disabled={presentation.busy} accessibilityRole="button" accessibilityLabel="Sign in securely" accessibilityHint="Opens approval in your verified browser" accessibilityState={{disabled:presentation.busy,busy:presentation.busy}} style={({pressed})=>[styles.signInButton,(pressed||presentation.busy)&&styles.pressed]}>
-              <LoginIcon name="fingerprint" size={24} color="#fff9ea"/><Text style={styles.signInText}>{presentation.busy?'Preparing secure sign-in…':'Sign in securely'}</Text><View style={styles.arrow}><LoginIcon name="arrow" size={24} color="#fff9ea"/></View>
-            </Pressable>
-            {status?<View style={styles.status} accessibilityLiveRegion="polite" accessibilityRole="alert"><Text style={styles.statusText}>{status}</Text></View>:null}
-            <Pressable onPress={()=>setStaySignedIn(value=>!value)} accessibilityRole="checkbox" accessibilityState={{checked:staySignedIn}} accessibilityLabel="Stay signed in for up to 30 days" style={({pressed})=>[styles.checkRow,pressed&&styles.pressed]}>
-              <View style={[styles.checkbox,staySignedIn&&styles.checkboxChecked]}>{staySignedIn?<Text style={styles.checkmark}>✓</Text>:null}</View>
-              <View style={styles.checkCopy}><Text style={styles.checkTitle}>Stay signed in</Text><Text style={styles.checkBody}>Only on this device.</Text></View>
-            </Pressable>
-          </View>
-          <View style={styles.separator}/>
-          <View style={styles.boundary}><LoginIcon name="shield" size={14} color="#317057"/><Text style={styles.boundaryText}>Bank passwords never enter Border Ledger.</Text></View>
+        <Animated.View style={[styles.card,entrance.card]}>
+          <AuthCard presentation={presentation} status={status} staySignedIn={staySignedIn} onToggle={()=>setStaySignedIn(value=>!value)} onSignIn={signIn}/>
         </Animated.View>
       </ScrollView>
     </SafeAreaView>
-    <Modal visible={optionsOpen} transparent animationType={display.reducedMotion?'none':'fade'} onRequestClose={()=>setOptionsOpen(false)}>
-      <View style={styles.modalBackdrop}><View style={styles.menu} accessibilityViewIsModal><ScrollView>
-        <Text style={styles.menuTitle}>Appearance</Text>
-        {APPEARANCES.map(mode=><Pressable key={mode} accessibilityRole="radio" accessibilityLabel={`Appearance: ${mode}`} accessibilityState={{selected:display.appearanceMode===mode}} style={[styles.menuItem,display.appearanceMode===mode&&styles.menuItemSelected]} onPress={async()=>{setOptionsOpen(false);await onAppearance(mode);}}><Text style={styles.menuItemText}>{mode}</Text></Pressable>)}
-        <Pressable accessibilityRole="button" accessibilityLabel="About" style={styles.menuItem} onPress={()=>{setOptionsOpen(false);onAbout();}}><Text style={styles.menuItemText}>About</Text></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Close login options" style={styles.menuItem} onPress={()=>setOptionsOpen(false)}><Text style={styles.menuItemText}>Close</Text></Pressable>
-      </ScrollView></View></View>
-    </Modal>
+    <LoginOptions open={optionsOpen} display={display} onClose={()=>setOptionsOpen(false)} onAppearance={onAppearance} onAbout={onAbout}/>
   </View>;
 }
 

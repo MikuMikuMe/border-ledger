@@ -3,7 +3,8 @@ import currencies from '../../../../contracts/currencies.json';
 export const recurringCurrencies=['CAD','CNY','USD','HKD',...currencies.map(c=>c.code).filter(c=>!['CAD','CNY','USD','HKD'].includes(c))];
 export const reportingCurrencies=currencies.map(c=>c.code).sort();
 export type Window = 'Today'|'Week'|'Month';
-export function reportQuery(window:Window,now:Date,p:Reporting,includeProvisional:boolean,currency:string|null,reportingCurrency:string|null):ReportQuery {
+export type ReportQueryOptions={window:Window;now:Date;preferences:Reporting;includeProvisional:boolean;currency:string|null;reportingCurrency:string|null};
+export function reportQuery({window,now,preferences:p,includeProvisional,currency,reportingCurrency}:ReportQueryOptions):ReportQuery {
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:p.reportingTimezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);
   const part=(key:string)=>parts.find(v=>v.type===key)!.value;
   const endDate=`${part('year')}-${part('month')}-${part('day')}`,start=new Date(`${endDate}T12:00:00Z`);
@@ -11,36 +12,51 @@ export function reportQuery(window:Window,now:Date,p:Reporting,includeProvisiona
   if(window==='Week')start.setUTCDate(start.getUTCDate()-(start.getUTCDay()-p.weekStart+7)%7);
   return {startDate:start.toISOString().slice(0,10),endDate,includeProvisional,currency,reportingCurrency,timeZone:p.reportingTimezone};
 }
-export function formatMoney(value:string,currency:string):string {
-  const meta=currencies.find(c=>c.code===currency);
-  if(!meta)return `${currency} ${value}`;
-  const digits=meta.minorUnitDigits;
+type CurrencyMeta=typeof currencies[number];
+function exactAmount({value,digits}:{value:string;digits:number}){const amount=BigInt(value),negative=amount<0n,absolute=negative?-amount:amount,scale=10n**BigInt(digits);return {negative,integer:absolute/scale,fraction:(absolute%scale).toString().padStart(digits,'0')};}
+function grouping(formatter:Intl.NumberFormat){
+  const parts=formatter.formatToParts(1234567890123),groups=parts.filter(p=>p.type==='integer');
+  return {separator:parts.find(p=>p.type==='group')?.value,primary:groups.at(-1)?.value.length??3,secondary:groups.at(-2)?.value.length??groups.at(-1)?.value.length??3};
+}
+function localDigits(formatter:Intl.NumberFormat){return Array.from({length:10},(_,n)=>formatter.formatToParts(n).find(p=>p.type==='integer')!.value);}
+function localizeDigits({value,digits}:{value:string;digits:string[]}){return value.replace(/\d/g,d=>digits[Number(d)]);}
+function groupInteger({value,separator,primary,secondary}:{value:string;separator:string|undefined;primary:number;secondary:number}){
+  if(!separator)return value;
+  const chunks:string[]=[];let size=primary;let whole=value;
+  while(whole.length>size){chunks.unshift(whole.slice(-size));whole=whole.slice(0,-size);size=secondary;}
+  chunks.unshift(whole);return chunks.join(separator);
+}
+function formatExactMoney({value,currency,digits}:{value:string;currency:string;digits:number}){
   const formatter=new Intl.NumberFormat(currency==='CAD'||currency==='CNY'?undefined:'zh-CN',{style:'currency',currency,minimumFractionDigits:digits,maximumFractionDigits:digits});
-  const amount=BigInt(value),negative=amount<0n,abs=negative?-amount:amount,scale=10n**BigInt(digits),integer=abs/scale,fraction=(abs%scale).toString().padStart(digits,'0');
-  // Hermes Intl accepts Number only. Ask it for locale structure using small
-  // samples, then insert exact decimal digits without converting the amount.
-  const grouped=formatter.formatToParts(1234567890123),groups=grouped.filter(p=>p.type==='integer');
-  const separator=grouped.find(p=>p.type==='group')?.value;
-  const primary=groups.at(-1)?.value.length??3,secondary=groups.at(-2)?.value.length??primary;
-  const localizedDigits=Array.from({length:10},(_,n)=>formatter.formatToParts(n).find(p=>p.type==='integer')!.value);
-  const localize=(s:string)=>s.replace(/\d/g,d=>localizedDigits[Number(d)]);
-  let whole=integer.toString();const chunks:string[]=[];
-  if(separator){let size=primary;while(whole.length>size){chunks.unshift(whole.slice(-size));whole=whole.slice(0,-size);size=secondary;}chunks.unshift(whole);whole=chunks.join(separator);}
-  return formatter.formatToParts(negative?-1:1).map(p=>p.type==='fraction'?localize(fraction):p.type==='integer'?localize(whole):p.value).join('');
+  const amount=exactAmount({value,digits}),shape=grouping(formatter),localized=localDigits(formatter);
+  const whole=localizeDigits({value:groupInteger({value:amount.integer.toString(),separator:shape.separator,primary:shape.primary,secondary:shape.secondary}),digits:localized});
+  const fraction=localizeDigits({value:amount.fraction,digits:localized});
+  return formatter.formatToParts(amount.negative?-1:1).map(part=>part.type==='fraction'?fraction:part.type==='integer'?whole:part.value).join('');
 }
-const sum=(a:string,b:string,include:boolean)=>(BigInt(a)+(include?BigInt(b):0n)).toString();
+export function formatMoney(value:string,currency:string):string {
+  const meta:CurrencyMeta|undefined=currencies.find(c=>c.code===currency);
+  return meta?formatExactMoney({value,currency,digits:meta.minorUnitDigits}):`${currency} ${value}`;
+}
+const sum=({confirmed,provisional,include}:{confirmed:string;provisional:string;include:boolean})=>(BigInt(confirmed)+(include?BigInt(provisional):0n)).toString();
+const moneyTotal=({confirmedMinorUnits,provisionalMinorUnits,include}:{confirmedMinorUnits:string;provisionalMinorUnits:string;include:boolean})=>sum({confirmed:confirmedMinorUnits,provisional:provisionalMinorUnits,include});
+function sourceTotals({report,include,source}:{report:Report;include:boolean;source:string|null}){return report.currencyTotals.filter(total=>!source||source===total.currency).map(total=>({currency:total.currency,amount:moneyTotal({...total,include})})).sort((a,b)=>a.currency.localeCompare(b.currency));}
+function dailyTotals({report,source}:{report:Report;source:string|null}){return report.reportingCurrency?report.convertedDailyTotals.map(daily=>({...daily,currency:report.reportingCurrency!})):report.dailyTotals.filter(daily=>!source||source===daily.currency);}
+function currencyOrder(a:string,b:string){const rank=(currency:string)=>currency==='CAD'?0:currency==='CNY'?1:2;return rank(a)-rank(b)||a.localeCompare(b);}
+function reportLanes({daily,include}:{daily:Report['dailyTotals'];include:boolean}){
+  const currencies=[...new Set(daily.map(value=>value.currency))].sort(currencyOrder);
+  return currencies.map(currency=>({currency,points:daily.filter(value=>value.currency===currency).sort((a,b)=>a.date.localeCompare(b.date)).map(value=>({date:value.date,amount:moneyTotal({...value,include}),confirmed:value.confirmedMinorUnits,provisional:value.provisionalMinorUnits}))}));
+}
+function convertedTotals({report,include}:{report:Report;include:boolean}){const target=report.reportingCurrency;return target&&report.convertedTotals?[{currency:target,amount:moneyTotal({...report.convertedTotals,include})}]:[];}
 export function reportView(report:Report,include:boolean,source:string|null) {
-  const target=report.reportingCurrency;
-  const sourceTotals=report.currencyTotals.filter(t=>!source||source===t.currency).map(t=>({currency:t.currency,amount:sum(t.confirmedMinorUnits,t.provisionalMinorUnits,include)})).sort((a,b)=>a.currency.localeCompare(b.currency));
-  const totals=target?(report.convertedTotals?[{currency:target,amount:sum(report.convertedTotals.confirmedMinorUnits,report.convertedTotals.provisionalMinorUnits,include)}]:[]):sourceTotals;
-  const daily=target?report.convertedDailyTotals.map(d=>({...d,currency:target})):report.dailyTotals.filter(d=>!source||source===d.currency);
-  const currencies=[...new Set(daily.map(d=>d.currency))].sort((a,b)=>(a==='CAD'?0:a==='CNY'?1:2)-(b==='CAD'?0:b==='CNY'?1:2)||a.localeCompare(b));
-  const lanes=currencies.map(currency=>({currency,points:daily.filter(d=>d.currency===currency).sort((a,b)=>a.date.localeCompare(b.date)).map(d=>({date:d.date,amount:sum(d.confirmedMinorUnits,d.provisionalMinorUnits,include),confirmed:d.confirmedMinorUnits,provisional:d.provisionalMinorUnits}))}));
-  return {totals,sourceTotals,lanes,unavailable:!!target&&!report.fx.complete&&daily.length===0};
+  const sourceValues=sourceTotals({report,include,source}),daily=dailyTotals({report,source}),target=report.reportingCurrency;
+  return {totals:target?convertedTotals({report,include}):sourceValues,sourceTotals:sourceValues,lanes:reportLanes({daily,include}),unavailable:Boolean(target&&!report.fx.complete&&!daily.length)};
 }
+function matchesFacets(transaction:Transaction,q:Partial<ActivityQuery>){return (!q.currency||transaction.currency===q.currency)&&(!q.category||transaction.category===q.category)&&(!q.status||transaction.status===q.status)&&(!q.source||transaction.sourceLabel===q.source);}
+function searchableValues(transaction:Transaction){return [transaction.merchant,transaction.accountLabel,transaction.status,transaction.sourceLabel,transaction.category,transaction.note];}
+function matchesSearch({transaction,search}:{transaction:Transaction;search:string|undefined}){return !search||searchableValues(transaction).some(value=>value?.toLocaleLowerCase().includes(search));}
 export function filterActivity(rows:Transaction[],q:Partial<ActivityQuery>):Transaction[] {
   const search=q.query?.trim().toLocaleLowerCase();
-  return rows.filter(t=>(!q.currency||t.currency===q.currency)&&(!q.category||t.category===q.category)&&(!q.status||t.status===q.status)&&(!q.source||t.sourceLabel===q.source)&&(!search||[t.merchant,t.accountLabel,t.status,t.sourceLabel,t.category,t.note].some(s=>s?.toLocaleLowerCase().includes(search))));
+  return rows.filter(transaction=>matchesFacets(transaction,q)&&matchesSearch({transaction,search}));
 }
 export function mergeRows<T extends {id:string;revision:number}>(previous:T[],next:T[]):T[] {
   const map=new Map(previous.map(t=>[t.id,t]));next.forEach(t=>{if(!map.has(t.id)||map.get(t.id)!.revision<=t.revision)map.set(t.id,t);});return [...map.values()];
@@ -59,7 +75,7 @@ export class Resource<T> {
   private state:LoadState<T>={phase:'loading',data:null,message:null};private sequence=0;private disposed=false;
   constructor(private changed:()=>void=()=>{}){}
   current=()=>this.state;
-  seed(data:T,replace=false){if(!this.disposed&&(replace||this.state.data===null)){this.state={...this.state,data};this.changed();}}
+  seed(data:T,replace=false){if(this.disposed)return;if(!replace&&this.state.data!==null)return;this.state={...this.state,data};this.changed();}
   reset(){if(!this.disposed){this.sequence++;this.state={phase:'loading',data:null,message:null};this.changed();}}
   lock(){if(!this.disposed){this.sequence++;this.state={phase:'locked',data:null,message:'Renew your owner session to continue.'};this.changed();}}
   async load(read:()=>Promise<T>,retain=true) {

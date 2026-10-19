@@ -7,6 +7,10 @@ export type DisplaySnapshot = {
 };
 
 type Subscription = { remove(): void };
+type GenerationToken = { generation: number };
+type SnapshotToken = GenerationToken & { revision: number };
+type DestinationToken = GenerationToken & { destinationGeneration: number };
+type SessionTransition = { enteringSignedIn: boolean; hadSession: boolean };
 
 export type SessionPort = {
   getSnapshot(): Promise<SafeSessionSnapshot>;
@@ -74,47 +78,24 @@ export class SessionCoordinator {
     if (this.started) return;
     this.started = true;
     const generation = ++this.lifecycleGeneration;
-    this.subscriptions = [
-      this.session.onStateChanged((value) => {
-        if (!this.isCurrent(generation)) return;
-        this.sessionEventRevision += 1;
-        this.applySession(value);
-      }),
-      this.preferences.onChanged((display) => {
-        if (!this.isCurrent(generation)) return;
-        this.displayEventRevision += 1;
-        this.update({ display });
-      }),
-    ];
-    const sessionRevision = this.sessionEventRevision;
-    const displayRevision = this.displayEventRevision;
+    this.subscribeToSession({ generation });
+    this.subscribeToPreferences({ generation });
+    const sessionToken: SnapshotToken = { generation, revision: this.sessionEventRevision };
+    const displayToken: SnapshotToken = { generation, revision: this.displayEventRevision };
     await Promise.all([
-      this.session.getSnapshot()
-        .then((session) => {
-          if (this.isCurrent(generation) && this.sessionEventRevision === sessionRevision) this.applySession(session);
-        })
-        .catch(() => {
-          if (this.isCurrent(generation) && this.sessionEventRevision === sessionRevision) {
-            this.applySession(lockedSession(this.value.session));
-          }
-        }),
-      this.preferences.getSnapshot()
-        .then((display) => {
-          if (this.isCurrent(generation) && this.displayEventRevision === displayRevision) this.update({ display });
-        })
-        .catch(() => undefined),
+      this.loadInitialSession(sessionToken),
+      this.loadInitialDisplay(displayToken),
     ]);
   }
 
   async resume(): Promise<void> {
     if (!this.started) return;
-    const generation = this.lifecycleGeneration;
-    const revision = this.sessionEventRevision;
+    const token: SnapshotToken = { generation: this.lifecycleGeneration, revision: this.sessionEventRevision };
     try {
       const session = await this.session.refreshOnResume();
-      if (this.isCurrent(generation) && this.sessionEventRevision === revision) this.applySession(session);
+      if (this.shouldApplySession(token)) this.applySession(session);
     } catch {
-      if (this.isCurrent(generation) && this.sessionEventRevision === revision) {
+      if (this.shouldApplySession(token)) {
         this.applySession(lockedSession(this.value.session));
       }
     }
@@ -122,24 +103,23 @@ export class SessionCoordinator {
 
   async beginLogin(staySignedIn: boolean): Promise<void> {
     if (!this.started) return;
-    const generation = this.lifecycleGeneration;
-    const revision = this.sessionEventRevision;
+    const token: SnapshotToken = { generation: this.lifecycleGeneration, revision: this.sessionEventRevision };
     const session = await this.session.beginLogin(staySignedIn, CAPTURE_DESTINATION);
-    if (this.isCurrent(generation) && this.sessionEventRevision === revision) this.applySession(session);
+    if (this.shouldApplySession(token)) this.applySession(session);
   }
 
   async signOut(): Promise<void> {
     if (!this.started) return;
-    const generation = this.lifecycleGeneration;
+    const token: GenerationToken = { generation: this.lifecycleGeneration };
     const session = await this.session.signOut();
-    if (this.isCurrent(generation)) this.applySession(session);
+    if (this.isCurrent(token)) this.applySession(session);
   }
 
   async setAppearance(appearanceMode: DisplaySnapshot['appearanceMode']): Promise<void> {
     if (!this.started) return;
-    const generation = this.lifecycleGeneration;
+    const token: GenerationToken = { generation: this.lifecycleGeneration };
     const display = await this.preferences.updateDisplay({ ...this.value.display, appearanceMode });
-    if (this.isCurrent(generation)) this.update({ display });
+    if (this.isCurrent(token)) this.update({ display });
   }
 
   dispose(): void {
@@ -154,29 +134,82 @@ export class SessionCoordinator {
 
   private applySession(session: SafeSessionSnapshot): void {
     if (!this.started) return;
-    const hadSession = this.signedInTransition;
-    const enteringSignedIn = session.state === 'signed_in' && !this.signedInTransition;
-    // Refresh keeps the current authenticated cycle and its mounted navigation.
-    if (session.state !== 'refreshing') this.signedInTransition = session.state === 'signed_in';
-    if (enteringSignedIn || (hadSession && !this.signedInTransition)) this.destinationGeneration += 1;
-    const generation = this.lifecycleGeneration;
-    const destinationGeneration = this.destinationGeneration;
-    const currentDestination = () => this.isCurrent(generation) &&
-      this.destinationGeneration === destinationGeneration && this.signedInTransition;
+    const enteringSignedIn = this.updateSessionTransition(session);
+    const token: GenerationToken = { generation: this.lifecycleGeneration };
+    const destinationToken: DestinationToken = { ...token, destinationGeneration: this.destinationGeneration };
     this.update({ session, route: routeForSession(session, this.value.route) });
-    if (enteringSignedIn && currentDestination()) {
-      void this.session.consumePendingDestination()
-        .then((destination) => {
-          if (currentDestination()) this.update({ destination: shellDestination(destination) });
-        })
-        .catch(() => {
-          if (currentDestination()) this.update({ destination: 'overview' });
-        });
+    if (enteringSignedIn && this.isCurrent(token)) this.consumeDestination(destinationToken);
+  }
+
+  private subscribeToSession(token: GenerationToken): void {
+    this.subscriptions.push(this.session.onStateChanged((value) => {
+      if (!this.isCurrent(token)) return;
+      this.sessionEventRevision += 1;
+      this.applySession(value);
+    }));
+  }
+
+  private subscribeToPreferences(token: GenerationToken): void {
+    this.subscriptions.push(this.preferences.onChanged((display) => {
+      if (!this.isCurrent(token)) return;
+      this.displayEventRevision += 1;
+      this.update({ display });
+    }));
+  }
+
+  private async loadInitialSession(token: SnapshotToken): Promise<void> {
+    try {
+      const session = await this.session.getSnapshot();
+      if (this.shouldApplySession(token)) this.applySession(session);
+    } catch {
+      if (this.shouldApplySession(token)) this.applySession(lockedSession(this.value.session));
     }
   }
 
-  private isCurrent(generation: number): boolean {
-    return this.started && this.lifecycleGeneration === generation;
+  private async loadInitialDisplay(token: SnapshotToken): Promise<void> {
+    try {
+      const display = await this.preferences.getSnapshot();
+      if (this.isCurrent(token) && this.displayEventRevision === token.revision) this.update({ display });
+    } catch {
+      // Display preferences are optional; the in-memory defaults remain active.
+    }
+  }
+
+  private shouldApplySession(token: SnapshotToken): boolean {
+    return this.isCurrent(token) && this.sessionEventRevision === token.revision;
+  }
+
+  private updateSessionTransition(session: SafeSessionSnapshot): boolean {
+    const hadSession = this.signedInTransition;
+    const transition: SessionTransition = {
+      enteringSignedIn: session.state === 'signed_in' && !hadSession,
+      hadSession,
+    };
+    // Refresh keeps the current authenticated cycle and its mounted navigation.
+    if (session.state !== 'refreshing') this.signedInTransition = session.state === 'signed_in';
+    if (this.shouldAdvanceDestination(transition)) this.destinationGeneration += 1;
+    return transition.enteringSignedIn;
+  }
+
+  private shouldAdvanceDestination(transition: SessionTransition): boolean {
+    if (transition.enteringSignedIn) return true;
+    return transition.hadSession && !this.signedInTransition;
+  }
+
+  private consumeDestination(token: DestinationToken): void {
+    const isCurrentDestination = () => this.isCurrent(token) &&
+      this.destinationGeneration === token.destinationGeneration && this.signedInTransition;
+    void this.session.consumePendingDestination()
+      .then((destination) => {
+        if (isCurrentDestination()) this.update({ destination: shellDestination(destination) });
+      })
+      .catch(() => {
+        if (isCurrentDestination()) this.update({ destination: 'overview' });
+      });
+  }
+
+  private isCurrent(token: GenerationToken): boolean {
+    return this.started && this.lifecycleGeneration === token.generation;
   }
 
   private update(next: Partial<MobileAppSnapshot>): void {

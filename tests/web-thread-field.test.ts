@@ -18,7 +18,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('repaints all fixed-phase strands after initial and later resize observations under reduced motion', () => {
+function renderThreadFieldHarness() {
   let resize!: ResizeObserverCallback;
   let bounds = { width: 412, height: 915 };
   let strokes: number[][] = [];
@@ -51,17 +51,28 @@ it('repaints all fixed-phase strands after initial and later resize observations
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => root?.render(createElement(ThreadField)));
-  expect(strokes).toHaveLength(88);
+  return {
+    strokes: () => strokes,
+    resize(nextBounds: typeof bounds) {
+      bounds = nextBounds;
+      act(() => resize([], {} as ResizeObserver));
+    },
+    requestFrame,
+  };
+}
 
-  act(() => resize([], {} as ResizeObserver));
-  expect(strokes).toHaveLength(88);
-  expect(strokes[0]).toHaveLength(146);
-  expect(strokes[0].slice(0, 2)).toEqual([-61.8, 315.6130285494536]);
+it('repaints all fixed-phase strands after initial and later resize observations under reduced motion', () => {
+  const field = renderThreadFieldHarness();
+  expect(field.strokes()).toHaveLength(88);
 
-  bounds = { width: 300, height: 600 };
-  act(() => resize([], {} as ResizeObserver));
-  expect(strokes).toHaveLength(88);
-  expect(strokes[0]).toHaveLength(146);
-  expect(strokes[0].slice(0, 2)).toEqual([-45, 208.51302854945362]);
-  expect(requestFrame).not.toHaveBeenCalled();
+  field.resize({ width: 412, height: 915 });
+  expect(field.strokes()).toHaveLength(88);
+  expect(field.strokes()[0]).toHaveLength(146);
+  expect(field.strokes()[0].slice(0, 2)).toEqual([-61.8, 315.6130285494536]);
+
+  field.resize({ width: 300, height: 600 });
+  expect(field.strokes()).toHaveLength(88);
+  expect(field.strokes()[0]).toHaveLength(146);
+  expect(field.strokes()[0].slice(0, 2)).toEqual([-45, 208.51302854945362]);
+  expect(field.requestFrame).not.toHaveBeenCalled();
 });

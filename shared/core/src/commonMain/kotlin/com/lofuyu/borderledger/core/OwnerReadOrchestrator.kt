@@ -10,22 +10,26 @@ sealed interface OwnerReadResult<out T> {
     data class Ready<T>(val value: T) : OwnerReadResult<T>
 }
 
+data class OwnerReadRequest<Payload, Value : Any>(
+    val signedIn: Boolean,
+    val available: Boolean,
+    val unauthorized: suspend () -> Unit,
+    val read: suspend () -> Payload,
+    val decode: suspend (Payload) -> Value?,
+)
+
 /** One owner read, with no retry/replay. Cancellation and unexpected failures propagate. */
 suspend fun <Payload, Value : Any> ownerRead(
-    signedIn: Boolean,
-    available: Boolean,
-    unauthorized: suspend () -> Unit,
-    read: suspend () -> Payload,
-    decode: suspend (Payload) -> Value?,
+    request: OwnerReadRequest<Payload, Value>,
 ): OwnerReadResult<Value> {
-    if (!signedIn) return OwnerReadResult.NotSignedIn
-    if (!available) return OwnerReadResult.Unavailable
+    if (!request.signedIn) return OwnerReadResult.NotSignedIn
+    if (!request.available) return OwnerReadResult.Unavailable
     return try {
-        decode(read())?.let { OwnerReadResult.Ready(it) } ?: OwnerReadResult.Unavailable
+        request.decode(request.read())?.let { OwnerReadResult.Ready(it) } ?: OwnerReadResult.Unavailable
     } catch (_: TransportFailure.Offline) {
         OwnerReadResult.Offline
     } catch (_: TransportFailure.Unauthorized) {
-        unauthorized()
+        request.unauthorized()
         OwnerReadResult.Unauthorized
     } catch (_: TransportFailure) {
         OwnerReadResult.Unavailable

@@ -4,7 +4,7 @@ import {report, transaction, stream, states} from './fixtures/mobile-finance';
 
 describe('F02/F03 report lens', () => {
   it('uses the reporting timezone and configured Sunday week boundary', () => {
-    expect(reportQuery('Week', new Date('2026-10-18T01:00:00Z'), {reportingTimezone:'America/Toronto',weekStart:0,preferredCurrency:null,revision:2,updatedAt:null},false,null,null)).toEqual({startDate:'2026-10-11',endDate:'2026-10-17',timeZone:'America/Toronto',includeProvisional:false,currency:null,reportingCurrency:null});
+    expect(reportQuery({window:'Week',now:new Date('2026-10-18T01:00:00Z'),preferences:{reportingTimezone:'America/Toronto',weekStart:0,preferredCurrency:null,revision:2,updatedAt:null},includeProvisional:false,currency:null,reportingCurrency:null})).toEqual({startDate:'2026-10-11',endDate:'2026-10-17',timeZone:'America/Toronto',includeProvisional:false,currency:null,reportingCurrency:null});
   });
   it('keeps source currencies separate and sorts chart dates with refund signs', () => {
     const view=reportView(report,false,null);

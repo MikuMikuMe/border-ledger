@@ -28,29 +28,26 @@ internal class BridgeSupport(private val runtime: NativeServiceRuntime) {
                 val result = block()
                 if (owner) check(runtime.currentGeneration() == generation && runtime.container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
                 promise.resolve(nativeValue(result))
-            } catch (error: BridgeFailure) {
-                promise.reject(error.code, "Refresh native service state before continuing.")
             } catch (_: CancellationException) {
                 promise.reject("interrupted", "The native operation was interrupted. Query its operation ID before continuing.")
-            } catch (_: IllegalArgumentException) {
-                promise.reject("invalid_request", "The request is not valid.")
-            } catch (_: TransportFailure.Unauthorized) {
-                promise.reject("unauthorized", "Owner authorization is required.")
-            } catch (_: TransportFailure.Offline) {
-                promise.reject("offline", "The service is offline.")
-            } catch (_: com.lofuyu.borderledger.recurring.RecurringRevisionConflict) {
-                promise.reject("revision_conflict", "Refresh before saving.")
-            } catch (_: com.lofuyu.borderledger.review.ReviewRevisionConflict) {
-                promise.reject("revision_conflict", "Refresh before saving.")
-            } catch (_: com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.Offline) {
-                promise.reject("offline", "The service is offline.")
-            } catch (_: com.lofuyu.borderledger.accounts.AccountRequestRejected) {
-                promise.reject("request_rejected", "The server rejected this request. Refresh the data and review before trying again.")
-            } catch (_: Exception) {
-                // Never forward a Throwable, its message, stack, URL or provider error to JS.
-                promise.reject("native_unavailable", "The native service could not complete the request. Reconcile submitted operations before continuing.")
-            }
+            } catch (error: Exception) { rejectFailure(promise, error) }
         }
+    }
+
+    private fun rejectFailure(promise: Promise, error: Exception) {
+        val failure = when (error) {
+            is BridgeFailure -> "${error.code}|Refresh native service state before continuing."
+            is IllegalArgumentException -> "invalid_request|The request is not valid."
+            is TransportFailure.Unauthorized -> "unauthorized|Owner authorization is required."
+            is TransportFailure.Offline,
+            is com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.Offline -> "offline|The service is offline."
+            is com.lofuyu.borderledger.recurring.RecurringRevisionConflict,
+            is com.lofuyu.borderledger.review.ReviewRevisionConflict -> "revision_conflict|Refresh before saving."
+            is com.lofuyu.borderledger.accounts.AccountRequestRejected -> "request_rejected|The server rejected this request. Refresh the data and review before trying again."
+            else -> "native_unavailable|The native service could not complete the request. Reconcile submitted operations before continuing."
+        }
+        val separator = failure.indexOf('|')
+        promise.reject(failure.substring(0, separator), failure.substring(separator + 1))
     }
     companion object {
         fun nativeValue(value: Any?): Any? = when(value) {

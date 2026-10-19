@@ -26,6 +26,77 @@ type Props = {
   onSignOut(): Promise<void>;
 };
 
+function ShellNavigation({
+  dark,
+  selected,
+  onSelect,
+}: {
+  dark: boolean;
+  selected: ShellDestination;
+  onSelect(destination: ShellDestination): void;
+}) {
+  return (
+    <View style={styles.nav} accessibilityRole="tablist">
+      {destinations.map((item) => (
+        <Pressable
+          key={item.id}
+          onPress={() => onSelect(item.id)}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: selected === item.id }}
+          style={({ pressed }) => [styles.navItem, dark && styles.surfaceDark, selected === item.id && styles.navItemSelected, pressed && styles.pressed]}
+        >
+          <Text style={[styles.navText, dark && styles.mutedDark, selected === item.id && styles.navTextSelected]}>{item.label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function DestinationPanel({
+  dark,
+  selected,
+  recurringId,
+  onOpenRecurring,
+  onCloseRecurring,
+}: {
+  dark: boolean;
+  selected: ShellDestination;
+  recurringId: string | null;
+  onOpenRecurring(id: string): void;
+  onCloseRecurring(): void;
+}) {
+  if (selected === 'overview' || selected === 'activity') {
+    return <FinanceScreen dark={dark} destination={selected} onOpenRecurring={onOpenRecurring} />;
+  }
+  if (selected === 'recurring') {
+    return (
+      <>
+        <FinanceScreen dark={dark} destination={selected} onOpenRecurring={onOpenRecurring} />
+        <DetailsScreen dark={dark} destination={selected} recurringId={recurringId} onCloseRecurring={onCloseRecurring} />
+      </>
+    );
+  }
+  if (selected === 'review' || selected === 'accounts') {
+    return <DetailsScreen dark={dark} destination={selected} recurringId={recurringId} onCloseRecurring={onCloseRecurring} />;
+  }
+  if (selected === 'capture' || selected === 'settings') return <ToolsScreen dark={dark} destination={selected} />;
+  return null;
+}
+
+function ShellHeader({ dark, onAbout }: { dark: boolean; onAbout(): void }) {
+  return <View style={styles.header}>
+    <View><Text style={[styles.brand, dark && styles.textDark]}>Border Ledger</Text><Text style={[styles.kicker, dark && styles.mutedDark]}>PERSONAL FINANCE</Text></View>
+    <Pressable onPress={onAbout} accessibilityRole="button" style={({ pressed }) => [styles.about, pressed && styles.pressed]}><Text style={[styles.aboutText, dark && styles.accentDark]}>About</Text></Pressable>
+  </View>;
+}
+
+function ShellFooter({ dark, status, onSignOut }: { dark: boolean; status: string; onSignOut(): void }) {
+  return <>
+    {status ? <Text accessibilityLiveRegion="polite" accessibilityRole="alert" style={[styles.error, dark && styles.errorDark]}>{status}</Text> : null}
+    <Button variant="outline" onPress={onSignOut} className="mt-6 h-12 rounded-xl"><Text>Sign out</Text></Button>
+  </>;
+}
+
 export function AppShellScreen({ dark, initialDestination, onAbout, onSignOut }: Props) {
   const [selected, setSelected] = useState(initialDestination);
   const [status, setStatus] = useState('');
@@ -42,39 +113,22 @@ export function AppShellScreen({ dark, initialDestination, onAbout, onSignOut }:
   return (
     <SafeAreaView style={[styles.safe, dark && styles.safeDark]} edges={['top', 'bottom', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <View>
-            <Text style={[styles.brand, dark && styles.textDark]}>Border Ledger</Text>
-            <Text style={[styles.kicker, dark && styles.mutedDark]}>PERSONAL FINANCE</Text>
-          </View>
-          <Pressable onPress={onAbout} accessibilityRole="button" style={({ pressed }) => [styles.about, pressed && styles.pressed]}>
-            <Text style={[styles.aboutText, dark && styles.accentDark]}>About</Text>
-          </Pressable>
-        </View>
+        <ShellHeader dark={dark} onAbout={onAbout} />
 
         <Text style={[styles.title, dark && styles.textDark]}>{current.label}</Text>
         <Text style={[styles.subtitle, dark && styles.mutedDark]}>{current.note}</Text>
 
-        <View style={styles.nav} accessibilityRole="tablist">
-          {destinations.map((item) => (
-            <Pressable
-              key={item.id}
-              onPress={() => setSelected(item.id)}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: selected === item.id }}
-              style={({ pressed }) => [styles.navItem, dark && styles.surfaceDark, selected === item.id && styles.navItemSelected, pressed && styles.pressed]}
-            >
-              <Text style={[styles.navText, dark && styles.mutedDark, selected === item.id && styles.navTextSelected]}>{item.label}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <ShellNavigation dark={dark} selected={selected} onSelect={setSelected} />
 
-        {selected==='overview'||selected==='activity'||selected==='recurring'?<FinanceScreen dark={dark} destination={selected} onOpenRecurring={setRecurringId}/>:null}
-        {selected==='review'||selected==='accounts'||selected==='recurring'?<DetailsScreen dark={dark} destination={selected} recurringId={recurringId} onCloseRecurring={()=>setRecurringId(null)}/>:null}
-        {selected==='capture'||selected==='settings'?<ToolsScreen dark={dark} destination={selected}/>:null}
+        <DestinationPanel
+          dark={dark}
+          selected={selected}
+          recurringId={recurringId}
+          onOpenRecurring={setRecurringId}
+          onCloseRecurring={() => setRecurringId(null)}
+        />
 
-        {status ? <Text accessibilityLiveRegion="polite" accessibilityRole="alert" style={[styles.error, dark && styles.errorDark]}>{status}</Text> : null}
-        <Button variant="outline" onPress={signOut} className="mt-6 h-12 rounded-xl"><Text>Sign out</Text></Button>
+        <ShellFooter dark={dark} status={status} onSignOut={signOut} />
       </ScrollView>
     </SafeAreaView>
   );

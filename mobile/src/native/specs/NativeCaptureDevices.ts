@@ -1,6 +1,10 @@
 import type {TurboModule, CodegenTypes} from 'react-native';
 import {TurboModuleRegistry} from 'react-native';
 type Operation = {operationId: string; kind: string; status: string; updatedAt: string; resultId: string | null};
+export type SelectSourceRequest = {sourceProfileId: string; currency: string};
+export type AuthorizeCaptureRequest = {operationId: string; consent: boolean};
+export type RevokeDeviceRequest = {operationId: string; deviceId: string};
+export type SourceConfigOperationRequest = {operationId: string; config: Config};
 export type Hint = {kind: string; value: string};
 export type Mapping = {sourceProfileId: string; accountId: string; allowedCurrencies: string[]; instrumentHint: Hint | null};
 export type Config = {expectedRevision: number; mappings: Mapping[]};
@@ -13,14 +17,14 @@ export interface Spec extends TurboModule {
   getRuntimeHealth(): Promise<RuntimeHealth>;
   refresh(): Promise<CaptureSnapshot>;
   readDevices(): Promise<Device[]>;
-  selectSource(sourceProfileId: string, currency: string): Promise<CaptureSnapshot>;
+  selectSource(request: SelectSourceRequest): Promise<CaptureSnapshot>;
   requestSourceTest(): Promise<CaptureSnapshot>;
   openNotificationSettings(): Promise<void>;
   openAppNotificationSettings(): Promise<void>;
-  startAuthorizeCapture(operationId: string, consent: boolean): Promise<Operation>;
-  startRevokeDevice(operationId: string, deviceId: string): Promise<Operation>;
-  startReplaceSourceConfig(operationId: string, config: Config): Promise<Operation>;
-  startAuthorizeDevice(operationId: string, config: Config): Promise<Operation>;
+  startAuthorizeCapture(request: AuthorizeCaptureRequest): Promise<Operation>;
+  startRevokeDevice(request: RevokeDeviceRequest): Promise<Operation>;
+  startReplaceSourceConfig(request: SourceConfigOperationRequest): Promise<Operation>;
+  startAuthorizeDevice(request: SourceConfigOperationRequest): Promise<Operation>;
   readonly onStateChanged: CodegenTypes.EventEmitter<CaptureSnapshot>;
   readonly onHealthChanged: CodegenTypes.EventEmitter<RuntimeHealth>;
 }

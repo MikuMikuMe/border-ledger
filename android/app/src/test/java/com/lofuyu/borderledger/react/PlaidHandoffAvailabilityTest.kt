@@ -6,11 +6,13 @@ import org.junit.Test
 
 class PlaidHandoffAvailabilityTest {
     @Test fun cancellationIsAvailableDuringPreparationButNotWhileProviderOrCallbackOwnsFlow() {
-        assertTrue(PlaidHandoffAvailability.canCancel("linking", "awaiting_result", providerMayBeOpen = false, providerReturned = false, callbackInProgress = false))
-        assertFalse(PlaidHandoffAvailability.canCancel("linking", "awaiting_result", providerMayBeOpen = true, providerReturned = false, callbackInProgress = false))
-        assertFalse(PlaidHandoffAvailability.canCancel("linking", "awaiting_result", providerMayBeOpen = true, providerReturned = true, callbackInProgress = true))
-        assertTrue(PlaidHandoffAvailability.canCancel("linking", "awaiting_result", providerMayBeOpen = true, providerReturned = true, callbackInProgress = false))
-        assertFalse(PlaidHandoffAvailability.canCancel("reconciliation_required", "awaiting_result", providerMayBeOpen = false, providerReturned = false, callbackInProgress = false))
-        assertFalse(PlaidHandoffAvailability.canCancel("linking", "running", providerMayBeOpen = false, providerReturned = false, callbackInProgress = false))
+        fun state(open: Boolean, returned: Boolean, callback: Boolean, phase: String = "linking", status: String? = "awaiting_result") =
+            PlaidHandoffState(phase, status, open, returned, callback)
+        assertTrue(PlaidHandoffAvailability.canCancel(state(open = false, returned = false, callback = false)))
+        assertFalse(PlaidHandoffAvailability.canCancel(state(open = true, returned = false, callback = false)))
+        assertFalse(PlaidHandoffAvailability.canCancel(state(open = true, returned = true, callback = true)))
+        assertTrue(PlaidHandoffAvailability.canCancel(state(open = true, returned = true, callback = false)))
+        assertFalse(PlaidHandoffAvailability.canCancel(state(open = false, returned = false, callback = false, phase = "reconciliation_required")))
+        assertFalse(PlaidHandoffAvailability.canCancel(state(open = false, returned = false, callback = false, status = "running")))
     }
 }

@@ -11,13 +11,13 @@ import {
 
 describe('thread geometry', () => {
   it('keeps the reduced-motion frame deterministic while live motion advances', () => {
-    expect(threadPhase(91_500, { active: true, reducedMotion: true })).toBe(REDUCED_MOTION_PHASE);
-    expect(threadPhase(5_000, { active: false, reducedMotion: false, pausedPhase: 0.73 })).toBe(0.73);
-    expect(threadPhase(5_000, { active: true, reducedMotion: false })).toBeCloseTo(0.638, 7);
+    expect(threadPhase({ elapsedMs: 91_500, active: true, reducedMotion: true })).toBe(REDUCED_MOTION_PHASE);
+    expect(threadPhase({ elapsedMs: 5_000, active: false, reducedMotion: false, pausedPhase: 0.73 })).toBe(0.73);
+    expect(threadPhase({ elapsedMs: 5_000, active: true, reducedMotion: false })).toBeCloseTo(0.638, 7);
   });
 
   it('matches hand-checked cubic samples at the fixed reduced-motion phase', () => {
-    expect(threadGeometry(0, 412, 915, REDUCED_MOTION_PHASE)).toEqual({
+    expect(threadGeometry({ index: 0, size: { width: 412, height: 915 }, phase: REDUCED_MOTION_PHASE })).toEqual({
       startX: -22.66,
       startY: 42.717847,
       control1X: 119.48,
@@ -29,7 +29,7 @@ describe('thread geometry', () => {
       intensity: 0.263405,
       champagne: false,
     });
-    expect(threadGeometry(43, 412, 915, REDUCED_MOTION_PHASE)).toEqual({
+    expect(threadGeometry({ index: 43, size: { width: 412, height: 915 }, phase: REDUCED_MOTION_PHASE })).toEqual({
       startX: -22.66,
       startY: 443.191701,
       control1X: 119.48,
@@ -47,7 +47,7 @@ describe('thread geometry', () => {
     const phase = threadPhaseFromCycleProgress(0.37);
 
     expect(phase).toBeCloseTo(2.324778564, 9);
-    expect(threadGeometry(0, 412, 915, phase)).toEqual({
+    expect(threadGeometry({ index: 0, size: { width: 412, height: 915 }, phase })).toEqual({
       startX: -22.66,
       startY: 40.029076,
       control1X: 119.48,
@@ -62,18 +62,18 @@ describe('thread geometry', () => {
   });
 
   it('advances a radians phase across frames while preserving pause and reduced-motion behavior', () => {
-    expect(advanceThreadPhase(1.8, 1_000, { active: true, reducedMotion: false }))
+    expect(advanceThreadPhase({ currentPhase: 1.8, elapsedMs: 1_000, active: true, reducedMotion: false }))
       .toBeCloseTo(1.9276, 7);
-    expect(advanceThreadPhase(TWO_PI - 0.01, 1_000, { active: true, reducedMotion: false }))
+    expect(advanceThreadPhase({ currentPhase: TWO_PI - 0.01, elapsedMs: 1_000, active: true, reducedMotion: false }))
       .toBeCloseTo(0.1176, 7);
-    expect(advanceThreadPhase(0.73, 1_000, { active: false, reducedMotion: false })).toBe(0.73);
-    expect(advanceThreadPhase(0.73, 1_000, { active: true, reducedMotion: true }))
+    expect(advanceThreadPhase({ currentPhase: 0.73, elapsedMs: 1_000, active: false, reducedMotion: false })).toBe(0.73);
+    expect(advanceThreadPhase({ currentPhase: 0.73, elapsedMs: 1_000, active: true, reducedMotion: true }))
       .toBe(REDUCED_MOTION_PHASE);
   });
 
   it('keeps all 88 strands finite and beyond both horizontal edges', () => {
     const strands = Array.from({ length: THREAD_COUNT }, (_, index) =>
-      threadGeometry(index, 412, 915, 0.37),
+      threadGeometry({ index, size: { width: 412, height: 915 }, phase: 0.37 }),
     );
 
     expect(strands).toHaveLength(88);

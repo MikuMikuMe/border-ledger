@@ -18,19 +18,21 @@ const snapshot = (state: SafeSessionSnapshot['state'], overrides: Partial<SafeSe
   ...overrides,
 });
 
+const presentationCases = [
+  { state: 'restoring', route: 'login', busy: true, retryable: false, status: 'Restoring a protected session…' },
+  { state: 'awaiting_browser', route: 'login', busy: false, retryable: false, status: 'Approve access in the verified browser, then return here.' },
+  { state: 'signed_in', route: 'shell', busy: false, retryable: false, status: '' },
+  { state: 'expired', route: 'login', busy: false, retryable: true, status: 'The owner session expired. Sign in again.' },
+  { state: 'callback_rejected', route: 'login', busy: false, retryable: true, status: 'The return link could not be verified. Start sign-in again.' },
+  { state: 'storage_failure', route: 'login', busy: false, retryable: true, status: 'Secure storage is unavailable. Financial data remains locked.' },
+] as const;
+
 describe('mobile authentication model', () => {
   it('starts with the long-session control unchecked and capture as the browser return destination', () => {
     expect(initialAuthControls()).toEqual({ staySignedIn: false, pendingDestination: CAPTURE_DESTINATION });
   });
 
-  it.each([
-    ['restoring', 'login', true, false, 'Restoring a protected session…'],
-    ['awaiting_browser', 'login', false, false, 'Approve access in the verified browser, then return here.'],
-    ['signed_in', 'shell', false, false, ''],
-    ['expired', 'login', false, true, 'The owner session expired. Sign in again.'],
-    ['callback_rejected', 'login', false, true, 'The return link could not be verified. Start sign-in again.'],
-    ['storage_failure', 'login', false, true, 'Secure storage is unavailable. Financial data remains locked.'],
-  ] as const)('maps %s to a safe route and status', (state, route, busy, retryable, status) => {
+  it.each(presentationCases)('maps $state to a safe route and status', ({ state, route, busy, retryable, status }) => {
     const value = snapshot(state);
     expect(routeForSession(value)).toBe(route);
     expect(presentationForSession(value)).toMatchObject({ busy, retryable, status });

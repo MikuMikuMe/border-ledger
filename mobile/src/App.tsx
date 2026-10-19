@@ -44,7 +44,7 @@ function safeDisplay(value: Display): DisplaySnapshot {
 const sessionPort: SessionPort = {
   getSnapshot: async () => safeSession(await NativeSession.getSnapshot()),
   refreshOnResume: async () => safeSession(await NativeSession.refreshOnResume()),
-  beginLogin: async (staySignedIn, destination) => safeSession(await NativeSession.beginLogin(staySignedIn, destination)),
+  beginLogin: async (staySignedIn, destination) => safeSession(await NativeSession.beginLogin({ staySignedIn, pendingDestination: destination })),
   signOut: async () => safeSession(await NativeSession.signOut()),
   consumePendingDestination: () => NativeSession.consumePendingDestination(),
   onStateChanged: (listener) => NativeSession.onStateChanged((value) => listener(safeSession(value))),
@@ -69,6 +69,59 @@ function themedNavigation(dark: boolean): Theme {
       border: dark ? '#43534B' : '#D2CCC0',
     },
   };
+}
+
+type RootScreenProps = {
+  snapshot: MobileAppSnapshot;
+  dark: boolean;
+  active: boolean;
+  systemReducedMotion: boolean;
+  onSignIn(staySignedIn: boolean): Promise<void>;
+  onAppearance(mode: DisplaySnapshot['appearanceMode']): Promise<void>;
+  onSignOut(): Promise<void>;
+};
+
+function LoginStack({ snapshot, dark, active, systemReducedMotion, onSignIn, onAppearance }: RootScreenProps) {
+  return (
+    <>
+      <Stack.Screen name="Login" options={{ headerShown: false }}>
+        {({ navigation }) => (
+          <LoginScreen
+            session={snapshot.session}
+            display={{ ...snapshot.display, reducedMotion: snapshot.display.reducedMotion || systemReducedMotion }}
+            active={active}
+            onSignIn={onSignIn}
+            onAppearance={onAppearance}
+            onAbout={() => navigation.navigate('About')}
+          />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="About" options={{ title: 'About' }}>{() => <AboutScreen dark={dark} />}</Stack.Screen>
+    </>
+  );
+}
+
+function ShellStack({ snapshot, dark, onSignOut }: RootScreenProps) {
+  return (
+    <>
+      <Stack.Screen name="Shell" options={{ headerShown: false }}>
+        {({ navigation }) => (
+          <AppShellScreen
+            dark={dark}
+            initialDestination={snapshot.destination}
+            onAbout={() => navigation.navigate('About')}
+            onSignOut={onSignOut}
+          />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="About" options={{ title: 'About' }}>{() => <AboutScreen dark={dark} />}</Stack.Screen>
+    </>
+  );
+}
+
+function RootScreens(props: RootScreenProps & { route: MobileAppSnapshot['route'] }) {
+  if (props.route === 'login') return <LoginStack {...props} />;
+  return <ShellStack {...props} />;
 }
 
 function MobileRoot() {
@@ -121,37 +174,16 @@ function MobileRoot() {
             headerTitleStyle: { fontFamily: 'DMSans', fontWeight: '600' },
           }}
         >
-          {route === 'login' ? (
-            <>
-              <Stack.Screen name="Login" options={{ headerShown: false }}>
-                {({ navigation }) => (
-                  <LoginScreen
-                    session={snapshot.session}
-                    display={{ ...snapshot.display, reducedMotion: snapshot.display.reducedMotion || systemReducedMotion }}
-                    active={active}
-                    onSignIn={(staySignedIn) => coordinator.beginLogin(staySignedIn)}
-                    onAppearance={(mode) => coordinator.setAppearance(mode)}
-                    onAbout={() => navigation.navigate('About')}
-                  />
-                )}
-              </Stack.Screen>
-              <Stack.Screen name="About" options={{ title: 'About' }}>{() => <AboutScreen dark={dark} />}</Stack.Screen>
-            </>
-          ) : (
-            <>
-              <Stack.Screen name="Shell" options={{ headerShown: false }}>
-                {({ navigation }) => (
-                  <AppShellScreen
-                    dark={dark}
-                    initialDestination={snapshot.destination}
-                    onAbout={() => navigation.navigate('About')}
-                    onSignOut={() => coordinator.signOut()}
-                  />
-                )}
-              </Stack.Screen>
-              <Stack.Screen name="About" options={{ title: 'About' }}>{() => <AboutScreen dark={dark} />}</Stack.Screen>
-            </>
-          )}
+          <RootScreens
+            route={route}
+            snapshot={snapshot}
+            dark={dark}
+            active={active}
+            systemReducedMotion={systemReducedMotion}
+            onSignIn={(staySignedIn) => coordinator.beginLogin(staySignedIn)}
+            onAppearance={(mode) => coordinator.setAppearance(mode)}
+            onSignOut={() => coordinator.signOut()}
+          />
         </Stack.Navigator>
       </NavigationContainer>
     </>

@@ -24,49 +24,117 @@ enum class FxReportPreviewCase(val intentValue: String) {
 
 object FxReportPreviewFixture {
     fun report(case: FxReportPreviewCase): LedgerReport {
-        val scenario = case.intentValue
-        val hasBand = scenario == "boc-cny" || scenario == "boc+cny"
-        val partial = scenario == "partial" || scenario == "unavailable"
-        val target = "CAD"
-        val sources = if (hasBand) {
-            listOf(
-                LedgerReportCurrencyTotal("CNY", 200, 0, 1, 0),
-                LedgerReportCurrencyTotal("JPY", 2100, 0, 1, 0),
-            )
-        } else {
-            listOf(
-                LedgerReportCurrencyTotal("USD", 15000, if (scenario == "provisional") 2500 else 0, 2, if (scenario == "provisional") 1 else 0),
-                LedgerReportCurrencyTotal("CAD", 7200, 0, 1, 0),
-            )
-        }
-        val confirmed = if (scenario == "refund") -200L else if (hasBand) 900L else 34800L
-        val provisional = if (scenario == "provisional") 50L else 0L
+        val scenario = scenarioFor(case)
         return LedgerReport(
             timeBasis = "accounting_date",
-            currencyTotals = sources,
+            currencyTotals = scenario.currencyTotals,
             dailyTotals = emptyList(),
-            reviewCount = if (partial) 1 else 0,
+            reviewCount = scenario.reviewCount,
             excludedCount = 0,
             from = "2026-10-01",
             to = "2026-10-14",
-            includeProvisional = scenario == "provisional",
+            includeProvisional = scenario.includeProvisional,
             timeZone = "America/Toronto",
             asOf = "2026-10-14T12:00:00Z",
-            sourceCoverage = mapOf("statement" to sources.size),
-            reportingCurrency = target,
-            convertedTotals = if (scenario == "unavailable") null else LedgerReportConvertedTotals(confirmed, provisional, sources.size, if (provisional == 0L) 0 else 1),
-            convertedDailyTotals = listOf(
-                LedgerReportConvertedDailyTotal("2026-10-13", confirmed, provisional),
-                LedgerReportConvertedDailyTotal("2026-10-14", if (scenario == "refund") -120 else 9800, 0),
-            ),
-            fx = LedgerReportFx(
-                provider = "frankfurter",
-                complete = !partial,
-                unavailableSourceCurrencies = if (partial) listOf("EUR") else emptyList(),
-                lockedDateCount = 2,
-                observedDateRange = LedgerFxDateRange("2026-10-01", "2026-10-14"),
-                chineseBankBand = if (hasBand) ChineseBankBand(true, target, 100, 99, 101, 150) else null,
-            ),
+            sourceCoverage = mapOf("statement" to scenario.currencyTotals.size),
+            reportingCurrency = REPORTING_CURRENCY,
+            convertedTotals = convertedTotals(scenario),
+            convertedDailyTotals = convertedDailyTotals(scenario),
+            fx = fxDetails(scenario),
         )
     }
+
+    private fun scenarioFor(case: FxReportPreviewCase): ReportScenario = when (case) {
+        FxReportPreviewCase.AVAILABLE -> availableScenario()
+        FxReportPreviewCase.PARTIAL -> availableScenario().copy(
+            reviewCount = 1,
+            conversionComplete = false,
+            unavailableCurrencies = listOf("EUR"),
+        )
+        FxReportPreviewCase.UNAVAILABLE -> availableScenario().copy(
+            reviewCount = 1,
+            convertedTotalAvailable = false,
+            conversionComplete = false,
+            unavailableCurrencies = listOf("EUR"),
+        )
+        FxReportPreviewCase.PROVISIONAL -> ReportScenario(
+            currencyTotals = standardCurrencyTotals(includeProvisional = true),
+            confirmedMinorUnits = 34800L,
+            provisionalMinorUnits = 50L,
+            includeProvisional = true,
+        )
+        FxReportPreviewCase.REFUND -> availableScenario().copy(
+            confirmedMinorUnits = -200L,
+            secondDailyConfirmedMinorUnits = -120L,
+        )
+        FxReportPreviewCase.BOC_CNY -> ReportScenario(
+            currencyTotals = chineseBankCurrencyTotals(),
+            confirmedMinorUnits = 900L,
+            chineseBankBand = ChineseBankBand(true, REPORTING_CURRENCY, 100, 99, 101, 150),
+        )
+    }
+
+    private fun availableScenario() = ReportScenario(
+        currencyTotals = standardCurrencyTotals(),
+        confirmedMinorUnits = 34800L,
+    )
+
+    private fun standardCurrencyTotals(includeProvisional: Boolean = false) = listOf(
+        LedgerReportCurrencyTotal(
+            "USD",
+            15000,
+            if (includeProvisional) 2500 else 0,
+            2,
+            if (includeProvisional) 1 else 0,
+        ),
+        LedgerReportCurrencyTotal("CAD", 7200, 0, 1, 0),
+    )
+
+    private fun chineseBankCurrencyTotals() = listOf(
+        LedgerReportCurrencyTotal("CNY", 200, 0, 1, 0),
+        LedgerReportCurrencyTotal("JPY", 2100, 0, 1, 0),
+    )
+
+    private fun convertedTotals(scenario: ReportScenario): LedgerReportConvertedTotals? {
+        if (!scenario.convertedTotalAvailable) return null
+        return LedgerReportConvertedTotals(
+            scenario.confirmedMinorUnits,
+            scenario.provisionalMinorUnits,
+            scenario.currencyTotals.size,
+            if (scenario.provisionalMinorUnits == 0L) 0 else 1,
+        )
+    }
+
+    private fun convertedDailyTotals(scenario: ReportScenario) = listOf(
+        LedgerReportConvertedDailyTotal(
+            "2026-10-13",
+            scenario.confirmedMinorUnits,
+            scenario.provisionalMinorUnits,
+        ),
+        LedgerReportConvertedDailyTotal("2026-10-14", scenario.secondDailyConfirmedMinorUnits, 0),
+    )
+
+    private fun fxDetails(scenario: ReportScenario) = LedgerReportFx(
+        provider = "frankfurter",
+        complete = scenario.conversionComplete,
+        unavailableSourceCurrencies = scenario.unavailableCurrencies,
+        lockedDateCount = 2,
+        observedDateRange = LedgerFxDateRange("2026-10-01", "2026-10-14"),
+        chineseBankBand = scenario.chineseBankBand,
+    )
+
+    private data class ReportScenario(
+        val currencyTotals: List<LedgerReportCurrencyTotal>,
+        val confirmedMinorUnits: Long,
+        val provisionalMinorUnits: Long = 0L,
+        val includeProvisional: Boolean = false,
+        val reviewCount: Int = 0,
+        val convertedTotalAvailable: Boolean = true,
+        val conversionComplete: Boolean = true,
+        val unavailableCurrencies: List<String> = emptyList(),
+        val chineseBankBand: ChineseBankBand? = null,
+        val secondDailyConfirmedMinorUnits: Long = 9800L,
+    )
+
+    private const val REPORTING_CURRENCY = "CAD"
 }

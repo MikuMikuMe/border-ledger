@@ -83,7 +83,11 @@ describe('Android React Native production surface', () => {
     expect(login).toContain('heroOffset.value = 16');
     expect(login).toContain('cardOffset.value = 24');
     expect(login).toContain('cardScale.value = 0.985');
-    expect(login).toContain('if (display.reducedMotion)');
+    expect(login).toContain('useLoginEntrance(display.reducedMotion)');
+    expect(login).toContain('if (reducedMotion)');
+    expect(login).toContain('brandOpacity.value = heroOpacity.value = cardOpacity.value = 1;');
+    expect(login).toContain('brandOffset.value = heroOffset.value = cardOffset.value = 0;');
+    expect(login).toContain('cardScale.value = 1;');
   });
 
   it('uses Android safe areas, real system bars, and the existing appearance modes', () => {
@@ -122,11 +126,12 @@ describe('Android React Native production surface', () => {
 
   it('recovers a Plaid callback from encrypted native state with its original idempotency key', () => {
     expect(plaidResultStore).toContain('SecureRecordPort');
-    expect(externalServices).toContain('plaidResultStore.save(owner,id,publicToken)');
+    expect(externalServices).toContain('plaidResultStore.save(handoff.owner, handoff.id, publicToken.value)');
     expect(externalServices).toContain('recoverPendingPlaidResult()');
-    expect(externalServices).toContain('retryExternalWithSameIdempotency(id,owner)');
+    expect(externalServices).toContain('retryExternalWithSameIdempotency(handoff.key)');
     expect(externalServices).not.toContain('if(records.read(marker)!=null) return@withOwner');
     expect(bridgeOperationJournal).toContain('Only an unresolved external operation can be reconciled.');
-    expect(detailsViews).toContain("outcome==='reconciliation_required'");
+    expect(detailsViews).toContain("reconciliation_required:'The bank connection is being reconciled.");
+    expect(detailsViews).toContain("link?.state==='reconciliation_required'");
   });
 });

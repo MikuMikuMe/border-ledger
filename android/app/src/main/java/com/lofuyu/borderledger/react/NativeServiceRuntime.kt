@@ -13,13 +13,20 @@ import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.util.UUID
 
+/** Names the bridge values whose wire representation intentionally remains a String. */
+typealias OwnerGeneration = String
+typealias OperationId = String
+typealias OperationKind = String
+typealias OperationFingerprint = String
+typealias PendingDestination = String?
+
 interface NativeServiceHost {
     fun openBrowser(uri: Uri)
-    fun launchImport(operationId: String)
-    fun launchExport(operationId: String)
+    fun launchImport(operationId: OperationId)
+    fun launchExport(operationId: OperationId)
     suspend fun launchPlaid(
         linkToken: String,
-        operationId: String,
+        operationId: OperationId,
         onProviderLaunchStarted: suspend () -> Unit,
     ): com.lofuyu.borderledger.bank.PlaidLinkResult
     fun openNotificationSettings()
@@ -36,9 +43,9 @@ internal class OwnerScopedFileState(
     private val onReset: () -> Unit = {},
 ) {
     private val mutex = Mutex()
-    private var owner: String? = null
+    private var owner: OwnerGeneration? = null
 
-    suspend fun bindCurrent(ownerId: String) = mutex.withLock {
+    suspend fun bindCurrent(ownerId: OwnerGeneration) = mutex.withLock {
         if (owner != ownerId) {
             onReset()
             owner = ownerId
@@ -46,7 +53,7 @@ internal class OwnerScopedFileState(
     }
 
     suspend fun <R> runCurrent(
-        ownerId: String,
+        ownerId: OwnerGeneration,
         isCurrent: suspend () -> Boolean = { true },
         block: suspend () -> R,
     ): R = mutex.withLock {
@@ -61,7 +68,7 @@ internal class OwnerScopedFileState(
         block()
     }
 
-    suspend fun <R> runBound(ownerId: String, block: suspend () -> R): R = mutex.withLock {
+    suspend fun <R> runBound(ownerId: OwnerGeneration, block: suspend () -> R): R = mutex.withLock {
         check(owner == ownerId) { "file state belongs to a different owner generation" }
         block()
     }
@@ -91,14 +98,14 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
     }
     private var sequence = 0L
 
-    suspend fun ownerGeneration(): String = generationMutex.withLock {
+    suspend fun ownerGeneration(): OwnerGeneration = generationMutex.withLock {
         if(signingOut || container.ownerSessionManager.state.value !is OwnerSessionState.SignedIn) throw BridgeFailure("not_signed_in")
         container.bridgeRecords.read(GENERATION)?.decodeToString() ?: UUID.randomUUID().toString().also {
             container.bridgeRecords.write(GENERATION, it.encodeToByteArray())
         }
     }
-    suspend fun currentGeneration(): String? = generationMutex.withLock { if(signingOut) null else container.bridgeRecords.read(GENERATION)?.decodeToString() }
-    suspend fun beginLogin(staySignedIn: Boolean, destination: String?): com.lofuyu.borderledger.auth.LoginLaunch = ownerWorkMutex.withLock {
+    suspend fun currentGeneration(): OwnerGeneration? = generationMutex.withLock { if(signingOut) null else container.bridgeRecords.read(GENERATION)?.decodeToString() }
+    suspend fun beginLogin(staySignedIn: Boolean, destination: PendingDestination): com.lofuyu.borderledger.auth.LoginLaunch = ownerWorkMutex.withLock {
         if(container.ownerSessionManager.state.value !is OwnerSessionState.SignedIn) generationMutex.withLock {
             container.bridgeRecords.delete(GENERATION)
         }
@@ -145,7 +152,7 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
             BridgePayloads.files(container.importRepository.state.value,container.exportCoordinator.state.value)
         }
     }
-    suspend fun fileDraft(expectedOwner: String? = null): com.lofuyu.borderledger.imports.ImportDraft? {
+    suspend fun fileDraft(expectedOwner: OwnerGeneration? = null): com.lofuyu.borderledger.imports.ImportDraft? {
         val owner=expectedOwner ?: ownerGeneration()
         return if (expectedOwner == null) fileState.runCurrent(owner, isCurrent = { isCurrentOwner(owner) }) {
             check(currentGeneration()==owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
@@ -164,7 +171,7 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
             result
         }
     }
-    suspend fun <T> withFiles(expectedOwner: String, block: suspend () -> T): T {
+    suspend fun <T> withFiles(expectedOwner: OwnerGeneration, block: suspend () -> T): T {
         check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
         return fileState.runCurrent(expectedOwner, isCurrent = { isCurrentOwner(expectedOwner) }) {
             check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
@@ -173,26 +180,28 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
             result
         }
     }
-    suspend fun <T> withOwner(expectedOwner: String, block: suspend () -> T): T = ownerWorkMutex.withLock {
+    suspend fun <T> withOwner(expectedOwner: OwnerGeneration, block: suspend () -> T): T = ownerWorkMutex.withLock {
         check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
         val result=block()
         check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
         result
     }
 
-    private suspend fun isCurrentOwner(owner: String): Boolean =
+    private suspend fun isCurrentOwner(owner: OwnerGeneration): Boolean =
         currentGeneration()==owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn
 
     /** Keep the validated selection/fingerprint stable through journal submission. */
-    internal suspend fun writeFiles(id: String, kind: String, fingerprint: (com.lofuyu.borderledger.imports.ImportDraft?) -> String,
-        validate: (com.lofuyu.borderledger.imports.ImportDraft?) -> Unit, block: suspend () -> String?): Map<String,Any?> {
+    internal suspend fun writeFiles(request: FileWriteRequest): Map<String,Any?> {
         val owner=ownerGeneration()
         return ownerWorkMutex.withLock {
             val result=withFiles(owner) {
                 val draft=BridgePayloads.importDraft(container.importRepository.state.value)
-                val result=container.bridgeOperations.startValidated(id,kind,fingerprint(draft),owner,{validate(draft)}) {
+                val result=container.bridgeOperations.startValidated(
+                    BridgeOperationRequest(request.id, request.kind, request.fingerprint(draft), owner),
+                    { request.validate(draft) },
+                ) {
                     check(currentGeneration()==owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
-                    block()
+                    request.block()
                 }
                 BridgePayloads.operation(result)
             }
@@ -201,20 +210,16 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
             result
         }
     }
-    suspend fun write(id: String, kind: String, fingerprint: String, block: suspend () -> String?): Map<String, Any?> =
-        writeInternal(id, kind, fingerprint, null, block)
-
-    suspend fun write(id: String, kind: String, fingerprint: String, expectedOwner: String, block: suspend () -> String?): Map<String, Any?> =
-        writeInternal(id, kind, fingerprint, expectedOwner, block)
-
-    private suspend fun writeInternal(id: String, kind: String, fingerprint: String, expectedOwner: String?, block: suspend () -> String?): Map<String, Any?> {
+    internal suspend fun write(request: WriteRequest): Map<String, Any?> {
         val owner = ownerGeneration()
-        require(expectedOwner == null || expectedOwner == owner)
+        require(request.expectedOwner == null || request.expectedOwner == owner)
         return ownerWorkMutex.withLock {
             check(currentGeneration() == owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
-            val result = container.bridgeOperations.start(id, kind, fingerprint, owner) {
+            val result = container.bridgeOperations.start(
+                BridgeOperationRequest(request.id, request.kind, request.fingerprint, owner),
+            ) {
                 check(currentGeneration() == owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
-                block()
+                request.block()
             }
             changes.emit("all")
             check(currentGeneration() == owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
@@ -223,3 +228,19 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
     }
     companion object { private const val GENERATION = "rn_owner_generation_v1" }
 }
+
+internal data class FileWriteRequest(
+    val id: OperationId,
+    val kind: OperationKind,
+    val fingerprint: (com.lofuyu.borderledger.imports.ImportDraft?) -> OperationFingerprint,
+    val validate: (com.lofuyu.borderledger.imports.ImportDraft?) -> Unit,
+    val block: suspend () -> String?,
+)
+
+internal data class WriteRequest(
+    val id: OperationId,
+    val kind: OperationKind,
+    val fingerprint: OperationFingerprint,
+    val expectedOwner: OwnerGeneration? = null,
+    val block: suspend () -> String?,
+)

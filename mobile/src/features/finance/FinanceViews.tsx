@@ -86,9 +86,20 @@ export function ActivityView({dark,state,facetRows=state.data?.items??[],filters
   </View>;
 }
 export function MutationStatus({dark,mutation}:Theme&{mutation:MutationState}) {
-  const message=mutation.status==='revision_conflict'?'This record changed elsewhere. Your draft is preserved; close and refresh before saving again.':mutation.status==='rejected'?'The server rejected this request. Refresh the data and review before trying again.':mutation.status==='completed'?'Saved. Refresh to read the current server revision.':mutation.status==='ready'?'':mutation.status==='checking'?'Checking native operation receipts…':mutation.status==='saving'?'Saving…':'The submitted operation needs reconciliation. Refresh status; do not submit it again.';
-  return message?<View accessibilityLiveRegion="polite"><Copy dark={dark} error={mutation.status==='revision_conflict'||mutation.status==='rejected'||mutation.status==='reconciliation_required'}>{message}</Copy></View>:null;
+  const message=mutationMessage(mutation.status);
+  return message?<View accessibilityLiveRegion="polite"><Copy dark={dark} error={mutationError(mutation.status)}>{message}</Copy></View>:null;
 }
+const mutationMessages:Record<string,string>={
+  revision_conflict:'This record changed elsewhere. Your draft is preserved; close and refresh before saving again.',
+  rejected:'The server rejected this request. Refresh the data and review before trying again.',
+  completed:'Saved. Refresh to read the current server revision.',
+  ready:'',
+  checking:'Checking native operation receipts…',
+  saving:'Saving…',
+  reconciliation_required:'The submitted operation needs reconciliation. Refresh status; do not submit it again.',
+};
+function mutationMessage(status:string){return mutationMessages[status]??mutationMessages.reconciliation_required;}
+function mutationError(status:string){return status==='revision_conflict'||status==='rejected'||status==='reconciliation_required';}
 export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,onOpen,onLoadMore,selected,onClose,onClassify,mutation}:Theme&{state:LoadState<RecurringData>;filters:{currency?:string|null;classification?:string|null};currencies:string[];onRetry():void;onFilter(value:{currency?:string|null;classification?:string|null}):void;onOpen(id:string):void;onLoadMore():void;selected?:Stream|null;onClose?():void;onClassify?(classification:string):void;mutation?:MutationState}) {
   const page=state.data?.page,summary=state.data?.summary;
   const row=(s:Stream,support:string,key:string)=><Card dark={dark} key={key}><Action dark={dark} label={`Open recurring: ${s.merchantName??'Merchant unavailable'}`} onPress={()=>onOpen(s.id)}/><Copy dark={dark}>{s.currency} · {s.classification} · {s.frequency} · Source {s.sourceStatus}</Copy><Copy dark={dark}>Expected source amount: {s.averageAmountMinor===null?'unavailable':formatMoney(s.averageAmountMinor,s.currency)}</Copy><Copy dark={dark}>Next expected: {s.predictedNextDate??'unavailable'} · {support}</Copy></Card>;

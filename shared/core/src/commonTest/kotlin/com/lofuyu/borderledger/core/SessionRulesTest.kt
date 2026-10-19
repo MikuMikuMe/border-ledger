@@ -4,19 +4,19 @@ import kotlin.test.*
 
 class SessionRulesTest {
     @Test fun callbackWithoutPendingStateOnlyAcceptsCompletedDigest() {
-        assertEquals(CallbackDecision.Duplicate, decideCallback(null, "done", "done", "code", null))
-        assertEquals(CallbackDecision.Rejected(false), decideCallback(null, "other", "done", "code", null))
+        assertEquals(CallbackDecision.Duplicate, decideCallback(CallbackInput(null, "done", "done", "code", null)))
+        assertEquals(CallbackDecision.Rejected(false), decideCallback(CallbackInput(null, "other", "done", "code", null)))
     }
 
     @Test fun mismatchRemainsRecoverableAndDoesNotCancelPendingLogin() {
-        assertEquals(CallbackDecision.Rejected(true), decideCallback("pending", "wrong", null, "code", "access_denied"))
+        assertEquals(CallbackDecision.Rejected(true), decideCallback(CallbackInput("pending", "wrong", null, "code", "access_denied")))
     }
 
     @Test fun verifiedStateControlsErrorAndCodeOutcomes() {
-        assertEquals(CallbackDecision.Canceled, decideCallback("s", "s", null, null, "access_denied"))
-        assertEquals(CallbackDecision.FailedReturn, decideCallback("s", "s", null, "code", "other"))
-        assertEquals(CallbackDecision.Rejected(true), decideCallback("s", "s", null, " ", null))
-        assertEquals(CallbackDecision.Exchange, decideCallback("s", "s", null, "code", null))
+        assertEquals(CallbackDecision.Canceled, decideCallback(CallbackInput("s", "s", null, null, "access_denied")))
+        assertEquals(CallbackDecision.FailedReturn, decideCallback(CallbackInput("s", "s", null, "code", "other")))
+        assertEquals(CallbackDecision.Rejected(true), decideCallback(CallbackInput("s", "s", null, " ", null)))
+        assertEquals(CallbackDecision.Exchange, decideCallback(CallbackInput("s", "s", null, "code", null)))
     }
 
     @Test fun expiryIsStrictAndInvalidTimestampsAreExpired() {

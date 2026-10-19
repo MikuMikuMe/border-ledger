@@ -3,6 +3,7 @@ package com.lofuyu.borderledger.auth
 import com.lofuyu.borderledger.api.OwnerCodeExchangeRequest
 import com.lofuyu.borderledger.api.OwnerLoginClient
 import com.lofuyu.borderledger.api.OwnerLoginStartRequest
+import com.lofuyu.borderledger.api.OwnerLoginStartResponse
 import com.lofuyu.borderledger.api.OwnerRefreshRequest
 import com.lofuyu.borderledger.api.OwnerTokenResponse
 import com.lofuyu.borderledger.api.RevocationGrantType
@@ -19,6 +20,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import com.lofuyu.borderledger.core.CoreClock
 import com.lofuyu.borderledger.core.CoreCrypto
+import com.lofuyu.borderledger.core.CallbackInput
 import com.lofuyu.borderledger.core.CallbackDecision
 import com.lofuyu.borderledger.core.decideCallback
 
@@ -50,28 +52,7 @@ open class OwnerSessionCore(
                 session = store.readSession()
                 pendingLogin = store.readPendingLogin()
                 completedCallback = store.readCompletedCallback()
-                val pendingRotation = store.readPendingRotation()
-                val current = session
-                if (current != null && pendingRotation != null) {
-                    try {
-                        refreshLocked(pendingRotation)
-                    } catch (error: Throwable) {
-                        transitionAfterRefreshFailure(error)
-                    }
-                } else if (current != null && accessIsValid(current)) {
-                    publishSignedIn(current)
-                } else if (current != null) {
-                    try {
-                        refreshLocked(null)
-                    } catch (error: Throwable) {
-                        transitionAfterRefreshFailure(error)
-                    }
-                } else if (pendingLogin != null) {
-                    val pending = requireNotNull(pendingLogin)
-                    _state.value = OwnerSessionState.AwaitingBrowser(pending.requestId, pending.expiresAt)
-                } else {
-                    publishSignedOut(SignedOutReason.Explicit)
-                }
+                restoreStoredState(store.readPendingRotation())
                 initialized = true
             } catch (_: SecureStorageException) {
                 _state.value = OwnerSessionState.StorageFailure(StorageOperation.Restore)
@@ -79,45 +60,55 @@ open class OwnerSessionCore(
         }
     }
 
+    private suspend fun restoreStoredState(pendingRotation: PendingOwnerRotation?) {
+        val current = session
+        when {
+            current != null -> restoreExistingSession(current, pendingRotation)
+            pendingLogin != null -> publishAwaitingBrowser(requireNotNull(pendingLogin))
+            else -> publishSignedOut(SignedOutReason.Explicit)
+        }
+    }
+
+    private suspend fun restoreExistingSession(current: OwnerSessionRecord, pendingRotation: PendingOwnerRotation?) {
+        when {
+            pendingRotation != null -> refreshSafely(pendingRotation)
+            accessIsValid(current) -> publishSignedIn(current)
+            else -> refreshSafely(null)
+        }
+    }
+
+    private suspend fun refreshSafely(existing: PendingOwnerRotation?) {
+        try {
+            refreshLocked(existing)
+        } catch (error: Throwable) {
+            transitionAfterRefreshFailure(error)
+        }
+    }
+
+    private fun publishAwaitingBrowser(pending: PendingOwnerLogin) {
+        _state.value = OwnerSessionState.AwaitingBrowser(pending.requestId, pending.expiresAt)
+    }
+
     suspend fun beginLogin(staySignedIn: Boolean, pendingDestination: String?): LoginLaunch {
         mutex.withLock {
             _state.value = OwnerSessionState.SigningIn
             val stateToken = randomToken(32)
             val verifier = randomToken(48)
-            val challenge = crypto.pkceChallenge(verifier)
-            val idempotencyKey = randomToken(24)
+            val request = OwnerLoginStartRequest(
+                codeChallenge = crypto.pkceChallenge(verifier),
+                state = stateToken,
+                deviceId = deviceId,
+                environment = environment,
+            )
             return try {
-                val response = try {
-                    withTimeout(LOGIN_START_TIMEOUT_MILLIS) {
-                        client.startLogin(
-                            OwnerLoginStartRequest(
-                                codeChallenge = challenge,
-                                state = stateToken,
-                                deviceId = deviceId,
-                                environment = environment,
-                            ),
-                        )
-                    }
-                } catch (_: TimeoutCancellationException) {
-                    _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.StartFailed)
-                    throw TransportFailure.Offline
-                }
-                val pending = PendingOwnerLogin(
-                    requestId = response.requestId,
-                    state = stateToken,
-                    verifier = verifier,
-                    idempotencyKey = idempotencyKey,
-                    deviceId = deviceId,
-                    callbackUrl = callbackUrl,
-                    environment = environment,
-                    staySignedIn = staySignedIn,
-                    expiresAt = response.expiresAt,
-                    pendingDestination = pendingDestination,
+                val response = startLogin(request)
+                val pending = buildPendingLogin(
+                    PendingLoginDraft(response, stateToken, verifier, staySignedIn, pendingDestination),
                 )
                 store.writePendingLogin(pending)
                 pendingLogin = pending
                 initialized = true
-                _state.value = OwnerSessionState.AwaitingBrowser(response.requestId, response.expiresAt)
+                publishAwaitingBrowser(pending)
                 LoginLaunch(response.requestId, response.authorizationUrl, response.expiresAt)
             } catch (error: TransportFailure) {
                 val startTimedOut = (_state.value as? OwnerSessionState.SignedOut)?.reason == SignedOutReason.StartFailed
@@ -135,77 +126,138 @@ open class OwnerSessionCore(
         }
     }
 
+    private suspend fun startLogin(request: OwnerLoginStartRequest): OwnerLoginStartResponse = try {
+        withTimeout(LOGIN_START_TIMEOUT_MILLIS) { client.startLogin(request) }
+    } catch (_: TimeoutCancellationException) {
+        _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.StartFailed)
+        throw TransportFailure.Offline
+    }
+
+    private data class PendingLoginDraft(
+        val response: OwnerLoginStartResponse,
+        val stateToken: String,
+        val verifier: String,
+        val staySignedIn: Boolean,
+        val pendingDestination: String?,
+    )
+
+    private fun buildPendingLogin(draft: PendingLoginDraft): PendingOwnerLogin = PendingOwnerLogin(
+        requestId = draft.response.requestId,
+        state = draft.stateToken,
+        verifier = draft.verifier,
+        idempotencyKey = randomToken(24),
+        deviceId = deviceId,
+        callbackUrl = callbackUrl,
+        environment = environment,
+        staySignedIn = draft.staySignedIn,
+        expiresAt = draft.response.expiresAt,
+        pendingDestination = draft.pendingDestination,
+    )
+
     protected suspend fun handleVerifiedCallback(verify: () -> VerifiedCallback): CallbackResult {
-        return mutex.withLock {
-            val verified = try {
-                verify()
-            } catch (_: CallbackValidationException) {
-                _state.value = OwnerSessionState.CallbackRejected(recoverable = false)
-                return@withLock CallbackResult.CallbackRejected
+        return mutex.withLock { handleVerifiedCallbackLocked(verify) }
+    }
+
+    private suspend fun handleVerifiedCallbackLocked(verify: () -> VerifiedCallback): CallbackResult {
+        val verified = validateCallback(verify) ?: return CallbackResult.CallbackRejected
+        return try {
+            if (pendingLogin == null) pendingLogin = store.readPendingLogin()
+            when (val decision = callbackDecision(verified)) {
+                CallbackDecision.Duplicate -> CallbackResult.DuplicateIgnored
+                is CallbackDecision.Rejected -> rejectCallback(decision.recoverable)
+                CallbackDecision.Canceled -> completeFailedCallback(CallbackResult.Canceled, SignedOutReason.Canceled)
+                CallbackDecision.FailedReturn -> completeFailedCallback(CallbackResult.FailedReturn, SignedOutReason.FailedReturn)
+                CallbackDecision.Exchange -> exchangeCallback(verified)
             }
-            try {
-                if (pendingLogin == null) pendingLogin = store.readPendingLogin()
-                val completed = if (pendingLogin == null && verified.state != null && isCompletedState(verified.state)) verified.state else null
-                val decision = decideCallback(pendingLogin?.state, verified.state, completed, verified.code, verified.error)
-                if (decision == CallbackDecision.Duplicate) return@withLock CallbackResult.DuplicateIgnored
-                if (decision is CallbackDecision.Rejected) {
-                    _state.value = OwnerSessionState.CallbackRejected(recoverable = decision.recoverable)
-                    return@withLock CallbackResult.CallbackRejected
-                }
-                if (decision == CallbackDecision.Canceled || decision == CallbackDecision.FailedReturn) {
-                    store.clearPendingLogin()
-                    pendingLogin = null
-                    val result = if (decision == CallbackDecision.Canceled) CallbackResult.Canceled else CallbackResult.FailedReturn
-                    _state.value = OwnerSessionState.SignedOut(
-                        pendingRevocations = store.readPendingRevocations().size,
-                        reason = if (result == CallbackResult.Canceled) SignedOutReason.Canceled else SignedOutReason.FailedReturn,
-                    )
-                    return@withLock result
-                }
-                val pending = requireNotNull(pendingLogin)
-                val code = requireNotNull(verified.code)
-                _state.value = OwnerSessionState.Exchanging
-                val response = try {
-                    client.exchangeCode(
-                        OwnerCodeExchangeRequest(
-                            requestId = pending.requestId,
-                            code = code,
-                            verifier = pending.verifier,
-                            state = pending.state,
-                            deviceId = pending.deviceId,
-                            environment = pending.environment,
-                            idempotencyKey = pending.idempotencyKey,
-                            staySignedIn = pending.staySignedIn,
-                        ),
-                    )
-                } catch (_: TransportFailure.Unauthorized) {
-                    _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.UnapprovedIdentity)
-                    return@withLock CallbackResult.ExchangeFailed
-                } catch (_: TransportFailure) {
-                    _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.ExchangeFailed)
-                    return@withLock CallbackResult.ExchangeFailed
-                }
-                try {
-                    val record = response.toRecord(pending.pendingDestination, pending.deviceId)
-                    store.writeSession(record)
-                    val marker = CompletedCallbackMarker(stateDigest(pending.state), clock.nowIso())
-                    store.writeCompletedCallback(marker)
-                    store.clearPendingLogin()
-                    session = record
-                    completedCallback = marker
-                    pendingLogin = null
-                    initialized = true
-                    publishSignedIn(record)
-                    CallbackResult.SignedIn
-                } catch (_: SecureStorageException) {
-                    _state.value = OwnerSessionState.StorageFailure(StorageOperation.LoginCommit)
-                    CallbackResult.StorageFailure
-                }
-            } catch (_: SecureStorageException) {
-                _state.value = OwnerSessionState.StorageFailure(StorageOperation.Callback)
-                CallbackResult.StorageFailure
-            }
+        } catch (_: SecureStorageException) {
+            _state.value = OwnerSessionState.StorageFailure(StorageOperation.Callback)
+            CallbackResult.StorageFailure
         }
+    }
+
+    private fun validateCallback(verify: () -> VerifiedCallback): VerifiedCallback? = try {
+        verify()
+    } catch (_: CallbackValidationException) {
+        _state.value = OwnerSessionState.CallbackRejected(recoverable = false)
+        null
+    }
+
+    private suspend fun callbackDecision(verified: VerifiedCallback): CallbackDecision {
+        val completed = completedState(verified)
+        return decideCallback(
+            CallbackInput(
+                pendingState = pendingLogin?.state,
+                returnedState = verified.state,
+                completedState = completed,
+                code = verified.code,
+                error = verified.error,
+            ),
+        )
+    }
+
+    private suspend fun completedState(verified: VerifiedCallback): String? {
+        if (pendingLogin != null) return null
+        val returnedState = verified.state ?: return null
+        return returnedState.takeIf { isCompletedState(it) }
+    }
+
+    private fun rejectCallback(recoverable: Boolean): CallbackResult {
+        _state.value = OwnerSessionState.CallbackRejected(recoverable)
+        return CallbackResult.CallbackRejected
+    }
+
+    private suspend fun completeFailedCallback(result: CallbackResult, reason: SignedOutReason): CallbackResult {
+        store.clearPendingLogin()
+        pendingLogin = null
+        _state.value = OwnerSessionState.SignedOut(
+            pendingRevocations = store.readPendingRevocations().size,
+            reason = reason,
+        )
+        return result
+    }
+
+    private suspend fun exchangeCallback(verified: VerifiedCallback): CallbackResult {
+        val pending = requireNotNull(pendingLogin)
+        val code = requireNotNull(verified.code)
+        _state.value = OwnerSessionState.Exchanging
+        val response = try {
+            client.exchangeCode(
+                OwnerCodeExchangeRequest(
+                    requestId = pending.requestId,
+                    code = code,
+                    verifier = pending.verifier,
+                    state = pending.state,
+                    deviceId = pending.deviceId,
+                    environment = pending.environment,
+                    idempotencyKey = pending.idempotencyKey,
+                    staySignedIn = pending.staySignedIn,
+                ),
+            )
+        } catch (_: TransportFailure.Unauthorized) {
+            _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.UnapprovedIdentity)
+            return CallbackResult.ExchangeFailed
+        } catch (_: TransportFailure) {
+            _state.value = OwnerSessionState.SignedOut(reason = SignedOutReason.ExchangeFailed)
+            return CallbackResult.ExchangeFailed
+        }
+        return commitExchange(response, pending)
+    }
+
+    private suspend fun commitExchange(response: OwnerTokenResponse, pending: PendingOwnerLogin): CallbackResult = try {
+        val record = response.toRecord(pending.pendingDestination, pending.deviceId)
+        store.writeSession(record)
+        val marker = CompletedCallbackMarker(stateDigest(pending.state), clock.nowIso())
+        store.writeCompletedCallback(marker)
+        store.clearPendingLogin()
+        session = record
+        completedCallback = marker
+        pendingLogin = null
+        initialized = true
+        publishSignedIn(record)
+        CallbackResult.SignedIn
+    } catch (_: SecureStorageException) {
+        _state.value = OwnerSessionState.StorageFailure(StorageOperation.LoginCommit)
+        CallbackResult.StorageFailure
     }
 
     suspend fun <T> withOwnerAuthorization(block: suspend (String) -> T): T? {
@@ -252,63 +304,87 @@ open class OwnerSessionCore(
         if (!initialized) restore()
         mutex.withLock {
             _state.value = OwnerSessionState.SigningOut
-            val current = session
-            val capture = try {
-                captureCredentials.current()
-            } catch (_: SecureStorageException) {
-                _state.value = OwnerSessionState.StorageFailure(StorageOperation.Logout)
-                return@withLock
-            }
-            try {
-                localData.pauseMonitoring()
-                localData.clearOwnerReadCache()
-                localData.retainEncryptedOutbox()
-            } catch (_: SecureStorageException) {
-                _state.value = OwnerSessionState.StorageFailure(StorageOperation.Logout)
-                return@withLock
-            }
-
-            if (current != null) {
-                val ownerIntent = RevocationIntent(
-                    grantType = RevocationGrantType.OwnerFamily,
-                    generation = current.revision,
-                    capability = current.revocationCapability,
-                    createdAt = clock.nowIso(),
-                )
-                try {
-                    client.logout(current.accessToken)
-                } catch (_: TransportFailure) {
-                    if (!queueRevocationSafely(ownerIntent)) return@withLock
-                }
-            }
-            if (capture != null) {
-                val captureIntent = RevocationIntent(
-                    grantType = RevocationGrantType.CaptureCredential,
-                    generation = capture.generation,
-                    capability = capture.revocationCapability,
-                    createdAt = clock.nowIso(),
-                )
-                try {
-                    client.revoke(captureIntent)
-                } catch (_: TransportFailure.StaleRevocation) {
-                    // The Worker rejected an old generation; it cannot revoke a newer grant.
-                } catch (_: TransportFailure) {
-                    if (!queueRevocationSafely(captureIntent)) return@withLock
-                }
-            }
-            try {
-                store.clearSession()
-                store.clearPendingLogin()
-                store.clearPendingRotation()
-                captureCredentials.clear()
-                session = null
-                pendingLogin = null
-                val pending = localData.pendingRevocationCount()
-                publishSignedOut(if (pending == 0) SignedOutReason.Explicit else SignedOutReason.Offline, pending)
-            } catch (_: SecureStorageException) {
-                _state.value = OwnerSessionState.StorageFailure(StorageOperation.Logout)
-            }
+            val context = prepareSignOut() ?: return@withLock
+            if (!revokeOwner(context.current)) return@withLock
+            if (!revokeCapture(context.capture)) return@withLock
+            finishSignOut()
         }
+    }
+
+    private data class SignOutContext(
+        val current: OwnerSessionRecord?,
+        val capture: CaptureCredentialRecord?,
+    )
+
+    private suspend fun prepareSignOut(): SignOutContext? {
+        val capture = try {
+            captureCredentials.current()
+        } catch (_: SecureStorageException) {
+            publishStorageFailure()
+            return null
+        }
+        return try {
+            localData.pauseMonitoring()
+            localData.clearOwnerReadCache()
+            localData.retainEncryptedOutbox()
+            SignOutContext(session, capture)
+        } catch (_: SecureStorageException) {
+            publishStorageFailure()
+            null
+        }
+    }
+
+    private suspend fun revokeOwner(current: OwnerSessionRecord?): Boolean {
+        if (current == null) return true
+        val intent = RevocationIntent(
+            grantType = RevocationGrantType.OwnerFamily,
+            generation = current.revision,
+            capability = current.revocationCapability,
+            createdAt = clock.nowIso(),
+        )
+        return try {
+            client.logout(current.accessToken)
+            true
+        } catch (_: TransportFailure) {
+            queueRevocationSafely(intent)
+        }
+    }
+
+    private suspend fun revokeCapture(capture: CaptureCredentialRecord?): Boolean {
+        if (capture == null) return true
+        val intent = RevocationIntent(
+            grantType = RevocationGrantType.CaptureCredential,
+            generation = capture.generation,
+            capability = capture.revocationCapability,
+            createdAt = clock.nowIso(),
+        )
+        return try {
+            client.revoke(intent)
+            true
+        } catch (_: TransportFailure.StaleRevocation) {
+            true
+        } catch (_: TransportFailure) {
+            queueRevocationSafely(intent)
+        }
+    }
+
+    private suspend fun finishSignOut() {
+        try {
+            store.clearSession()
+            store.clearPendingLogin()
+            store.clearPendingRotation()
+            captureCredentials.clear()
+            session = null
+            pendingLogin = null
+            val pending = localData.pendingRevocationCount()
+            publishSignedOut(if (pending == 0) SignedOutReason.Explicit else SignedOutReason.Offline, pending)
+        } catch (_: SecureStorageException) {
+            publishStorageFailure()
+        }
+    }
+
+    private fun publishStorageFailure() {
+        _state.value = OwnerSessionState.StorageFailure(StorageOperation.Logout)
     }
 
     suspend fun flushPendingRevocations() {

@@ -16,6 +16,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
+@JvmInline
+internal value class PlaidOperationId(val value: String)
+
+@JvmInline
+internal value class PlaidLinkToken(val value: String)
+
+internal data class PlaidLaunchRequest(
+    val token: PlaidLinkToken,
+    val operationId: PlaidOperationId?,
+    val onProviderLaunchStarted: suspend () -> Unit = {},
+)
+
+internal data class PlaidCallbackHandlers(
+    val onOrphanedResult: (PlaidLinkResult, PlaidOperationId?) -> Unit = { _, _ -> },
+    val onResultReceived: (PlaidOperationId?) -> Unit = {},
+)
+
 /**
  * Activity-scoped callback identity that survives Android state restoration.
  *
@@ -24,24 +41,24 @@ import kotlinx.coroutines.withContext
  * identity is deliberately rejected instead of consulting whichever bridge
  * operation happens to be pending now.
  */
-internal class PlaidCallbackIdentity(restoredOperationId: String? = null) {
-    private var operationId: String? = restoredOperationId
+internal class PlaidCallbackIdentity(restoredOperationId: PlaidOperationId? = null) {
+    private var operationId: PlaidOperationId? = restoredOperationId
 
-    fun begin(id: String) {
+    fun begin(id: PlaidOperationId) {
         check(operationId == null || operationId == id) { "A different Plaid operation is already active." }
         operationId = id
     }
 
-    fun snapshot(): String? = operationId
+    fun snapshot(): PlaidOperationId? = operationId
 
-    fun claim(adapterOperationId: String?): String? {
+    fun claim(adapterOperationId: PlaidOperationId?): PlaidOperationId? {
         val expected = operationId ?: return null
         if (adapterOperationId != null && adapterOperationId != expected) return null
         operationId = null
         return expected
     }
 
-    fun complete(id: String) {
+    fun complete(id: PlaidOperationId) {
         if (operationId == id) operationId = null
     }
 }
@@ -55,31 +72,25 @@ internal class PlaidCallbackIdentity(restoredOperationId: String? = null) {
  * Only the short-lived public token crosses back to the coordinator; provider
  * access tokens remain on the Worker.
  */
-class OfficialPlaidLinkLauncher(
+class OfficialPlaidLinkLauncher internal constructor(
     private val activity: ComponentActivity,
-    private val onOrphanedResult: (PlaidLinkResult, String?) -> Unit = { _, _ -> },
-    private val onResultReceived: (String?) -> Unit = {},
+    private val callbacks: PlaidCallbackHandlers = PlaidCallbackHandlers(),
 ) : PlaidLinkLauncher {
-    constructor(activity: ComponentActivity, onOrphanedResult: (PlaidLinkResult) -> Unit) : this(
-        activity,
-        { result, _ -> onOrphanedResult(result) },
-    )
-
     private var pendingResult: CompletableDeferred<PlaidLinkResult>? = null
-    private var pendingOperationId: String? = null
+    private var pendingOperationId: PlaidOperationId? = null
 
     private val openLink: ActivityResultLauncher<PlaidSession> =
         activity.registerForActivityResult(OpenPlaidLink()) { result ->
             val mapped = mapResult(result)
             // Mark the callback synchronously before Activity resume can expose
             // a stale cancellation action to the UI.
-            onResultReceived(pendingOperationId)
+            callbacks.onResultReceived(pendingOperationId)
             val pending = pendingResult
             if (pending == null) {
                 // ActivityResult re-delivery after process recreation has no
                 // in-memory waiter. Let the new Activity resume the guarded
                 // server exchange rather than dropping a valid Link result.
-                onOrphanedResult(mapped, pendingOperationId)
+                callbacks.onOrphanedResult(mapped, pendingOperationId)
             } else {
                 pendingResult = null
                 pending.complete(mapped)
@@ -87,45 +98,31 @@ class OfficialPlaidLinkLauncher(
         }
 
     override suspend fun launch(linkToken: String): PlaidLinkResult = withContext(Dispatchers.Main.immediate) {
-        launchInternal(linkToken, pendingOperationId)
+        launchInternal(PlaidLaunchRequest(PlaidLinkToken(linkToken), pendingOperationId))
     }
 
     /** RN supplies the persisted native operation ID so a callback cannot be rebound to a newer flow. */
-    suspend fun launch(linkToken: String, operationId: String): PlaidLinkResult = withContext(Dispatchers.Main.immediate) {
-        launchInternal(linkToken, operationId) {}
+    internal suspend fun launch(request: PlaidLaunchRequest): PlaidLinkResult = withContext(Dispatchers.Main.immediate) {
+        launchInternal(request)
     }
 
-    /** Persist the provider-open boundary only after preloading, immediately before launching LinkKit. */
-    suspend fun launch(
-        linkToken: String,
-        operationId: String,
-        onProviderLaunchStarted: suspend () -> Unit,
-    ): PlaidLinkResult = withContext(Dispatchers.Main.immediate) {
-        launchInternal(linkToken, operationId, onProviderLaunchStarted)
-    }
-
-    private suspend fun launchInternal(
-        linkToken: String,
-        operationId: String?,
-        onProviderLaunchStarted: suspend () -> Unit = {},
-    ): PlaidLinkResult {
+    private suspend fun launchInternal(request: PlaidLaunchRequest): PlaidLinkResult {
         check(pendingResult == null) { "A Plaid Link session is already open." }
-        pendingOperationId = operationId
+        pendingOperationId = request.operationId
 
-        val loaded = CompletableDeferred<Unit>()
-        val session = Plaid.createPlaidLinkSession(
-            activity,
-            linkTokenConfiguration {
-                token = linkToken
-                onLoad = OnLoadCallback { loaded.complete(Unit) }
-            },
-        )
-        val preloaded = withTimeoutOrNull(PRELOAD_TIMEOUT_MILLIS) { loaded.await() }
-        if (preloaded == null) {
+        val session = preloadSession(request.token)
+        if (session == null) {
             pendingOperationId = null
             return PlaidLinkResult.Failed("Plaid Link did not finish loading. Try again when online.")
         }
 
+        return awaitSession(session, request.onProviderLaunchStarted)
+    }
+
+    private suspend fun awaitSession(
+        session: PlaidSession,
+        onProviderLaunchStarted: suspend () -> Unit,
+    ): PlaidLinkResult {
         val result = CompletableDeferred<PlaidLinkResult>()
         pendingResult = result
         return try {
@@ -149,6 +146,18 @@ class OfficialPlaidLinkLauncher(
                 pendingOperationId = null
             }
         }
+    }
+
+    private suspend fun preloadSession(linkToken: PlaidLinkToken): PlaidSession? {
+        val loaded = CompletableDeferred<Unit>()
+        val session = Plaid.createPlaidLinkSession(
+            activity,
+            linkTokenConfiguration {
+                token = linkToken.value
+                onLoad = OnLoadCallback { loaded.complete(Unit) }
+            },
+        )
+        return withTimeoutOrNull(PRELOAD_TIMEOUT_MILLIS) { loaded.await() }?.let { session }
     }
 
     /** A recreated RN Activity receives orphaned results through the persisted native operation. */

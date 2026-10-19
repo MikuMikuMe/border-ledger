@@ -35,30 +35,34 @@ fun LedgerSnapshot.searchTransactions(query: String): List<LedgerTransaction> {
 }
 
 fun LedgerSnapshot.filterTransactions(filters: ActivityFilters): List<LedgerTransaction> =
-    searchTransactions(filters.query).filter { transaction ->
-        (filters.currency == null || transaction.currency == filters.currency) &&
-            (filters.category == null || transaction.category == filters.category) &&
-            (filters.status == null || transaction.status == filters.status) &&
-            (filters.source == null || transaction.sourceLabel == filters.source)
-    }
+    searchTransactions(filters.query).filter { it.matchesFacets(filters) }
 
 fun List<LedgerTransaction>.filterTransactions(filters: ActivityFilters): List<LedgerTransaction> {
     val needle = filters.query.trim().lowercase()
     return filter { transaction ->
-        val matchesQuery = needle.isEmpty() || listOfNotNull(
-            transaction.id,
-            transaction.merchant,
-            transaction.accountLabel,
-            transaction.currency,
-            transaction.status,
-            transaction.sourceLabel,
-            transaction.category,
-            transaction.note,
-        ).any { it.lowercase().contains(needle) }
-        matchesQuery &&
-            (filters.currency == null || transaction.currency == filters.currency) &&
-            (filters.category == null || transaction.category == filters.category) &&
-            (filters.status == null || transaction.status == filters.status) &&
-            (filters.source == null || transaction.sourceLabel == filters.source)
+        transaction.matchesQuery(needle, includeId = true) && transaction.matchesFacets(filters)
     }
 }
+
+private fun LedgerTransaction.matchesQuery(needle: String, includeId: Boolean): Boolean {
+    if (needle.isEmpty()) return true
+    val searchableFields = listOfNotNull(
+        id.takeIf { includeId },
+        merchant,
+        accountLabel,
+        currency,
+        status,
+        sourceLabel,
+        category,
+        note,
+    )
+    return searchableFields.any { it.lowercase().contains(needle) }
+}
+
+private fun LedgerTransaction.matchesFacets(filters: ActivityFilters): Boolean =
+    filters.currency.matchesValue(currency) &&
+        filters.category.matchesValue(category) &&
+        filters.status.matchesValue(status) &&
+        filters.source.matchesValue(sourceLabel)
+
+private fun String?.matchesValue(actual: String?): Boolean = this == null || this == actual

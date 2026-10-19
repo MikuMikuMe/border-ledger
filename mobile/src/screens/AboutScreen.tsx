@@ -5,22 +5,23 @@ import { Text } from '@/components/ui/text';
 import { DARK_TEXT_COLORS, statusBarStyle } from '@/features/auth/presentationPolicy';
 
 export function AboutScreen({ dark = false }: { dark?: boolean }) {
+  const theme = dark ? aboutDarkTheme : aboutLightTheme;
   return (
-    <SafeAreaView style={[styles.safe, dark && styles.safeDark]} edges={['bottom', 'left', 'right']}>
+    <SafeAreaView style={[styles.safe, theme.safe]} edges={['bottom', 'left', 'right']}>
       <StatusBar barStyle={statusBarStyle('about', dark)} />
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={[styles.eyebrow, dark && styles.accentDark]}>BORDER LEDGER</Text>
-        <Text style={[styles.title, dark && styles.textDark]}>Personal finance,{`\n`}composed quietly.</Text>
-        <Text style={[styles.lead, dark && styles.mutedDark]}>
+        <Text style={[styles.eyebrow, theme.accent]}>BORDER LEDGER</Text>
+        <Text style={[styles.title, theme.text]}>Personal finance,{`\n`}composed quietly.</Text>
+        <Text style={[styles.lead, theme.muted]}>
           A private workspace for understanding cross-border spending without turning every decision into a dashboard.
         </Text>
-        <View style={[styles.rule, dark && styles.ruleDark]} />
-        <Text style={[styles.heading, dark && styles.textDark]}>Designed around consent</Text>
-        <Text style={[styles.body, dark && styles.mutedDark]}>
+        <View style={[styles.rule, theme.rule]} />
+        <Text style={[styles.heading, theme.text]}>Designed around consent</Text>
+        <Text style={[styles.body, theme.muted]}>
           Browser sign-in, notification capture, bank connections, imports, and exports remain explicit actions. Financial data stays locked whenever the owner session is unavailable.
         </Text>
-        <Text style={[styles.heading, dark && styles.textDark]}>Built for quiet confidence</Text>
-        <Text style={[styles.body, dark && styles.mutedDark]}>
+        <Text style={[styles.heading, theme.text]}>Built for quiet confidence</Text>
+        <Text style={[styles.body, theme.muted]}>
           Every screen is a React Native view. Secure sign-in, financial records, capture, bank connections, and files continue through the app’s Android-protected services.
         </Text>
       </ScrollView>
@@ -43,3 +44,19 @@ const styles = StyleSheet.create({
   accentDark: { color: DARK_TEXT_COLORS.accent },
   ruleDark: { backgroundColor: '#43534B' },
 });
+
+const aboutLightTheme = {
+  safe: styles.safe,
+  accent: styles.eyebrow,
+  text: styles.title,
+  muted: styles.lead,
+  rule: styles.rule,
+};
+
+const aboutDarkTheme = {
+  safe: styles.safeDark,
+  accent: styles.accentDark,
+  text: styles.textDark,
+  muted: styles.mutedDark,
+  rule: styles.ruleDark,
+};

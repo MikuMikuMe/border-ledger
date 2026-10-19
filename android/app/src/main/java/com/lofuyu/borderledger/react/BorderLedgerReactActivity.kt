@@ -12,7 +12,11 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import com.lofuyu.borderledger.BorderLedgerApplication
 import com.lofuyu.borderledger.bank.OfficialPlaidLinkLauncher
 import com.lofuyu.borderledger.bank.PlaidCallbackIdentity
+import com.lofuyu.borderledger.bank.PlaidCallbackHandlers
+import com.lofuyu.borderledger.bank.PlaidLaunchRequest
+import com.lofuyu.borderledger.bank.PlaidLinkToken
 import com.lofuyu.borderledger.bank.PlaidLinkResult
+import com.lofuyu.borderledger.bank.PlaidOperationId
 import com.swmansion.rnscreens.fragment.restoration.RNScreensFragmentFactory
 import kotlinx.coroutines.launch
 
@@ -28,7 +32,7 @@ abstract class BorderLedgerReactActivity : ReactActivity(), NativeServiceHost {
         // Replace only restored RN Screen fragments; retain SDK/native saved state.
         supportFragmentManager.fragmentFactory = RNScreensFragmentFactory()
         super.onCreate(savedInstanceState)
-        plaidCallbackIdentity = PlaidCallbackIdentity(savedInstanceState?.getString(PLAID_OPERATION_ID))
+        plaidCallbackIdentity = PlaidCallbackIdentity(savedInstanceState?.getString(PLAID_OPERATION_ID)?.let(::PlaidOperationId))
         documentPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             services.external.noteDocumentResultReceived()
             services.scope.launch {
@@ -39,20 +43,21 @@ abstract class BorderLedgerReactActivity : ReactActivity(), NativeServiceHost {
         }
         plaid = OfficialPlaidLinkLauncher(
             activity = this,
-            onOrphanedResult = { result, callbackOperationId ->
+            callbacks = PlaidCallbackHandlers(onOrphanedResult = { result, callbackOperationId ->
                 val claimedOperationId = plaidCallbackIdentity.claim(callbackOperationId)
-                services.external.notePlaidCallbackReceived(claimedOperationId)
+                services.external.notePlaidCallbackReceived(claimedOperationId?.value)
                 services.scope.launch {
-                    services.external.handlePlaid(result, claimedOperationId)
+                    services.external.handlePlaid(result, claimedOperationId?.value)
                 }
-            },
-            onResultReceived = services.external::notePlaidCallbackReceived,
+            }, onResultReceived = { operationId ->
+                services.external.notePlaidCallbackReceived(operationId?.value)
+            }),
         )
         services.host = this
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        plaidCallbackIdentity.snapshot()?.let { outState.putString(PLAID_OPERATION_ID, it) }
+        plaidCallbackIdentity.snapshot()?.let { outState.putString(PLAID_OPERATION_ID, it.value) }
         super.onSaveInstanceState(outState)
     }
 
@@ -121,11 +126,14 @@ abstract class BorderLedgerReactActivity : ReactActivity(), NativeServiceHost {
         operationId: String,
         onProviderLaunchStarted: suspend () -> Unit,
     ): PlaidLinkResult {
-        plaidCallbackIdentity.begin(operationId)
+        val nativeOperationId = PlaidOperationId(operationId)
+        plaidCallbackIdentity.begin(nativeOperationId)
         return try {
-            requireNotNull(plaid).launch(linkToken, operationId, onProviderLaunchStarted)
+            requireNotNull(plaid).launch(
+                PlaidLaunchRequest(PlaidLinkToken(linkToken), nativeOperationId, onProviderLaunchStarted),
+            )
         } finally {
-            plaidCallbackIdentity.complete(operationId)
+            plaidCallbackIdentity.complete(nativeOperationId)
         }
     }
 

@@ -17,14 +17,15 @@ internal class PlaidHandoffCancellation(
         owner: String,
         providerHasReturned: Boolean = false,
     ): PlaidCancellationDecision? {
-        val current = journal.query(operationId, owner) ?: return null
+        val key = BridgeOperationKey(operationId, owner)
+        val current = journal.query(key) ?: return null
         if (current.kind != "plaid") return null
         if (providerLaunchState.wasStarted(owner, operationId) && !providerHasReturned) {
             return PlaidCancellationDecision.Retained(current)
         }
 
         val operation = if (current.status == "awaiting_result") {
-            journal.cancel(operationId, owner) ?: return null
+            journal.cancel(key) ?: return null
         } else {
             current
         }
