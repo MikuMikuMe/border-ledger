@@ -104,7 +104,7 @@ jobs:
         shell: pwsh
         run: |
           $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
-          & $sdkmanager --install 'platforms;android-37' --channel=3
+          & $sdkmanager --install 'platforms;android-37.0' --channel=3
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - uses: gradle/actions/setup-gradle@v4
@@ -176,7 +176,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37" --channel=3
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" --channel=3
       - name: Run instrumentation suite on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:

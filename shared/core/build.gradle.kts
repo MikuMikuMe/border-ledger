@@ -10,6 +10,7 @@ kotlin {
     android {
         namespace = "com.lofuyu.borderledger.core"
         compileSdk = 37
+        compileSdkMinor = 0
         minSdk = 26
         compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
         withHostTestBuilder {}.configure {}

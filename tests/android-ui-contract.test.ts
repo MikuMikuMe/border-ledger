@@ -116,16 +116,20 @@ describe('Android React Native production surface', () => {
 
   it('supplies a short native staging root for Windows CMake builds', () => {
     const androidGradle = read('android/app/build.gradle.kts');
+    const sharedCoreGradle = read('shared/core/build.gradle.kts');
     const appBuild = read('.github/workflows/app-build.yml');
     const androidCi = read('.github/workflows/android-ci.yml');
     const androidRelease = read('.github/workflows/android-release.yml');
     const iosCore = androidCi.split('  ios-core:')[1]?.split('  android-instrumentation:')[0] ?? '';
+    expect(androidGradle).toContain('compileSdkMinor = 0');
+    expect(sharedCoreGradle).toContain('compileSdkMinor = 0');
     expect(androidGradle).toContain('arguments += "-DCMAKE_OBJECT_PATH_MAX=250"');
     expect(androidGradle).toContain('buildStagingDirectory = file(providers.gradleProperty("borderLedgerCxxRoot")');
     for (const workflow of [appBuild, androidCi, androidRelease]) {
       expect(workflow).toContain('        env:\n          ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx');
       expect(workflow).not.toContain('    env:\n      ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx');
-      expect(workflow).toContain("platforms;android-37' --channel=3");
+      expect(workflow).toContain("platforms;android-37.0' --channel=3");
+      expect(workflow).not.toContain("platforms;android-37' --channel=3");
     }
     expect(iosCore).not.toContain('platforms;android-37');
   });

@@ -96,6 +96,7 @@ tasks.matching {
 android {
     namespace = "com.lofuyu.borderledger"
     compileSdk = 37
+        compileSdkMinor = 0
 
     val releaseVersionCode = providers.gradleProperty("releaseVersionCode")
         .map { value -> value.toIntOrNull() ?: throw GradleException("releaseVersionCode must be an integer") }

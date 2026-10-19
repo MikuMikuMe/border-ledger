@@ -100,7 +100,7 @@ jobs:
         shell: pwsh
         run: |
           $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
-          & $sdkmanager --install 'platforms;android-37' --channel=3
+          & $sdkmanager --install 'platforms;android-37.0' --channel=3
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Run Android lint and unit tests
         working-directory: android
