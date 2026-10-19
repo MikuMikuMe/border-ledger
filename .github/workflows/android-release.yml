@@ -1,6 +1,21 @@
 name: Android release candidate
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - android/**
+      - mobile/**
+      - shared/**
+      - src/**
+      - contracts/**
+      - index.html
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - vite.config.ts
+      - public/**
+      - .github/workflows/android-release.yml
   workflow_dispatch:
     inputs:
       source_sha:
@@ -12,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-release-candidate
+  group: android-release-candidate-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -28,14 +43,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 1
 
-      - name: Require the explicit reviewed main SHA
+      - name: Require the source SHA for this main build
         id: source
         shell: pwsh
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
         run: |
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Release candidates may be built only from main.' }
           if ($env:SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'source_sha must be a full 40-character commit SHA.' }
@@ -56,6 +71,8 @@ jobs:
         run: |
           npm ci
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm ci --prefix mobile
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm run typecheck
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm test -- --reporter=dot
@@ -67,8 +84,6 @@ jobs:
         working-directory: mobile
         shell: pwsh
         run: |
-          npm ci
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm run typecheck
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm run codegen
@@ -117,13 +132,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 1
 
-      - name: Require the explicit reviewed main SHA
+      - name: Require the source SHA for this main build
         shell: bash
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
@@ -158,14 +173,14 @@ jobs:
           disable-animations: true
           script: cd android && bash gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=x86_64 --no-daemon --console=plain
 
-  sign-and-draft:
+  sign-artifact:
     needs: [build-unsigned, android-instrumentation]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: android-production-signing
     permissions:
       actions: read
-      contents: write
+      contents: read
     env:
       EXPECTED_CERT_SHA256: 1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed
       SOURCE_SHA: ${{ needs.build-unsigned.outputs.source_sha }}
@@ -204,6 +219,7 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
 
       - name: Verify version floor against published Android APKs
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -274,6 +290,30 @@ jobs:
             workflowRunId = $env:GITHUB_RUN_ID
           } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -LiteralPath (Join-Path $artifactDirectory 'candidate-manifest.json')
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-signed-${{ github.run_id }}
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+  create-candidate-draft:
+    needs: [build-unsigned, android-instrumentation, sign-artifact]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      SOURCE_SHA: ${{ needs.build-unsigned.outputs.source_sha }}
+      VERSION_CODE: '1000'
+      VERSION_NAME: '0.2.0'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-signed-${{ github.run_id }}
+          path: release-artifacts
+
       - name: Create a new unpublished candidate release
         shell: pwsh
         env:
@@ -296,10 +336,3 @@ jobs:
           $files = @(Get-ChildItem -LiteralPath 'release-artifacts' -File | ForEach-Object { $_.FullName })
           & gh release create $tag @files --repo $env:GITHUB_REPOSITORY --target $env:SOURCE_SHA --draft --title "Border Ledger Android $env:VERSION_NAME candidate" --notes-file $notes
           if ($LASTEXITCODE -ne 0) { throw "Draft candidate creation failed for $tag." }
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android-signed-candidate-${{ github.run_id }}
-          path: release-artifacts/*
-          if-no-files-found: error
-          retention-days: 30
