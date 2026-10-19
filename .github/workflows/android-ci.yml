@@ -190,7 +190,25 @@ jobs:
           api-level: 36
           arch: x86_64
           disable-animations: true
-          script: cd android && bash gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=x86_64 --no-daemon --console=plain --max-workers=2 --stacktrace
+          script: |
+            set -euo pipefail
+            cd mobile
+            npm start -- --host 0.0.0.0 > "$RUNNER_TEMP/metro.log" 2>&1 &
+            metro_pid=$!
+            trap 'kill "$metro_pid" 2>/dev/null || true' EXIT
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent http://127.0.0.1:8081/status >/dev/null; then
+                break
+              fi
+              sleep 1
+            done
+            if ! curl --fail --silent http://127.0.0.1:8081/status; then
+              cat "$RUNNER_TEMP/metro.log"
+              exit 1
+            fi
+            adb reverse tcp:8081 tcp:8081
+            cd ../android
+            bash gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=x86_64 --no-daemon --console=plain --max-workers=2 --stacktrace
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
