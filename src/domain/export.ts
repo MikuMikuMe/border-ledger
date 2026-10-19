@@ -13,9 +13,10 @@ const statusLabels: Record<Transaction['status'], string> = {
   provisional: 'Provisional',
 };
 
-function escapeCsv(value: string | number) {
-  const text = String(value);
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+function escapeCsv(value: string | number, options: { numeric?: boolean } = {}) {
+  const raw = String(value);
+  const text = options.numeric ? raw : raw.replace(/(^|[,;\t\r\n])(\s*[=+\-@])/g, "$1'$2");
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 export function serializeTransactionsCsv(transactions: Transaction[]) {
@@ -31,5 +32,7 @@ export function serializeTransactionsCsv(transactions: Transaction[]) {
     transaction.note ?? '',
   ]);
 
-  return [header, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
+  return [header, ...rows]
+    .map((row) => row.map((value, index) => escapeCsv(value, { numeric: index === 5 })).join(','))
+    .join('\n');
 }

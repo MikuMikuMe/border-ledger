@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "border-ledger",
+  "name": "border-ledger-local",
+  "workers_dev": false,
   "account_id": "a0af41818e1b715f66046b0d7870ce70",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-12",
@@ -30,8 +31,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "border-ledger",
-      "database_id": "14378887-f604-4d04-95f1-26930405b5a8",
+      "database_name": "border-ledger-local",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "./worker/migrations"
     }
   ],
@@ -39,16 +40,16 @@
     "producers": [
       {
         "binding": "SYNC_QUEUE",
-        "queue": "border-ledger-sync"
+        "queue": "border-ledger-local-sync"
       }
     ],
     "consumers": [
       {
-        "queue": "border-ledger-sync",
+        "queue": "border-ledger-local-sync",
         "max_batch_size": 1,
         "max_retries": 5,
         "max_concurrency": 1,
-        "dead_letter_queue": "border-ledger-sync-dlq"
+        "dead_letter_queue": "border-ledger-local-sync-dlq"
       }
     ]
   },
