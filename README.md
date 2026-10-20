@@ -21,7 +21,7 @@ The public welcome page uses clearly labeled representative data. The private `/
 
 The live workspace is served from [pf.lofuyu.com](https://pf.lofuyu.com). Production uses the existing `border-ledger` Worker, D1 database, and Queues configured under Wrangler's `production` environment. The deploy workflow runs from `main` and always deploys with `--env production`; it does not create a second production service. The raw Worker hostname is not an application origin: browser routes redirect to the custom origin and API requests to the raw hostname return `404`.
 
-The top-level Wrangler settings are for local development only. They keep Plaid Sandbox enabled so local tests cannot accidentally call Plaid's production API; production deployments must use the explicit `production` environment and its separately managed secrets.
+The top-level Wrangler settings use local D1 and default Plaid to production; this repository does not configure Plaid Sandbox. Production deployments must use the explicit production environment and its separately managed secrets.
 
 ## Local development
 
@@ -42,7 +42,7 @@ npm run build
 
 The production D1 database and Queues are already provisioned and bound in `wrangler.jsonc`. Do not create replacement resources or point a production deployment at a local-development binding. Production migrations and deployment run through `.github/workflows/deploy.yml` after its quality gates and credential checks pass.
 
-For local development, use the Wrangler default environment and local D1. Keep PLAID_ENV=sandbox locally. The production environment sets PLAID_ENV=production and must only be deployed through the explicit production workflow. Local sandbox Link-token requests omit Plaid's optional webhook by default, so localhost traffic never targets production. To test webhook delivery, use Wrangler's local variable overrides with the same HTTPS tunnel origin for both LEDGER_APP_ORIGIN and PLAID_WEBHOOK_URL, for example: npx wrangler dev --var "LEDGER_APP_ORIGIN:https://your-tunnel-host" --var "PLAID_WEBHOOK_URL:https://your-tunnel-host/api/webhooks/plaid", replacing your-tunnel-host with the public HTTPS hostname. Never use the production origin.
+For local development, use the Wrangler default environment and local D1. Plaid defaults to production, and Link-token creation fails closed until production credentials and a valid HTTPS webhook are configured. To test the live Plaid flow locally, expose the local Worker through an HTTPS tunnel, set PLAID_ENV=production, and set both LEDGER_APP_ORIGIN and PLAID_WEBHOOK_URL to that same public tunnel origin, for example: npx wrangler dev --var "PLAID_ENV:production" --var "LEDGER_APP_ORIGIN:https://your-tunnel-host" --var "PLAID_WEBHOOK_URL:https://your-tunnel-host/api/webhooks/plaid". Use this only for intentional production tests with authorized test accounts; Plaid will make real production API calls. The production Wrangler environment and its resources must only be deployed through the explicit production workflow.
 
 Worker secrets must be configured in Cloudflare and GitHub Actions, never committed or exposed to the browser. The Worker fails closed if required authentication or mobile identity allowlists are missing. Generate encryption keys from cryptographically secure random bytes, keep them independent, and do not replace stable production keys during ordinary deployments.
 
@@ -69,7 +69,7 @@ Open Accounts & settings and choose Start bank connection. Plaid Link runs in th
 
 The account options menu includes Disconnect Plaid connection. That action calls Plaid’s Item removal endpoint first; only after Plaid confirms revocation does the Worker delete the encrypted access token and mappings. Existing ledger transactions remain available as historical records.
 
-Use Plaid’s Sandbox test institution and credentials while `PLAID_ENV=sandbox`. Sandbox transactions are simulated; test an actual RBC Item only after enabling the appropriate Plaid production access. The Bank of China/WeChat path remains statement or Android-companion work and is not changed by this integration.
+The Plaid/RBC connection flow uses production. Configure production credentials and connect only accounts explicitly approved for live synchronization; use a designated production test Item for validation. The Bank of China/WeChat path remains statement or Android-companion work and is not changed by this integration.
 
 ## Android production releases
 

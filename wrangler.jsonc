@@ -23,7 +23,7 @@
     ]
   },
   "vars": {
-    "PLAID_ENV": "sandbox",
+    "PLAID_ENV": "production",
     "LEDGER_APP_ORIGIN": "http://localhost:8787",
     "PLAID_ANDROID_PACKAGE_NAME": "com.lofuyu.borderledger"
   },

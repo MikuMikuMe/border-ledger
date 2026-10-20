@@ -176,8 +176,9 @@ describe('release automation contract', () => {
   it('targets the existing production Worker bindings instead of creating a shadow Worker', () => {
     expect(wranglerConfig.name).toBe('border-ledger-local');
     expect(wranglerConfig.workers_dev).toBe(false);
-    expect(wranglerConfig.vars.PLAID_ENV).toBe('sandbox');
+    expect(wranglerConfig.vars.PLAID_ENV).toBe('production');
     expect(wranglerConfig.vars.LEDGER_APP_ORIGIN).toBe('http://localhost:8787');
+    expect(wranglerConfig.vars).not.toHaveProperty('PLAID_WEBHOOK_URL');
     expect(wranglerConfig.d1_databases[0]).toMatchObject({
       binding: 'DB',
       database_name: 'border-ledger-local',

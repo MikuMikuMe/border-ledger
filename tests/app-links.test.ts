@@ -25,12 +25,14 @@ describe('Android App Links metadata', () => {
     expect(headers).toContain('Strict-Transport-Security: max-age=31536000');
   });
 
-  it('keeps local sandbox webhooks off the production origin', () => {
+  it('defaults Plaid to production and keeps the local webhook unconfigured until an HTTPS endpoint is supplied', () => {
     const config = JSON.parse(readFileSync(resolve(process.cwd(), 'wrangler.jsonc'), 'utf8'));
 
-    expect(config.vars.PLAID_ENV).toBe('sandbox');
+    expect(config.vars.PLAID_ENV).toBe('production');
     expect(config.vars.LEDGER_APP_ORIGIN).toBe('http://localhost:8787');
     expect(config.vars).not.toHaveProperty('PLAID_WEBHOOK_URL');
+    expect(config.env.production.vars.PLAID_ENV).toBe('production');
+    expect(config.env.production.vars.LEDGER_APP_ORIGIN).toBe('https://pf.lofuyu.com');
     expect(config.env.production.vars.PLAID_WEBHOOK_URL).toBe('https://pf.lofuyu.com/api/webhooks/plaid');
   });
   it('ships a static well-known association file so SPA fallback cannot mask it', () => {
