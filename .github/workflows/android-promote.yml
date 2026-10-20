@@ -69,16 +69,36 @@ jobs:
 
           $main = (& gh api "repos/$env:GITHUB_REPOSITORY/commits/main" --jq .sha).Trim()
           if ($LASTEXITCODE -ne 0 -or $main.ToLowerInvariant() -ne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) { throw 'The accepted candidate is no longer the exact current main tree.' }
-          $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,assets,tagName
+          $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,assets,tagName,body
           if ($LASTEXITCODE -ne 0) { throw 'The named candidate release could not be read.' }
           $release = $releaseJson | ConvertFrom-Json
-          if (-not $release.isDraft) { throw 'The candidate is not an unpublished draft.' }
           if ($release.tagName -ne $env:RELEASE_TAG) { throw 'GitHub returned a different release tag.' }
+
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          $hasAcceptanceManifest = $assetNames -contains 'acceptance-manifest.json'
+          $hasAcceptanceEvidence = $assetNames -contains 'acceptance-evidence.zip'
+          $markerPattern = '<!-- border-ledger-acceptance:v1 source=(?<source>[0-9a-f]{40}) apk=(?<apk>[0-9a-f]{64}) manifest=(?<manifest>[0-9a-f]{64}) evidence=(?<evidence>[0-9a-f]{64}) -->'
+          $existingMarker = [regex]::Match([string]$release.body, $markerPattern)
+          if ($existingMarker.Success -and
+            ($existingMarker.Groups['source'].Value -ne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant() -or
+             $existingMarker.Groups['apk'].Value -ne $env:EXPECTED_APK_SHA256.ToLowerInvariant() -or
+             $existingMarker.Groups['manifest'].Value -ne $env:EXPECTED_ACCEPTANCE_MANIFEST_SHA256.ToLowerInvariant())) {
+            throw 'The release already contains an acceptance marker for different candidate inputs.'
+          }
+          if (-not $existingMarker.Success -and [string]$release.body -match 'border-ledger-acceptance:v1') {
+            throw 'The release contains a malformed acceptance marker.'
+          }
+          if (-not $release.isDraft -and -not $existingMarker.Success) { throw 'An already published release is missing its acceptance marker.' }
 
           $directory = Join-Path $env:RUNNER_TEMP 'accepted-android-candidate'
           New-Item -ItemType Directory -Path $directory | Out-Null
-          & gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern '*.apk' --pattern SHA256SUMS.txt --pattern candidate-manifest.json --pattern acceptance-manifest.json --pattern acceptance-evidence.zip --dir $directory
-          if ($LASTEXITCODE -ne 0) { throw 'The candidate APK, checksums, candidate manifest, and owner acceptance bundle could not all be downloaded.' }
+          $downloadPatterns = @('*.apk', 'SHA256SUMS.txt', 'candidate-manifest.json')
+          if ($hasAcceptanceManifest) { $downloadPatterns += 'acceptance-manifest.json' }
+          if ($hasAcceptanceEvidence) { $downloadPatterns += 'acceptance-evidence.zip' }
+          $downloadArguments = @($env:RELEASE_TAG, '--repo', $env:GITHUB_REPOSITORY, '--dir', $directory)
+          foreach ($pattern in $downloadPatterns) { $downloadArguments += @('--pattern', $pattern) }
+          & gh release download @downloadArguments
+          if ($LASTEXITCODE -ne 0) { throw 'The candidate APK, checksums, and candidate manifest could not all be downloaded.' }
           $apk = @(Get-ChildItem -LiteralPath $directory -Filter '*.apk' -File)
           if ($apk.Count -ne 1) { throw 'Expected exactly one APK in the candidate release.' }
           $manifest = Get-Content -Raw -LiteralPath (Join-Path $directory 'candidate-manifest.json') | ConvertFrom-Json
@@ -110,27 +130,57 @@ jobs:
           if ($sumLine -notmatch "(?m)^$actualHash\s+$escapedApkName\s*$") { throw 'Published SHA256SUMS.txt does not match the APK bytes.' }
           $acceptanceManifest = Join-Path $directory 'acceptance-manifest.json'
           $acceptanceZip = Join-Path $directory 'acceptance-evidence.zip'
-          if (-not (Test-Path -LiteralPath $acceptanceManifest -PathType Leaf) -or -not (Test-Path -LiteralPath $acceptanceZip -PathType Leaf)) { throw 'The candidate is missing the owner acceptance manifest or evidence archive.' }
-          $acceptanceManifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $acceptanceManifest).Hash.ToLowerInvariant()
+          $acceptanceManifestHash = $null
+          $evidenceHash = $null
+          if ($hasAcceptanceManifest -and $hasAcceptanceEvidence) {
+            $acceptanceManifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $acceptanceManifest).Hash.ToLowerInvariant()
+            if ($acceptanceManifestHash -ne $env:EXPECTED_ACCEPTANCE_MANIFEST_SHA256.ToLowerInvariant()) { throw 'Acceptance manifest SHA-256 does not match the reviewed input.' }
+            $evidenceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $acceptanceZip).Hash.ToLowerInvariant()
+            $evidenceDirectory = Join-Path $directory 'acceptance-evidence'
+            New-Item -ItemType Directory -Path $evidenceDirectory | Out-Null
+            Expand-Archive -LiteralPath $acceptanceZip -DestinationPath $evidenceDirectory
+            $verifierContent = & gh api "repos/$env:GITHUB_REPOSITORY/contents/scripts/verify-android-acceptance.mjs?ref=$env:EXPECTED_SOURCE_SHA" --jq .content
+            if ($LASTEXITCODE -ne 0 -or -not $verifierContent) { throw 'The acceptance verifier for the exact accepted source could not be fetched.' }
+            $verifierPath = Join-Path $env:RUNNER_TEMP 'verify-android-acceptance.mjs'
+            [IO.File]::WriteAllBytes($verifierPath, [Convert]::FromBase64String(($verifierContent -join '').Trim()))
+            $acceptanceArgs = @(
+              $verifierPath
+              '--manifest', $acceptanceManifest
+              '--evidence-dir', $evidenceDirectory
+              '--source-sha', $env:EXPECTED_SOURCE_SHA
+              '--apk-sha256', $actualHash
+              '--signing-cert-sha256', $env:EXPECTED_CERT_SHA256
+              '--version-code', [string]$actualVersionCode
+            )
+            & node @acceptanceArgs
+            if ($LASTEXITCODE -ne 0) { throw 'F01–F18, live App Links, or signed in-place-upgrade acceptance failed.' }
+          } else {
+            if (-not $existingMarker.Success) { throw 'The candidate is missing its complete owner acceptance bundle and a verified retry marker.' }
+            $acceptanceManifestHash = $existingMarker.Groups['manifest'].Value
+            $evidenceHash = $existingMarker.Groups['evidence'].Value
+            if ($hasAcceptanceManifest) {
+              $remainingManifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $acceptanceManifest).Hash.ToLowerInvariant()
+              if ($remainingManifestHash -ne $acceptanceManifestHash) { throw 'Remaining acceptance manifest does not match the previously verified marker.' }
+            }
+            if ($hasAcceptanceEvidence) {
+              $remainingEvidenceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $acceptanceZip).Hash.ToLowerInvariant()
+              if ($remainingEvidenceHash -ne $evidenceHash) { throw 'Remaining acceptance evidence does not match the previously verified marker.' }
+            }
+          }
           if ($acceptanceManifestHash -ne $env:EXPECTED_ACCEPTANCE_MANIFEST_SHA256.ToLowerInvariant()) { throw 'Acceptance manifest SHA-256 does not match the reviewed input.' }
-          $evidenceDirectory = Join-Path $directory 'acceptance-evidence'
-          New-Item -ItemType Directory -Path $evidenceDirectory | Out-Null
-          Expand-Archive -LiteralPath $acceptanceZip -DestinationPath $evidenceDirectory
-          $verifierContent = & gh api "repos/$env:GITHUB_REPOSITORY/contents/scripts/verify-android-acceptance.mjs?ref=$env:EXPECTED_SOURCE_SHA" --jq .content
-          if ($LASTEXITCODE -ne 0 -or -not $verifierContent) { throw 'The acceptance verifier for the exact accepted source could not be fetched.' }
-          $verifierPath = Join-Path $env:RUNNER_TEMP 'verify-android-acceptance.mjs'
-          [IO.File]::WriteAllBytes($verifierPath, [Convert]::FromBase64String(($verifierContent -join '').Trim()))
-          $acceptanceArgs = @(
-            $verifierPath
-            '--manifest', $acceptanceManifest
-            '--evidence-dir', $evidenceDirectory
-            '--source-sha', $env:EXPECTED_SOURCE_SHA
-            '--apk-sha256', $actualHash
-            '--signing-cert-sha256', $env:EXPECTED_CERT_SHA256
-            '--version-code', [string]$actualVersionCode
-          )
-          & node @acceptanceArgs
-          if ($LASTEXITCODE -ne 0) { throw 'F01–F18, live App Links, or signed in-place-upgrade acceptance failed.' }
+          if ($existingMarker.Success -and $existingMarker.Groups['evidence'].Value -ne $evidenceHash) { throw 'Acceptance evidence bytes do not match the previously verified marker.' }
+
+          if (-not $existingMarker.Success) {
+            if (-not $release.isDraft) { throw 'A published release cannot be repaired without its original acceptance marker.' }
+            if (-not $hasAcceptanceManifest -or -not $hasAcceptanceEvidence) { throw 'The complete owner acceptance bundle is required before creating a retry marker.' }
+            $marker = "<!-- border-ledger-acceptance:v1 source=$($env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) apk=$actualHash manifest=$acceptanceManifestHash evidence=$evidenceHash -->"
+            $notesPath = Join-Path $env:RUNNER_TEMP 'accepted-android-release-notes.md'
+            $releaseBody = [string]$release.body
+            $updatedBody = if ([string]::IsNullOrEmpty($releaseBody)) { $marker } else { "$releaseBody`n`n$marker" }
+            Set-Content -LiteralPath $notesPath -Value $updatedBody -NoNewline -Encoding utf8
+            & gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --notes-file $notesPath
+            if ($LASTEXITCODE -ne 0) { throw 'Could not record the verified acceptance marker before removing private evidence.' }
+          }
           "Verified release tag $env:RELEASE_TAG at source $env:EXPECTED_SOURCE_SHA with APK SHA-256 $actualHash."
 
       - name: Publish the exact accepted APK bytes
@@ -138,10 +188,39 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPECTED_APK_SHA256: ${{ inputs.apk_sha256 }}
+          EXPECTED_ACCEPTANCE_MANIFEST_SHA256: ${{ inputs.acceptance_manifest_sha256 }}
         run: |
-          foreach ($assetName in @('acceptance-manifest.json', 'acceptance-evidence.zip')) {
-            & gh release delete-asset $env:RELEASE_TAG $assetName --repo $env:GITHUB_REPOSITORY --yes
-            if ($LASTEXITCODE -ne 0) { throw "Could not remove private acceptance asset $assetName before publication." }
+          $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,assets,body
+          if ($LASTEXITCODE -ne 0) { throw 'Could not re-read the candidate release before publication.' }
+          $release = $releaseJson | ConvertFrom-Json
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          $markerPattern = '<!-- border-ledger-acceptance:v1 source=(?<source>[0-9a-f]{40}) apk=(?<apk>[0-9a-f]{64}) manifest=(?<manifest>[0-9a-f]{64}) evidence=(?<evidence>[0-9a-f]{64}) -->'
+          $marker = [regex]::Match([string]$release.body, $markerPattern)
+          if (-not $marker.Success -or
+            $marker.Groups['source'].Value -ne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant() -or
+            $marker.Groups['apk'].Value -ne $env:EXPECTED_APK_SHA256.ToLowerInvariant() -or
+            $marker.Groups['manifest'].Value -ne $env:EXPECTED_ACCEPTANCE_MANIFEST_SHA256.ToLowerInvariant()) {
+            throw 'The verified acceptance marker is missing or does not match this promotion request.'
           }
-          & gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=false
-          if ($LASTEXITCODE -ne 0) { throw "Could not promote draft release $env:RELEASE_TAG." }
+          foreach ($assetName in @('acceptance-manifest.json', 'acceptance-evidence.zip')) {
+            if ($assetNames -contains $assetName) {
+              & gh release delete-asset $env:RELEASE_TAG $assetName --repo $env:GITHUB_REPOSITORY --yes
+              if ($LASTEXITCODE -ne 0) { throw "Could not remove private acceptance asset $assetName before publication." }
+            }
+          }
+          $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,assets
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify private-asset removal before publication.' }
+          $release = $releaseJson | ConvertFrom-Json
+          $remainingPrivateAssets = @($release.assets | ForEach-Object { $_.name } | Where-Object { $_ -in @('acceptance-manifest.json', 'acceptance-evidence.zip') })
+          if ($remainingPrivateAssets.Count -gt 0) { throw "Private acceptance assets remain on the release: $($remainingPrivateAssets -join ', ')." }
+          if ($release.isDraft) {
+            & gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=false
+            if ($LASTEXITCODE -ne 0) { throw "Could not promote draft release $env:RELEASE_TAG." }
+          }
+          $releaseJson = & gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,assets
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the final public release state.' }
+          $release = $releaseJson | ConvertFrom-Json
+          $remainingPrivateAssets = @($release.assets | ForEach-Object { $_.name } | Where-Object { $_ -in @('acceptance-manifest.json', 'acceptance-evidence.zip') })
+          if ($release.isDraft -or $remainingPrivateAssets.Count -gt 0) { throw 'Release publication or private-asset removal did not complete cleanly.' }

@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 const gradle = readFileSync(resolve(root, 'android/app/build.gradle.kts'), 'utf8');
 const releaseWorkflow = readFileSync(resolve(root, '.github/workflows/android-release.yml'), 'utf8');
+const codeqlWorkflow = readFileSync(resolve(root, '.github/workflows/codeql.yml'), 'utf8');
+const androidCiWorkflow = readFileSync(resolve(root, '.github/workflows/android-ci.yml'), 'utf8');
+const extractActionRefs = (source: string) =>
+  [...source.matchAll(/^[ \t]*-?[ \t]*uses:[ \t]+([^\s#]+)/gm)].map((match) => match[1]);
 const promotionPath = resolve(root, '.github/workflows/android-promote.yml');
 const promotionWorkflow = existsSync(promotionPath) ? readFileSync(promotionPath, 'utf8') : '';
 const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'), 'utf8');
@@ -104,6 +108,16 @@ describe('release automation contract', () => {
     expect(promotionWorkflow).toContain('acceptance-evidence.zip');
   });
 
+  it('records an acceptance marker before private-asset cleanup so promotion can resume', () => {
+    const markerIndex = promotionWorkflow.indexOf('border-ledger-acceptance:v1');
+    const deletionIndex = promotionWorkflow.indexOf('gh release delete-asset');
+
+    expect(markerIndex).toBeGreaterThan(-1);
+    expect(markerIndex).toBeLessThan(deletionIndex);
+    expect(promotionWorkflow).toContain('--notes-file');
+    expect(promotionWorkflow).toContain('if ($assetNames -contains $assetName)');
+  });
+
   it('uses gh api endpoints without the unsupported --repo flag', () => {
     const apiCalls = promotionWorkflow.split('\n').filter(line => line.includes('gh api'));
     expect(apiCalls.length).toBeGreaterThan(0);
@@ -111,13 +125,21 @@ describe('release automation contract', () => {
     expect(apiCalls.every(line => line.includes('repos/$env:GITHUB_REPOSITORY/'))).toBe(true);
   });
 
-  it('pins every GitHub workflow action to an immutable commit', () => {
-    const actionRefs = workflowSources.flatMap((source) =>
-      [...source.matchAll(/^\s*uses:\s+([^\s#]+)/gm)].map((match) => match[1]),
-    );
+  it('recognizes shorthand action steps before checking every immutable pin', () => {
+    const androidCheckoutRefs = extractActionRefs(androidCiWorkflow).filter((ref) => ref.startsWith('actions/checkout@'));
+    expect(androidCheckoutRefs.some((ref) => /^actions\/checkout@[a-f0-9]{40}$/i.test(ref))).toBe(true);
 
+    const actionRefs = workflowSources.flatMap((source) => extractActionRefs(source));
     expect(actionRefs.length).toBeGreaterThan(0);
     expect(actionRefs.filter((ref) => !/@[a-f0-9]{40}$/i.test(ref))).toEqual([]);
+  });
+
+  it('builds the Java/Kotlin CodeQL database with the production debug variant', () => {
+    expect(codeqlWorkflow).toContain('build-mode: manual');
+    expect(codeqlWorkflow).toContain(':app:assembleDebug');
+    expect(codeqlWorkflow).toContain('-PmobileEnvironment=production');
+    expect(codeqlWorkflow).toContain('platforms;android-37.0');
+    expect(codeqlWorkflow).toContain('npm ci');
   });
 
   it('deploys the existing Cloudflare production Worker and fails closed on missing credentials', () => {
@@ -155,6 +177,7 @@ describe('release automation contract', () => {
     expect(wranglerConfig.name).toBe('border-ledger-local');
     expect(wranglerConfig.workers_dev).toBe(false);
     expect(wranglerConfig.vars.PLAID_ENV).toBe('sandbox');
+    expect(wranglerConfig.vars.LEDGER_APP_ORIGIN).toBe('http://localhost:8787');
     expect(wranglerConfig.d1_databases[0]).toMatchObject({
       binding: 'DB',
       database_name: 'border-ledger-local',

@@ -8,7 +8,7 @@ describe('transaction export', () => {
       id: 'tx-1',
       accountId: 'rbc-chequing',
       date: '2026-10-10',
-      merchant: 'Harbour, Market',
+      merchant: 'Harbour, - Market',
       amountMinor: -4200,
       currency: 'CAD',
       category: 'Groceries',
@@ -21,7 +21,7 @@ describe('transaction export', () => {
 
     expect(serializeTransactionsCsv([transaction])).toBe([
       'Date,Merchant,Category,Source,State,Amount,Currency,Note',
-      '2026-10-10,"Harbour, Market",Groceries,Statement,Confirmed,-42.00,CAD,"Weekly ""shop"""',
+      '2026-10-10,"Harbour, - Market",Groceries,Statement,Confirmed,-42.00,CAD,"Weekly ""shop"""',
     ].join('\n'));
   });
 

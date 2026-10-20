@@ -26,7 +26,7 @@ jobs:
           - language: javascript-typescript
             build-mode: none
           - language: java-kotlin
-            build-mode: autobuild
+            build-mode: manual
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -55,6 +55,14 @@ jobs:
         with:
           packages: platform-tools build-tools;36.0.0
 
+      - name: Install Android preview platform for analysis
+        if: matrix.language == 'java-kotlin'
+        shell: bash
+        run: |
+          sdkmanager="$(find "$ANDROID_HOME/cmdline-tools" -mindepth 3 -maxdepth 3 -type f -name sdkmanager -print -quit)"
+          test -n "$sdkmanager"
+          "$sdkmanager" --install "platforms;android-37.0" --channel=3
+
       - name: Configure Gradle for Android analysis
         if: matrix.language == 'java-kotlin'
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
@@ -64,6 +72,11 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+
+      - name: Build production-configured Android debug variant for CodeQL
+        if: matrix.language == 'java-kotlin'
+        run: bash ./gradlew :app:assembleDebug -PreactNativeArchitectures=x86_64 -PmobileEnvironment=production --no-daemon --console=plain --max-workers=2
+        working-directory: android
 
       - name: Analyze code
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4

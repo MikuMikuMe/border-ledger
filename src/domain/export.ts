@@ -15,7 +15,7 @@ const statusLabels: Record<Transaction['status'], string> = {
 
 function escapeCsv(value: string | number, options: { numeric?: boolean } = {}) {
   const raw = String(value);
-  const text = options.numeric ? raw : raw.replace(/(^|[,;\t\r\n])(\s*[=+\-@])/g, "$1'$2");
+  const text = options.numeric ? raw : raw.replace(/^\s*[=+\-@]/, (formulaPrefix) => `'${formulaPrefix}`);
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
