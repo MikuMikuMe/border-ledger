@@ -42,7 +42,7 @@ npm run build
 
 The production D1 database and Queues are already provisioned and bound in `wrangler.jsonc`. Do not create replacement resources or point a production deployment at a local-development binding. Production migrations and deployment run through `.github/workflows/deploy.yml` after its quality gates and credential checks pass.
 
-For local development, use the Wrangler default environment and local D1. Keep `PLAID_ENV=sandbox` locally. The production environment sets `PLAID_ENV=production` and must only be deployed through the explicit production workflow.
+For local development, use the Wrangler default environment and local D1. Keep PLAID_ENV=sandbox locally. The production environment sets PLAID_ENV=production and must only be deployed through the explicit production workflow. Local sandbox Link-token requests omit Plaid's optional webhook by default, so localhost traffic never targets production. To test webhook delivery, use Wrangler's local variable overrides with the same HTTPS tunnel origin for both LEDGER_APP_ORIGIN and PLAID_WEBHOOK_URL, for example: npx wrangler dev --var "LEDGER_APP_ORIGIN:https://your-tunnel-host" --var "PLAID_WEBHOOK_URL:https://your-tunnel-host/api/webhooks/plaid", replacing your-tunnel-host with the public HTTPS hostname. Never use the production origin.
 
 Worker secrets must be configured in Cloudflare and GitHub Actions, never committed or exposed to the browser. The Worker fails closed if required authentication or mobile identity allowlists are missing. Generate encryption keys from cryptographically secure random bytes, keep them independent, and do not replace stable production keys during ordinary deployments.
 

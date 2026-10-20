@@ -293,8 +293,10 @@ function encryptionKey(env: Env) {
   return env.PLAID_ENCRYPTION_KEY;
 }
 
-function plaidWebhookUrl(env: Env) {
-  if (!env.PLAID_WEBHOOK_URL) throw new ConfigurationError('Plaid webhook URL is not configured.');
+function plaidWebhookUrl(env: Pick<Env, 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>) {
+  if (!env.PLAID_WEBHOOK_URL) {
+    throw new ConfigurationError('Plaid webhook URL is not configured.');
+  }
   let webhook: URL;
   try {
     webhook = new URL(env.PLAID_WEBHOOK_URL);
@@ -315,6 +317,11 @@ function plaidWebhookUrl(env: Env) {
     }
   }
   return webhook.toString();
+}
+
+function linkTokenWebhookUrl(env: Pick<Env, 'PLAID_ENV' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>) {
+  if (env.PLAID_ENV === 'sandbox' && !env.PLAID_WEBHOOK_URL) return undefined;
+  return plaidWebhookUrl(env);
 }
 
 async function readPlaidResponse<T>(request: Request): Promise<T> {
@@ -389,7 +396,8 @@ async function enqueuePlaidRecurringSync(env: Env, itemId: string) {
   return true;
 }
 
-export function buildPlaidLinkTokenPayload(env: Pick<Env, 'PLAID_CLIENT_USER_ID' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>) {
+export function buildPlaidLinkTokenPayload(env: Pick<Env, 'PLAID_CLIENT_USER_ID' | 'PLAID_ENV' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>) {
+  const webhook = linkTokenWebhookUrl(env);
   return {
     client_name: 'Border Ledger',
     user: { client_user_id: env.PLAID_CLIENT_USER_ID ?? 'border-ledger-owner' },
@@ -401,7 +409,7 @@ export function buildPlaidLinkTokenPayload(env: Pick<Env, 'PLAID_CLIENT_USER_ID'
       depository: { account_subtypes: ['checking', 'savings'] },
       credit: { account_subtypes: ['credit card'] },
     },
-    webhook: plaidWebhookUrl(env as Env),
+    ...(webhook ? { webhook } : {}),
   };
 }
 

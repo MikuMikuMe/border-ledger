@@ -237,3 +237,23 @@ describe('Plaid integration primitives', () => {
     });
   });
 });
+
+describe('local sandbox Plaid configuration', () => {
+  it('omits the optional webhook when local sandbox has no public HTTPS endpoint', () => {
+    const payload = buildPlaidLinkTokenPayload({
+      PLAID_ENV: 'sandbox',
+      PLAID_CLIENT_USER_ID: 'local-owner',
+      LEDGER_APP_ORIGIN: 'http://localhost:8787',
+    });
+
+    expect(payload).not.toHaveProperty('webhook');
+  });
+
+  it('requires a webhook outside sandbox', () => {
+    expect(() => buildPlaidLinkTokenPayload({
+      PLAID_ENV: 'production',
+      PLAID_CLIENT_USER_ID: 'production-owner',
+      LEDGER_APP_ORIGIN: 'https://pf.example.com',
+    })).toThrow('Plaid webhook URL is not configured.');
+  });
+});

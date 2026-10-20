@@ -25,7 +25,6 @@
   "vars": {
     "PLAID_ENV": "sandbox",
     "LEDGER_APP_ORIGIN": "http://localhost:8787",
-    "PLAID_WEBHOOK_URL": "https://pf.lofuyu.com/api/webhooks/plaid",
     "PLAID_ANDROID_PACKAGE_NAME": "com.lofuyu.borderledger"
   },
   "d1_databases": [

@@ -269,3 +269,23 @@ describe('Task 14 connection service boundaries', () => {
     }
   });
 });
+
+describe('local sandbox native Plaid configuration', () => {
+  it('omits the optional webhook when local sandbox has no public HTTPS endpoint', () => {
+    const payload = buildNativePlaidLinkTokenPayload({
+      PLAID_ENV: 'sandbox',
+      PLAID_ANDROID_PACKAGE_NAME: 'com.lofuyu.borderledger',
+      LEDGER_APP_ORIGIN: 'http://localhost:8787',
+    });
+
+    expect(payload).not.toHaveProperty('webhook');
+  });
+
+  it('requires a webhook outside sandbox', () => {
+    expect(() => buildNativePlaidLinkTokenPayload({
+      PLAID_ENV: 'production',
+      PLAID_ANDROID_PACKAGE_NAME: 'com.lofuyu.borderledger',
+      LEDGER_APP_ORIGIN: 'https://pf.example.com',
+    })).toThrow('The Plaid webhook URL is not configured.');
+  });
+});
