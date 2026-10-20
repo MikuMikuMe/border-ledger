@@ -211,7 +211,7 @@ jobs:
           api-level: 36
           arch: x86_64
           disable-animations: true
-          script: cd android && bash gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=x86_64 --no-daemon --console=plain --max-workers=2 --stacktrace
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/run-android-instrumentation.sh"
 
   sign-artifact:
     needs: [build-unsigned, android-instrumentation]
