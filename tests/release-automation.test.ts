@@ -15,6 +15,7 @@ const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'
 const assetLinks = readFileSync(resolve(root, 'public/.well-known/assetlinks.json'), 'utf8');
 const workerSource = readFileSync(resolve(root, 'worker/index.ts'), 'utf8');
 const acceptanceVerifier = readFileSync(resolve(root, 'scripts/verify-android-acceptance.mjs'), 'utf8');
+const productionAppLinksVerifier = readFileSync(resolve(root, 'scripts/verify-production-app-links.mjs'), 'utf8');
 const androidValidationDocs = readFileSync(resolve(root, 'docs/android-validation.md'), 'utf8');
 const wrangler = readFileSync(resolve(root, 'wrangler.jsonc'), 'utf8');
 const wranglerConfig = JSON.parse(wrangler);
@@ -174,13 +175,14 @@ describe('release automation contract', () => {
     expect(deployWorkflow).not.toContain('deployment skipped');
   });
 
-  it('verifies the production Android App Links response against the GitHub signing key after deployment', () => {
-    expect(deployWorkflow).toContain('https://pf.lofuyu.com/.well-known/assetlinks.json');
-    expect(deployWorkflow).toContain('sha256_cert_fingerprints');
-    expect(deployWorkflow).toContain('58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17');
-    expect(deployWorkflow).toContain('1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED');
+  it('runs the retrying production App Links verifier after deployment', () => {
+    expect(deployWorkflow).toContain('node scripts/verify-production-app-links.mjs');
+    expect(deployWorkflow).toContain('GITHUB_SHA: ${{ github.sha }}');
+    expect(productionAppLinksVerifier).toContain('https://pf.lofuyu.com/.well-known/assetlinks.json');
+    expect(productionAppLinksVerifier).toContain('58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17');
+    expect(productionAppLinksVerifier).toContain('1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED');
     expect(deployWorkflow.indexOf('Deploy the named production Worker')).toBeLessThan(
-      deployWorkflow.indexOf('https://pf.lofuyu.com/.well-known/assetlinks.json'),
+      deployWorkflow.indexOf('node scripts/verify-production-app-links.mjs'),
     );
   });
 
@@ -194,7 +196,7 @@ describe('release automation contract', () => {
     expect(gradle).toContain(expectedCompact.toUpperCase());
     expect(releaseWorkflow).toContain(`EXPECTED_CERT_SHA256: ${expectedCompact}`);
     expect(promotionWorkflow).toContain(`EXPECTED_CERT_SHA256: ${expectedCompact}`);
-    for (const source of [deployWorkflow, assetLinks, workerSource]) {
+    for (const source of [productionAppLinksVerifier, assetLinks, workerSource]) {
       expect(source).toContain(expectedDisplay);
     }
     expect(signingSources).not.toContain('1f:f2');
