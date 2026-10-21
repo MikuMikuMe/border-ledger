@@ -5,6 +5,17 @@ import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { verifyAndroidAcceptance as verifyAndroidAcceptanceType } from '../scripts/verify-android-acceptance.mjs';
+
+type Assert<T extends true> = T;
+type AndroidAcceptanceResult = Awaited<ReturnType<typeof verifyAndroidAcceptanceType>>;
+type InstallationModeContract = Assert<
+  AndroidAcceptanceResult['installationMode'] extends 'in-place-upgrade' | 'fresh-install'
+    ? 'in-place-upgrade' extends AndroidAcceptanceResult['installationMode']
+      ? 'fresh-install' extends AndroidAcceptanceResult['installationMode'] ? true : false
+      : false
+    : false
+>;
 
 const packageId = 'com.lofuyu.borderledger';
 const assetLinksUrl = 'https://pf.lofuyu.com/.well-known/assetlinks.json';
