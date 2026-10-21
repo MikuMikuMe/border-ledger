@@ -127,7 +127,7 @@ function createAcceptanceFixture() {
 }
 
 function configureFreshInstallAcceptance(fixture: ReturnType<typeof createAcceptanceFixture>) {
-  const previousSigningCertificateSha256 = '11'.repeat(32);
+  const previousSigningCertificateSha256 = '1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed';
   const freshInstallEvidence = writeEvidence(fixture.directory, 'fresh-install.json', JSON.stringify({
     packageId,
     previousSigningCertificateSha256,
@@ -197,6 +197,13 @@ describe('Android release acceptance evidence', () => {
       featureGateCount: 18,
       installationMode: 'fresh-install',
     });
+  });
+
+  it('rejects fresh-install acceptance when the previous certificate is not the known production signer', async () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+    fixture.manifest.installationAcceptance.previousSigningCertificateSha256 = '11'.repeat(32);
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+    await expect(verify(fixture)).rejects.toThrow('Fresh-install acceptance previous signing certificate does not match the known previous production signer');
   });
 
   it('reports fresh-install acceptance accurately in CLI output', () => {

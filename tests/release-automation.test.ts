@@ -176,24 +176,18 @@ describe('release automation contract', () => {
     expect(deployWorkflow).toContain('https://pf.lofuyu.com/.well-known/assetlinks.json');
     expect(deployWorkflow).toContain('sha256_cert_fingerprints');
     expect(deployWorkflow).toContain('58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17');
+    expect(deployWorkflow).toContain('1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED');
     expect(deployWorkflow.indexOf('Deploy the named production Worker')).toBeLessThan(
       deployWorkflow.indexOf('https://pf.lofuyu.com/.well-known/assetlinks.json'),
     );
   });
 
-  it('uses the GitHub signing key fingerprint consistently for Android releases and App Links', () => {
+  it('uses the GitHub signing key for releases and both expected signers for App Links', () => {
     const expectedCompact = '5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417';
     const expectedDisplay = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
-    const identitySources = [
-      gradle,
-      releaseWorkflow,
-      promotionWorkflow,
-      deployWorkflow,
-      assetLinks,
-      workerSource,
-      acceptanceVerifier,
-      androidValidationDocs,
-    ].join('\n').toLowerCase();
+    const signingSources = [gradle, releaseWorkflow, promotionWorkflow]
+      .join(String.fromCharCode(10))
+      .toLowerCase();
 
     expect(gradle).toContain(expectedCompact.toUpperCase());
     expect(releaseWorkflow).toContain(`EXPECTED_CERT_SHA256: ${expectedCompact}`);
@@ -201,8 +195,8 @@ describe('release automation contract', () => {
     for (const source of [deployWorkflow, assetLinks, workerSource]) {
       expect(source).toContain(expectedDisplay);
     }
-    expect(identitySources).not.toContain('1f:f2');
-    expect(identitySources).not.toContain('44:ed');
+    expect(signingSources).not.toContain('1f:f2');
+    expect(signingSources).not.toContain('44:ed');
   });
   it('targets the existing production Worker bindings instead of creating a shadow Worker', () => {
     expect(wranglerConfig.name).toBe('border-ledger-local');

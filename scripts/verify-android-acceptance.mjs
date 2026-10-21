@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 const PACKAGE_ID = 'com.lofuyu.borderledger';
 const APP_LINKS_URL = 'https://pf.lofuyu.com/.well-known/assetlinks.json';
 const APP_LINK_RELATION = 'delegate_permission/common.handle_all_urls';
+const PREVIOUS_SIGNING_CERTIFICATE_SHA256 = '1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed';
 const GATE_IDS = Array.from({ length: 18 }, (_, index) => `F${String(index + 1).padStart(2, '0')}`);
 const MAX_ACCEPTANCE_EVIDENCE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -342,6 +343,9 @@ function verifyFreshInstallMetadata(installation, signingCertificateSha256, vers
   );
   if (previousSigningCertificateSha256 === signingCertificateSha256) {
     fail('Fresh-install acceptance requires a different previous signing certificate');
+  }
+  if (previousSigningCertificateSha256 !== PREVIOUS_SIGNING_CERTIFICATE_SHA256) {
+    fail('Fresh-install acceptance previous signing certificate does not match the known previous production signer');
   }
   if (Number(installation.versionCode) !== versionCode) fail('Fresh-install target versionCode does not match the candidate');
   return {
