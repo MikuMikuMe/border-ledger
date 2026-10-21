@@ -76,6 +76,12 @@ function assertThreadIndex(index: number, errorMessage: string): void {
   if (index >= THREAD_COUNT) throw new RangeError(errorMessage);
 }
 
+function assertThreadDimension(value: number, errorMessage: string): void {
+  'worklet';
+  if (!Number.isFinite(value)) throw new RangeError(errorMessage);
+  if (value < 0) throw new RangeError(errorMessage);
+}
+
 function assertThreadDimensions(
   { width, height }: ThreadDimensions,
   errorMessage = 'Thread dimensions must be finite and non-negative.',
@@ -83,12 +89,6 @@ function assertThreadDimensions(
   'worklet';
   assertThreadDimension(width, errorMessage);
   assertThreadDimension(height, errorMessage);
-}
-
-function assertThreadDimension(value: number, errorMessage: string): void {
-  'worklet';
-  if (!Number.isFinite(value)) throw new RangeError(errorMessage);
-  if (value < 0) throw new RangeError(errorMessage);
 }
 
 function assertCanonicalThreadStep(step: number): void {

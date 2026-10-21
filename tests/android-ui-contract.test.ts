@@ -59,6 +59,12 @@ describe('Android React Native production surface', () => {
     expect(reactActivity).toContain('initializeReactNative()');
   });
 
+  it('declares leaf worklet assertions before callers for Hermes closure capture', () => {
+    expect(geometry.indexOf('function assertThreadDimension(value')).toBeLessThan(
+      geometry.indexOf('function assertThreadDimensions('),
+    );
+  });
+
   it('renders the original 88-strand Threads field through Skia and Reanimated', () => {
     expect(geometry).toContain('export const THREAD_COUNT = 88;');
     expect(geometry).toContain('export const THREAD_SPEED = 0.58;');
