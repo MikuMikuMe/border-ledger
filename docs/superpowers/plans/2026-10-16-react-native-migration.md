@@ -12,7 +12,7 @@ The migration starts from recovery commit `017d9f61439b389cc2a16d71002fe4888a3d0
 - Production environment is explicitly `production` at `https://pf.lofuyu.com`. Do not mix Sandbox sessions or records into production.
 - Keep production Compose until all React Native screens pass parity and in-place upgrade gates. The debug launcher may exercise the React Native host during migration.
 - Native credentials, PKCE, and capture secrets never cross into JavaScript storage. Do not replay a financial mutation after losing a JS promise.
-- Use test-first changes for behavior. Review each task before proceeding. Do not publish or push to shared `main` until all release gates pass.
+- Use test-first changes for behavior. Review each task before proceeding. The original gate-first publication instruction was superseded on 2026-10-21: normal releases publish after automated build/signing checks, and device acceptance continues after installation.
 
 ## Task 1: React Native Android foundation
 

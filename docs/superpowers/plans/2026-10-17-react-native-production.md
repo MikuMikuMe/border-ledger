@@ -21,24 +21,13 @@
 - [ ] Deploy and verify these routing prerequisites before production sign-in.
 - [ ] Deploy and verify the GitHub signing-key certificate with App Links and a fresh Android install.
 
-## Candidate build and acceptance
+## Normal release and post-release validation
 
-- [x] Replace run-number versions with checked-in release identity `versionCode=1000`, `versionName=0.2.0`; stop if the installed/published maximum is higher.
-- [ ] Build a production candidate from an explicit reviewed source SHA. Build/test code without signing secrets; use a main-branch-controlled signing job that consumes only the unsigned APK and never checks out candidate code.
-- [ ] Sign with the existing CI key, verify package/version/environment/manifest/certificate, and create an unpublished draft release with APK, SHA-256, and candidate manifest.
-- [ ] Pass root web/Worker, mobile TypeScript/tests/Codegen, Android lint/unit/instrumentation/release gates. Diagnose the intermittent Miniflare `bad port` failure without suppressing or retrying it away.
-- [ ] Verify release startup without Metro, production bundle and native modules, debug-tool exclusion, and the canonical Thread Field at 412×915 on Pixel 10.
-- [ ] Exercise F01–F18, authentication/callback/lifecycle/revision/offline/background/file/Plaid/appearance/accessibility flows with fixtures for mutations.
-- [ ] Treat the GitHub-key build as a fresh install on devices signed with the previous certificate; preserve any needed local data first, then verify app links and production sign-in after reinstall.
-- [ ] Record redacted, objective evidence bound to candidate SHA and APK hash; only CPU optimization and iOS packaging are deferred.
-
-## Promotion
-
-- [ ] Complete a fresh whole-branch review, fix all findings, and rerun gates affected by changes.
-- [ ] Merge the exact candidate tree to `main` and verify the deployed main tree matches the tested source.
-- [ ] Promote the accepted draft release without rebuilding or replacing its APK bytes; verify published checksum/source/environment and installed React Native UI.
-- [ ] Keep the previous same-signer production APK as a private rollback artifact; rollback builds use a strictly higher version code.
-
+- [x] Build, sign, and publish Android 0.2.0 as a normal public release from main.
+- [x] Trigger automatic releases for application changes; backend-only changes do not trigger an APK release.
+- [x] Keep the release workflow on one path from app-change detection through public release.
+- [ ] Install the published APK on Pixel 10 and record any issues for the next iteration.
+- [ ] Complete F01–F18 checks that apply after installation. Bank/WeChat-dependent checks may remain pending and do not block publication.
 ## Explicit deferrals
 
 - CPU tuning is deferred as authorized; runtime crashes, ANRs, unresponsive input and broken background rendering still fail acceptance.

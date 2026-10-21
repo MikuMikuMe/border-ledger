@@ -197,7 +197,7 @@ function verifyManifestIdentity(manifest, options) {
 
   const versionCode = Number(manifest.versionCode);
   if (!Number.isSafeInteger(versionCode) || versionCode < 1) fail('Manifest versionCode must be a positive integer');
-  if (Number(options.expectedVersionCode) !== versionCode) fail('Manifest versionCode does not match the candidate');
+  if (Number(options.expectedVersionCode) !== versionCode) fail('Manifest versionCode does not match the release APK');
   return { signingCertificateSha256, sourceSha, versionCode };
 }
 
@@ -327,7 +327,7 @@ function verifyInPlaceUpgradeMetadata(installation, versionCode) {
   if (!Number.isSafeInteger(fromVersionCode)) fail('In-place upgrade source versionCode must be an integer');
   if (fromVersionCode < 1) fail('In-place upgrade must start from a positive versionCode');
   if (fromVersionCode >= versionCode) fail('In-place upgrade must start from a lower versionCode');
-  if (toVersionCode !== versionCode) fail('In-place upgrade target versionCode does not match the candidate');
+  if (toVersionCode !== versionCode) fail('In-place upgrade target versionCode does not match the release APK');
   return { mode: 'in-place-upgrade', fromVersionCode, toVersionCode };
 }
 
@@ -350,7 +350,7 @@ function verifyFreshInstallMetadata(installation, signingCertificateSha256, vers
   if (previousSigningCertificateSha256 !== PREVIOUS_SIGNING_CERTIFICATE_SHA256) {
     fail('Fresh-install acceptance previous signing certificate does not match the known previous production signer');
   }
-  if (Number(installation.versionCode) !== versionCode) fail('Fresh-install target versionCode does not match the candidate');
+  if (Number(installation.versionCode) !== versionCode) fail('Fresh-install target versionCode does not match the release APK');
   return {
     mode: 'fresh-install',
     previousSigningCertificateSha256,
@@ -405,7 +405,7 @@ async function verifyInstallationEvidence(installation, evidenceRoot, signingCer
     metadata.previousSigningCertificateSha256,
     'Fresh-install evidence previous certificate does not match the acceptance manifest',
   );
-  if (Number(evidence.versionCode) !== metadata.versionCode) fail('Fresh-install evidence versionCode does not match the candidate');
+  if (Number(evidence.versionCode) !== metadata.versionCode) fail('Fresh-install evidence versionCode does not match the release APK');
   if (evidence.freshInstallCompleted !== true || evidence.previousAppAbsent !== true) {
     fail('Fresh-install evidence must confirm installation completed with the previous app absent');
   }
@@ -413,8 +413,8 @@ async function verifyInstallationEvidence(installation, evidenceRoot, signingCer
 }
 
 /**
- * Verify a human-captured Android acceptance bundle before a signed candidate
- * is made public. This deliberately fails closed on missing or stale evidence.
+ * Verify a human-captured Android acceptance bundle for a signed Android release.
+ * This deliberately fails closed on missing or stale evidence.
  */
 export async function verifyAndroidAcceptance({
   manifestPath,

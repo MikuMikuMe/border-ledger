@@ -369,19 +369,4 @@ describe('Android release acceptance evidence', () => {
     await expect(verify(fixture)).rejects.toThrow('evidence path must stay inside the bundle');
   });
 
-  it('wires the acceptance verifier before the release-publish step', () => {
-    const workflow = readFileSync(resolve(process.cwd(), '.github/workflows/android-promote.yml'), 'utf8');
-    const verifier = workflow.indexOf('verify-android-acceptance.mjs');
-    const publish = workflow.indexOf('Publish the exact accepted APK bytes');
-
-    expect(workflow).toContain('acceptance_manifest_sha256:');
-    expect(workflow).toContain('acceptance-evidence.zip');
-    expect(workflow).toContain('apksigner verify');
-    expect(workflow).toContain('$certificateMatches.Count -ne 1');
-    expect(workflow).toContain('aapt2 dump badging');
-    expect(workflow).toContain('APK package ID does not match candidate');
-    expect(workflow).toContain('APK versionCode does not match candidate');
-    expect(verifier).toBeGreaterThanOrEqual(0);
-    expect(publish).toBeGreaterThan(verifier);
-  });
 });
