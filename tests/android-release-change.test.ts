@@ -1,7 +1,21 @@
+import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { shouldPublishAndroidRelease } from '../scripts/detect-android-release-change.mjs';
 
 describe('Android release change detector', () => {
+  it('writes the app-change output when invoked as a GitHub Actions step', () => {
+    const script = resolve(process.cwd(), 'scripts/detect-android-release-change.mjs');
+    const result = spawnSync(process.execPath, [script], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: { ...process.env, EVENT_NAME: 'workflow_dispatch', GITHUB_OUTPUT: '' },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('app_changed=true\n');
+  });
+
   const backendOnlyBefore = JSON.stringify({ dependencies: { jose: '6.2.11' } });
   const backendOnlyCurrent = JSON.stringify({ dependencies: { jose: '6.2.12' } });
   const frontendBefore = JSON.stringify({ dependencies: { react: '18.3.0' } });
@@ -160,5 +174,38 @@ describe('Android release change detector', () => {
       eventName: 'workflow_dispatch',
       changedPaths: ['worker/index.ts'],
     })).toBe(true);
+  });
+
+  it('skips automatic release when only backend npm scripts change', () => {
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: ['package.json'],
+      packageBefore: JSON.stringify({ scripts: { deploy: 'wrangler deploy' } }),
+      packageCurrent: JSON.stringify({ scripts: { deploy: 'wrangler deploy --minify' } }),
+      frontendSource,
+    })).toBe(false);
+  });
+
+  it('publishes when the frontend build script changes', () => {
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: ['package.json'],
+      packageBefore: JSON.stringify({ scripts: { build: 'vite build' } }),
+      packageCurrent: JSON.stringify({ scripts: { build: 'vite build --base=/app/' } }),
+      frontendSource,
+    })).toBe(true);
+  });
+
+  it('skips direct Worker-only and workflow-only changes', () => {
+    for (const path of ['worker/index.ts', 'wrangler.jsonc', '.github/workflows/android-release.yml', 'README.md']) {
+      expect(shouldPublishAndroidRelease({ eventName: 'push', changedPaths: [path] })).toBe(false);
+    }
+  });
+
+  it('skips an automatic release when the push contains no changed paths', () => {
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: [],
+    })).toBe(false);
   });
 });

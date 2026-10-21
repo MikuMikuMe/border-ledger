@@ -48,27 +48,33 @@ describe('release automation contract', () => {
     expect(gradle).not.toContain('packageRelease');
   });
 
-  it('builds unsigned APKs on app pushes and reserves signing for a reviewed main SHA', () => {
+  it('gates release builds on app changes and reserves signing for a reviewed main SHA', () => {
     expect(releaseWorkflow).toMatch(/^  workflow_dispatch:/m);
     expect(releaseWorkflow).toMatch(/^  push:\s*\n\s+branches:\s+\[main\]\s*\n\s+paths:/m);
     expect(releaseWorkflow).toContain('mobile/**');
+    expect(releaseWorkflow).toContain('android/**');
+    expect(releaseWorkflow).not.toContain('tests/**');
+    expect(releaseWorkflow).not.toContain('.github/workflows/android-release.yml');
+    expect(releaseWorkflow).toContain('node scripts/detect-android-release-change.mjs');
+    expect(releaseWorkflow).toContain('node scripts/resolve-android-release-version.mjs');
+    expect(releaseWorkflow).toContain("needs.detect-app-change.outputs.app_changed == 'true'");
     expect(releaseWorkflow).toContain('inputs.source_sha || github.sha');
-    expect(releaseWorkflow).toContain('group: android-release-candidate-${{ github.event_name }}-${{ github.sha }}');
+    expect(releaseWorkflow).toContain('group: android-release-candidate-${{ github.ref }}');
     expect(releaseWorkflow).toContain('source_sha');
     expect(releaseWorkflow).toContain('must equal the workflow main SHA');
     const buildJob = releaseWorkflow.split('  sign-artifact:')[0];
     expect(buildJob).toContain('build-unsigned:');
     expect(buildJob).toContain('assembleRelease');
-    expect(buildJob).toContain('releaseVersionCode=1000');
-    expect(buildJob).toContain('releaseVersionName=0.2.0');
+    expect(buildJob).toContain('-PreleaseVersionCode=${{ needs.detect-app-change.outputs.version_code }}');
+    expect(buildJob).toContain('-PreleaseVersionName=${{ needs.detect-app-change.outputs.version_name }}');
     expect(buildJob).toContain('mobileEnvironment=production');
     expect(buildJob).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
     expect(buildJob).not.toMatch(/secrets\./);
     expect(buildJob).not.toContain('contents: write');
   });
 
-  it('signs main builds with the protected environment and reserves release publishing for manual dispatch', () => {
-    const signer = releaseWorkflow.split('  sign-artifact:')[1]?.split('  create-candidate-draft:')[0] ?? '';
+  it('signs app builds with the protected environment and reserves release asset writes for the publishing job', () => {
+    const signer = releaseWorkflow.split('  sign-artifact:')[1]?.split('  publish-release:')[0] ?? '';
     expect(signer).toContain("if: github.ref == 'refs/heads/main'");
     expect(signer).toContain('environment: android-production-signing');
     expect(signer).toContain('actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
@@ -84,13 +90,16 @@ describe('release automation contract', () => {
     expect(signer).not.toContain('gh release create');
   });
 
-  it('creates a draft release only from a manual main-branch dispatch', () => {
-    const draftRelease = releaseWorkflow.split('  create-candidate-draft:')[1] ?? '';
-    expect(draftRelease).toContain("github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'");
-    expect(draftRelease).toContain('contents: write');
-    expect(draftRelease).toContain('gh release create');
-    expect(draftRelease).toContain('--draft');
-    expect(draftRelease).not.toContain('--clobber');
+  it('publishes a normal release for app pushes and manual main-branch dispatches with generated change notes', () => {
+    const publishedRelease = releaseWorkflow.split('  publish-release:')[1] ?? '';
+    expect(publishedRelease).toContain("github.ref == 'refs/heads/main' && needs.detect-app-change.outputs.app_changed == 'true'");
+    expect(publishedRelease).toContain('contents: write');
+    expect(publishedRelease).toContain('gh release create');
+    expect(publishedRelease).toContain('releases/generate-notes');
+    expect(publishedRelease).toContain('PREVIOUS_TAG');
+    expect(publishedRelease).not.toContain('--draft');
+    expect(publishedRelease).not.toContain('--prerelease');
+    expect(publishedRelease).not.toContain('--clobber');
   });
 
   it('promotes the accepted draft by verifying the exact source and APK hash without rebuilding or replacing bytes', () => {
