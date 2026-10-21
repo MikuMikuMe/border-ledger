@@ -11,6 +11,19 @@ const apkSha256 = 'b'.repeat(64);
 const certificateSha256 = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
 const temporaryDirectories: string[] = [];
 
+type InstallationAcceptance = {
+  mode: 'in-place-upgrade' | 'fresh-install';
+  status: 'passed';
+  packageId: string;
+  signingCertificateSha256: string;
+  fromVersionCode?: number;
+  toVersionCode?: number;
+  previousSigningCertificateSha256?: string;
+  versionCode?: number;
+  dataDisposition?: string;
+  evidence: ReturnType<typeof writeEvidence>;
+};
+
 function sha256(value: Buffer | string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -60,6 +73,15 @@ function createAcceptanceFixture() {
     existingAppDataPreserved: true,
   });
   const upgradeEvidence = writeEvidence(directory, 'upgrade.json', upgradeEvidenceBody);
+  const installationAcceptance: InstallationAcceptance = {
+    mode: 'in-place-upgrade',
+    status: 'passed',
+    packageId,
+    signingCertificateSha256: certificateSha256,
+    fromVersionCode: 999,
+    toVersionCode: 1000,
+    evidence: upgradeEvidence,
+  };
   const gates = Object.fromEntries(Array.from({ length: 18 }, (_, index) => {
     const id = 'F' + String(index + 1).padStart(2, '0');
     const evidence = writeEvidence(directory, id + '.txt', 'sanitized acceptance evidence for ' + id);
@@ -68,7 +90,7 @@ function createAcceptanceFixture() {
 
   const manifestPath = join(directory, 'acceptance-manifest.json');
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceSha,
     apkSha256,
     packageId,
@@ -83,19 +105,37 @@ function createAcceptanceFixture() {
       responseSha256: appLinksEvidence.sha256,
       responseEvidence: appLinksEvidence,
     },
-    inPlaceUpgrade: {
-      status: 'passed',
-      packageId,
-      signingCertificateSha256: certificateSha256,
-      fromVersionCode: 999,
-      toVersionCode: 1000,
-      evidence: upgradeEvidence,
-    },
+    installationAcceptance,
     gates,
   };
   writeFileSync(manifestPath, JSON.stringify(manifest));
 
   return { directory, manifestPath, manifest, assetLinksBody };
+}
+
+function configureFreshInstallAcceptance(fixture: ReturnType<typeof createAcceptanceFixture>) {
+  const previousSigningCertificateSha256 = '11'.repeat(32);
+  const freshInstallEvidence = writeEvidence(fixture.directory, 'fresh-install.json', JSON.stringify({
+    packageId,
+    previousSigningCertificateSha256,
+    signingCertificateSha256: certificateSha256,
+    versionCode: 1000,
+    freshInstallCompleted: true,
+    previousAppAbsent: true,
+    dataDisposition: 'no-existing-data',
+  }));
+  fixture.manifest.installationAcceptance = {
+    mode: 'fresh-install',
+    status: 'passed',
+    packageId,
+    previousSigningCertificateSha256,
+    signingCertificateSha256: certificateSha256,
+    versionCode: 1000,
+    dataDisposition: 'no-existing-data',
+    evidence: freshInstallEvidence,
+  };
+  writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+  return fixture;
 }
 
 function testFetch(body: string) {
@@ -133,6 +173,31 @@ describe('Android release acceptance evidence', () => {
       verified: true,
       featureGateCount: 18,
     });
+  });
+
+  it('accepts a fresh install when the candidate uses a different signing key', async () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+
+    await expect(verify(fixture)).resolves.toEqual({
+      verified: true,
+      featureGateCount: 18,
+    });
+  });
+
+  it('rejects fresh-install acceptance when the previous certificate matches the candidate', async () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+    fixture.manifest.installationAcceptance.previousSigningCertificateSha256 = certificateSha256;
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('Fresh-install acceptance requires a different previous signing certificate');
+  });
+
+  it('requires an explicit data disposition for fresh-install acceptance', async () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+    fixture.manifest.installationAcceptance.dataDisposition = 'unrecorded';
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('Fresh-install dataDisposition must be "backup-verified" or "no-existing-data"');
   });
 
   it('rejects a pending feature gate even when it has a file attached', async () => {

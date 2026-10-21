@@ -153,7 +153,7 @@ jobs:
               '--version-code', [string]$actualVersionCode
             )
             & node @acceptanceArgs
-            if ($LASTEXITCODE -ne 0) { throw 'F01–F18, live App Links, or signed in-place-upgrade acceptance failed.' }
+            if ($LASTEXITCODE -ne 0) { throw 'F01–F18, live App Links, or Android installation acceptance failed.' }
           } else {
             if (-not $existingMarker.Success) { throw 'The candidate is missing its complete owner acceptance bundle and a verified retry marker.' }
             $acceptanceManifestHash = $existingMarker.Groups['manifest'].Value

@@ -14,6 +14,8 @@ const promotionWorkflow = existsSync(promotionPath) ? readFileSync(promotionPath
 const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'), 'utf8');
 const assetLinks = readFileSync(resolve(root, 'public/.well-known/assetlinks.json'), 'utf8');
 const workerSource = readFileSync(resolve(root, 'worker/index.ts'), 'utf8');
+const acceptanceVerifier = readFileSync(resolve(root, 'scripts/verify-android-acceptance.mjs'), 'utf8');
+const androidValidationDocs = readFileSync(resolve(root, 'docs/android-validation.md'), 'utf8');
 const wrangler = readFileSync(resolve(root, 'wrangler.jsonc'), 'utf8');
 const wranglerConfig = JSON.parse(wrangler);
 const productionConfig = wranglerConfig.env.production;
@@ -182,7 +184,16 @@ describe('release automation contract', () => {
   it('uses the GitHub signing key fingerprint consistently for Android releases and App Links', () => {
     const expectedCompact = '5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417';
     const expectedDisplay = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
-    const identitySources = [gradle, releaseWorkflow, promotionWorkflow, deployWorkflow, assetLinks, workerSource].join('\n').toLowerCase();
+    const identitySources = [
+      gradle,
+      releaseWorkflow,
+      promotionWorkflow,
+      deployWorkflow,
+      assetLinks,
+      workerSource,
+      acceptanceVerifier,
+      androidValidationDocs,
+    ].join('\n').toLowerCase();
 
     expect(gradle).toContain(expectedCompact.toUpperCase());
     expect(releaseWorkflow).toContain(`EXPECTED_CERT_SHA256: ${expectedCompact}`);
@@ -190,6 +201,8 @@ describe('release automation contract', () => {
     for (const source of [deployWorkflow, assetLinks, workerSource]) {
       expect(source).toContain(expectedDisplay);
     }
+    expect(identitySources).not.toContain('1f:f2');
+    expect(identitySources).not.toContain('44:ed');
   });
   it('targets the existing production Worker bindings instead of creating a shadow Worker', () => {
     expect(wranglerConfig.name).toBe('border-ledger-local');

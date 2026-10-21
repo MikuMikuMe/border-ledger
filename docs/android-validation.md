@@ -136,15 +136,16 @@ workflow now requires an owner-captured `acceptance-manifest.json`, the
 matching `acceptance-evidence.zip`, and the manifest SHA-256 as an explicit
 input. Before making a draft public, it checks that the manifest is bound to
 the exact `main` source SHA, APK digest, production package, version, and
-existing release certificate; every F01–F18 gate is marked passed and points
-to checksum-verified evidence; the evidence contains a preserved-data in-place
-upgrade from a lower version; and the production App Links endpoint currently
+GitHub signing-key certificate; every F01–F18 gate is marked passed and points
+to checksum-verified evidence; the evidence contains either a preserved-data
+in-place upgrade from a lower version or a verified fresh install after a
+signing-certificate transition; and the production App Links endpoint currently
 serves the same checksummed association response authorizing that package and
 certificate. Missing, stale, modified, or mismatched evidence fails closed.
 
-The manifest is JSON with `schemaVersion: 1`, exact `sourceSha`, `apkSha256`,
+The manifest is JSON with `schemaVersion: 2`, exact `sourceSha`, `apkSha256`,
 `packageId`, `mobileEnvironment`, `signingCertificateSha256`, `versionCode`,
-`appLinks`, `inPlaceUpgrade`, and `gates` objects. Each gate F01–F18 has
+`appLinks`, `installationAcceptance`, and `gates` objects. Each gate F01–F18 has
 `status: "passed"` and a nonempty `evidence` list; each evidence item has a
 bundle-relative `path`, lowercase hexadecimal `sha256`, and an `attestation`
 with matching `sourceSha` and `gateId`, UTC `capturedAt`, `device`, and
@@ -152,10 +153,17 @@ lowercase-slug `evidenceType`. Capture attestations must be no more than 30
 days old. Evidence files must be nonempty, checksum-valid, and unique by path
 and content across the F01–F18 gates. The App Links record
 includes the production URL, package/certificate, response digest, and an
-evidence-file reference. The in-place upgrade record includes source and
-target version codes, package/certificate, and a checksummed JSON evidence
-file confirming both upgrade and existing-data preservation. Capture evidence
-without personal financial data, credentials, or signing material.
+evidence-file reference. `installationAcceptance.mode` is either
+`in-place-upgrade` or `fresh-install`. In-place upgrades include source and
+target version codes and checksummed JSON evidence confirming the upgrade and
+existing-data preservation. Fresh installs require a previous signer SHA-256
+different from the candidate, the candidate version code, and a
+`dataDisposition` of `backup-verified` or `no-existing-data`; checksummed JSON
+evidence must confirm the new install completed with the previous app absent.
+Use a device with no valuable local data or verify a backup before uninstalling
+an app signed with the previous key, because Android cannot update it in place
+across signing certificates. Capture evidence without personal financial data,
+credentials, or signing material.
 
 ### Attaching the owner acceptance bundle
 

@@ -175,7 +175,7 @@ async function verifyLiveAppLinks({ fetchImpl, expectedDigest, signingCertificat
 }
 
 function verifyManifestIdentity(manifest, options) {
-  equal(manifest.schemaVersion, 1, 'Acceptance manifest schemaVersion must be 1');
+  equal(manifest.schemaVersion, 2, 'Acceptance manifest schemaVersion must be 2');
   const sourceSha = normalizeSourceSha(manifest.sourceSha, 'Manifest source SHA');
   equal(sourceSha, normalizeSourceSha(options.expectedSourceSha, 'Expected source SHA'), 'source SHA does not match');
 
@@ -317,46 +317,92 @@ async function verifyAppLinksAcceptance(appLinks, evidenceRoot, signingCertifica
   await verifyLiveAppLinks({ fetchImpl, expectedDigest: appLinksDigest, signingCertificateSha256 });
 }
 
-function verifyUpgradeMetadata(upgrade, signingCertificateSha256, versionCode) {
-  if (!upgrade || upgrade.status !== 'passed') fail('In-place upgrade acceptance must be passed');
-  equal(upgrade.packageId, PACKAGE_ID, 'Upgrade evidence package ID must match the production package');
-  equal(
-    normalizeSha256(upgrade.signingCertificateSha256, 'Upgrade signing certificate SHA-256'),
-    signingCertificateSha256,
-    'Upgrade evidence certificate does not match the production identity',
-  );
-  const fromVersionCode = Number(upgrade.fromVersionCode);
-  const toVersionCode = Number(upgrade.toVersionCode);
-  if (!isValidUpgradeSourceVersion(fromVersionCode, versionCode)) fail('In-place upgrade must start from a lower positive versionCode');
+function verifyInPlaceUpgradeMetadata(installation, versionCode) {
+  const fromVersionCode = Number(installation.fromVersionCode);
+  const toVersionCode = Number(installation.toVersionCode);
+  if (!Number.isSafeInteger(fromVersionCode)) fail('In-place upgrade source versionCode must be an integer');
+  if (fromVersionCode < 1) fail('In-place upgrade must start from a positive versionCode');
+  if (fromVersionCode >= versionCode) fail('In-place upgrade must start from a lower versionCode');
   if (toVersionCode !== versionCode) fail('In-place upgrade target versionCode does not match the candidate');
-  return { fromVersionCode, toVersionCode };
+  return { mode: 'in-place-upgrade', fromVersionCode, toVersionCode };
 }
 
-function isValidUpgradeSourceVersion(fromVersionCode, candidateVersionCode) {
-  return Number.isSafeInteger(fromVersionCode) && fromVersionCode > 0 && fromVersionCode < candidateVersionCode;
-}
-
-async function verifyUpgradeEvidence(upgrade, evidenceRoot, signingCertificateSha256, versions) {
-  const upgradeBytes = await readVerifiedEvidence(upgrade.evidence, evidenceRoot, 'In-place upgrade');
-  let upgradeEvidence;
-  try {
-    upgradeEvidence = JSON.parse(upgradeBytes.toString('utf8'));
-  } catch {
-    fail('In-place upgrade evidence must be valid JSON');
+function verifyFreshInstallDataDisposition(value) {
+  const dataDisposition = requireString(value, 'Fresh-install dataDisposition');
+  if (!['backup-verified', 'no-existing-data'].includes(dataDisposition)) {
+    fail('Fresh-install dataDisposition must be "backup-verified" or "no-existing-data"');
   }
-  equal(upgradeEvidence.packageId, PACKAGE_ID, 'In-place upgrade evidence package ID does not match');
-  equal(
-    normalizeSha256(upgradeEvidence.signingCertificateSha256, 'Upgrade evidence signing certificate SHA-256'),
-    signingCertificateSha256,
-    'In-place upgrade evidence has the wrong signing certificate',
+  return dataDisposition;
+}
+
+function verifyFreshInstallMetadata(installation, signingCertificateSha256, versionCode) {
+  const previousSigningCertificateSha256 = normalizeSha256(
+    installation.previousSigningCertificateSha256,
+    'Previous signing certificate SHA-256',
   );
-  if (Number(upgradeEvidence.fromVersionCode) !== versions.fromVersionCode
-    || Number(upgradeEvidence.toVersionCode) !== versions.toVersionCode) {
-    fail('In-place upgrade evidence versions do not match the acceptance manifest');
+  if (previousSigningCertificateSha256 === signingCertificateSha256) {
+    fail('Fresh-install acceptance requires a different previous signing certificate');
   }
-  if (upgradeEvidence.upgradedExistingInstallation !== true || upgradeEvidence.existingAppDataPreserved !== true) {
-    fail('In-place upgrade evidence must confirm upgrade and existing app-data preservation');
+  if (Number(installation.versionCode) !== versionCode) fail('Fresh-install target versionCode does not match the candidate');
+  return {
+    mode: 'fresh-install',
+    previousSigningCertificateSha256,
+    versionCode,
+    dataDisposition: verifyFreshInstallDataDisposition(installation.dataDisposition),
+  };
+}
+
+function verifyInstallationMetadata(installation, signingCertificateSha256, versionCode) {
+  if (!isRecord(installation) || installation.status !== 'passed') fail('Android installation acceptance must be passed');
+  equal(installation.packageId, PACKAGE_ID, 'Installation acceptance package ID must match the production package');
+  equal(
+    normalizeSha256(installation.signingCertificateSha256, 'Installation acceptance signing certificate SHA-256'),
+    signingCertificateSha256,
+    'Installation acceptance certificate does not match the production identity',
+  );
+
+  const mode = requireString(installation.mode, 'Installation acceptance mode');
+  if (mode === 'in-place-upgrade') return verifyInPlaceUpgradeMetadata(installation, versionCode);
+  if (mode === 'fresh-install') return verifyFreshInstallMetadata(installation, signingCertificateSha256, versionCode);
+  fail('Installation acceptance mode must be "in-place-upgrade" or "fresh-install"');
+}
+
+async function verifyInstallationEvidence(installation, evidenceRoot, signingCertificateSha256, metadata) {
+  const evidenceBytes = await readVerifiedEvidence(installation.evidence, evidenceRoot, 'Android installation');
+  let evidence;
+  try {
+    evidence = JSON.parse(evidenceBytes.toString('utf8'));
+  } catch {
+    fail('Android installation evidence must be valid JSON');
   }
+  equal(evidence.packageId, PACKAGE_ID, 'Android installation evidence package ID does not match');
+  equal(
+    normalizeSha256(evidence.signingCertificateSha256, 'Android installation evidence signing certificate SHA-256'),
+    signingCertificateSha256,
+    'Android installation evidence has the wrong signing certificate',
+  );
+
+  if (metadata.mode === 'in-place-upgrade') {
+    if (Number(evidence.fromVersionCode) !== metadata.fromVersionCode
+      || Number(evidence.toVersionCode) !== metadata.toVersionCode) {
+      fail('In-place upgrade evidence versions do not match the acceptance manifest');
+    }
+    if (evidence.upgradedExistingInstallation !== true || evidence.existingAppDataPreserved !== true) {
+      fail('In-place upgrade evidence must confirm upgrade and existing app-data preservation');
+    }
+    return;
+  }
+
+  equal(
+    normalizeSha256(evidence.previousSigningCertificateSha256, 'Evidence previous signing certificate SHA-256'),
+    metadata.previousSigningCertificateSha256,
+    'Fresh-install evidence previous certificate does not match the acceptance manifest',
+  );
+  if (Number(evidence.versionCode) !== metadata.versionCode) fail('Fresh-install evidence versionCode does not match the candidate');
+  if (evidence.freshInstallCompleted !== true || evidence.previousAppAbsent !== true) {
+    fail('Fresh-install evidence must confirm installation completed with the previous app absent');
+  }
+  equal(evidence.dataDisposition, metadata.dataDisposition, 'Fresh-install evidence data disposition does not match the acceptance manifest');
 }
 
 /**
@@ -384,9 +430,9 @@ export async function verifyAndroidAcceptance({
   });
   await verifyFeatureGates(manifest.gates, evidenceRoot, sourceSha);
   await verifyAppLinksAcceptance(manifest.appLinks, evidenceRoot, signingCertificateSha256, fetchImpl);
-  const upgrade = manifest.inPlaceUpgrade;
-  const versions = verifyUpgradeMetadata(upgrade, signingCertificateSha256, versionCode);
-  await verifyUpgradeEvidence(upgrade, evidenceRoot, signingCertificateSha256, versions);
+  const installation = manifest.installationAcceptance;
+  const installationMetadata = verifyInstallationMetadata(installation, signingCertificateSha256, versionCode);
+  await verifyInstallationEvidence(installation, evidenceRoot, signingCertificateSha256, installationMetadata);
 
   return { verified: true, featureGateCount: GATE_IDS.length };
 }
