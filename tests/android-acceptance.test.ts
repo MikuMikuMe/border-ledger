@@ -8,7 +8,7 @@ const packageId = 'com.lofuyu.borderledger';
 const assetLinksUrl = 'https://pf.lofuyu.com/.well-known/assetlinks.json';
 const sourceSha = 'a'.repeat(40);
 const apkSha256 = 'b'.repeat(64);
-const certificateSha256 = '1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED';
+const certificateSha256 = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
 const temporaryDirectories: string[] = [];
 
 function sha256(value: Buffer | string): string {

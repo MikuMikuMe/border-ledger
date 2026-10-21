@@ -33,7 +33,7 @@ tasks.matching { it.name == "preReleaseBuild" || it.name == "createBundleRelease
     dependsOn(verifyReleaseEnvironment)
 }
 
-val productionSigningCertificateSha256 = "1FF2A25E39136EEFA79D23CC7531F702B2A162280538410509CA2FF65B4744ED"
+val productionSigningCertificateSha256 = "5827E817EBAD9D478CA2C3C470A3742D783FC7D2BFBFFB8CC58219B5F3E68417"
 val verifyDebugSigningIdentity = tasks.register("verifyDebugSigningIdentity") {
     group = "verification"
     description = "Prevent debug artifacts from being signed with the production release identity."

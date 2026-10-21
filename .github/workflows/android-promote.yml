@@ -58,7 +58,7 @@ jobs:
           EXPECTED_APK_SHA256: ${{ inputs.apk_sha256 }}
           EXPECTED_ACCEPTANCE_MANIFEST_SHA256: ${{ inputs.acceptance_manifest_sha256 }}
           RELEASE_TAG: ${{ inputs.tag }}
-          EXPECTED_CERT_SHA256: 1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed
+          EXPECTED_CERT_SHA256: 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417
         run: |
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Only main may promote an Android release.' }
           if ($env:EXPECTED_SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'source_sha must be a full commit SHA.' }
@@ -105,7 +105,7 @@ jobs:
           if ($manifest.sourceSha.ToLowerInvariant() -ne $env:EXPECTED_SOURCE_SHA.ToLowerInvariant()) { throw 'Candidate manifest source SHA does not match the accepted source.' }
           if ($manifest.apkFileName -ne $apk[0].Name) { throw 'Candidate manifest APK name does not match the downloaded APK.' }
           if ($manifest.packageId -ne 'com.lofuyu.borderledger' -or $manifest.mobileEnvironment -ne 'production') { throw 'Candidate package or production environment is incorrect.' }
-          if ($manifest.signingCertificateSha256 -ne $env:EXPECTED_CERT_SHA256) { throw 'Candidate certificate is not the existing Samsung/App Links signer.' }
+          if ($manifest.signingCertificateSha256 -ne $env:EXPECTED_CERT_SHA256) { throw 'Candidate certificate does not match the GitHub signing key fingerprint.' }
           $buildTools = Join-Path $env:ANDROID_HOME 'build-tools/36.0.0'
           $apksigner = Join-Path $buildTools 'apksigner'
           $aapt2 = Join-Path $buildTools 'aapt2'

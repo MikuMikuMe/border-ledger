@@ -62,18 +62,21 @@ and no competing Gradle build was found. The exact configure then passed
 single-worker, and the complete Android gates plus fresh JVM/core tests passed.
 No ACL or source workaround was applied; transient root cause is unconfirmed.
 
-The Samsung currently has `versionCode=921` / `0.1.921`; its installed signer is
-SHA-256
-`1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed`, matching
-the live App Links record. Current read-only Package Manager inspection reports
-`pf.lofuyu.com: verified` on Samsung. The phone has not been installed,
-uninstalled, cleared, or updated in this validation run.
+The Android production candidate signer is SHA-256 fingerprint
+5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417. This
+fingerprint was verified against the owner-provided GitHub keystore certificate.
+The release and promotion workflows, Android debug-signer guard, Worker response,
+and static App Links file are configured to use this identity.
 
-The live `https://pf.lofuyu.com/.well-known/assetlinks.json` currently returns
-HTTP 200 `application/json` and one matching statement for package
-`com.lofuyu.borderledger`, relation
-`delegate_permission/common.handle_all_urls`, and release certificate SHA-256
-`1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED`. On the Pixel 10 Pro API 37, the current-source debug install reports its separate debug signer and domain state `1024`; this is expected for a signer mismatch, not evidence that the production association is wrong. A production-signed build of this exact source is required for the Pixel Package Manager check.
+The previous validation observed a Samsung installation using the earlier signing
+certificate. Switching to the GitHub key changes the package signature, so a new
+APK signed with this key cannot update an installation signed with a different key.
+Verify a fresh install and App Links after deploying this configuration.
+
+On the Pixel 10 Pro API 37, the current-source debug install reports its separate
+debug signer and domain state 1024; this is expected for a signer mismatch, not
+evidence that the production association is wrong. A production-signed build of
+this exact source is required for the Pixel Package Manager check.
 
 The Pixel 10 Pro API 37 emulator is currently reachable. Current-source
 instrumentation passed, including root recreation and local-font checks; a
