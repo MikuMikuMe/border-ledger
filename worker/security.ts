@@ -42,6 +42,7 @@ export function isSameOriginMutation(request: Request, configuredOrigin: string 
 export function apiSecurityHeaders() {
   return {
     'cache-control': 'no-store',
+    'strict-transport-security': 'max-age=31536000',
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',
     'permissions-policy': 'geolocation=(), microphone=(), camera=()',
@@ -53,6 +54,7 @@ export function apiSecurityHeaders() {
 export function staticSecurityHeaders() {
   return {
     'content-security-policy': "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'",
+    'strict-transport-security': 'max-age=31536000',
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',
     'permissions-policy': 'geolocation=(), microphone=(), camera=()',
@@ -61,14 +63,43 @@ export function staticSecurityHeaders() {
   };
 }
 
+function hasOversizedDeclaredLength(contentLength: string | null, maxBytes: number) {
+  if (!contentLength) return false;
+  const declaredLength = Number(contentLength);
+  if (!Number.isFinite(declaredLength)) return false;
+  return declaredLength > maxBytes;
+}
+
+async function readBoundedRequestText(reader: ReadableStreamDefaultReader<Uint8Array>, maxBytes: number) {
+  const decoder = new TextDecoder();
+  let byteLength = 0;
+  let text = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    if (byteLength + value.byteLength > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new BodyTooLargeError();
+    }
+    byteLength += value.byteLength;
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
 export async function readRequestText(request: Request, maxBytes: number) {
-  const contentLength = request.headers.get('content-length');
-  if (contentLength && Number.isFinite(Number(contentLength)) && Number(contentLength) > maxBytes) {
+  const body = request.body;
+  if (hasOversizedDeclaredLength(request.headers.get('content-length'), maxBytes)) {
+    await body?.cancel().catch(() => undefined);
     throw new BodyTooLargeError();
   }
-  const body = await request.arrayBuffer();
-  if (body.byteLength > maxBytes) throw new BodyTooLargeError();
-  return new TextDecoder().decode(body);
+
+  const reader = body?.getReader();
+  if (!reader) return '';
+  try {
+    return await readBoundedRequestText(reader, maxBytes);
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export async function readJsonBody<T>(request: Request, maxBytes: number): Promise<T> {

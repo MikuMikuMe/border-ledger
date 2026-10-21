@@ -1,15 +1,23 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
 const gradle = readFileSync(resolve(root, 'android/app/build.gradle.kts'), 'utf8');
 const releaseWorkflow = readFileSync(resolve(root, '.github/workflows/android-release.yml'), 'utf8');
+const codeqlWorkflow = readFileSync(resolve(root, '.github/workflows/codeql.yml'), 'utf8');
+const androidCiWorkflow = readFileSync(resolve(root, '.github/workflows/android-ci.yml'), 'utf8');
+const extractActionRefs = (source: string) =>
+  [...source.matchAll(/^[ \t]*-?[ \t]*uses:[ \t]+([^\s#]+)/gm)].map((match) => match[1]);
 const promotionPath = resolve(root, '.github/workflows/android-promote.yml');
 const promotionWorkflow = existsSync(promotionPath) ? readFileSync(promotionPath, 'utf8') : '';
 const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'), 'utf8');
 const wrangler = readFileSync(resolve(root, 'wrangler.jsonc'), 'utf8');
-const productionConfig = wrangler.slice(wrangler.indexOf('"production": {'));
+const wranglerConfig = JSON.parse(wrangler);
+const productionConfig = wranglerConfig.env.production;
+const workflowSources = readdirSync(resolve(root, '.github/workflows'))
+  .filter((file) => file.endsWith('.yml'))
+  .map((file) => readFileSync(resolve(root, '.github/workflows', file), 'utf8'));
 
 describe('release automation contract', () => {
   it('allows CI to provide a deterministic Android version while preserving local defaults', () => {
@@ -47,7 +55,7 @@ describe('release automation contract', () => {
     expect(buildJob).toContain('releaseVersionCode=1000');
     expect(buildJob).toContain('releaseVersionName=0.2.0');
     expect(buildJob).toContain('mobileEnvironment=production');
-    expect(buildJob).toContain('actions/upload-artifact@v4');
+    expect(buildJob).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
     expect(buildJob).not.toMatch(/secrets\./);
     expect(buildJob).not.toContain('contents: write');
   });
@@ -56,11 +64,11 @@ describe('release automation contract', () => {
     const signer = releaseWorkflow.split('  sign-artifact:')[1]?.split('  create-candidate-draft:')[0] ?? '';
     expect(signer).toContain("if: github.ref == 'refs/heads/main'");
     expect(signer).toContain('environment: android-production-signing');
-    expect(signer).toContain('actions/download-artifact@v4');
+    expect(signer).toContain('actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
     expect(signer).toContain('apksigner sign');
     expect(signer).toContain('EXPECTED_CERT_SHA256');
     expect(signer).toContain('android-signed-${{ github.run_id }}');
-    expect(signer).toContain('actions/upload-artifact@v4');
+    expect(signer).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
     expect(signer).toContain('candidate-manifest.json');
     expect(signer).not.toContain('actions/checkout');
     expect(signer).not.toContain('contents: write');
@@ -90,11 +98,48 @@ describe('release automation contract', () => {
     expect(promotionWorkflow).not.toContain('--clobber');
   });
 
+  it('removes private owner acceptance evidence before making the release public', () => {
+    const deletionIndex = promotionWorkflow.indexOf('gh release delete-asset');
+    const publishIndex = promotionWorkflow.indexOf('--draft=false');
+
+    expect(deletionIndex).toBeGreaterThan(-1);
+    expect(deletionIndex).toBeLessThan(publishIndex);
+    expect(promotionWorkflow).toContain('acceptance-manifest.json');
+    expect(promotionWorkflow).toContain('acceptance-evidence.zip');
+  });
+
+  it('records an acceptance marker before private-asset cleanup so promotion can resume', () => {
+    const markerIndex = promotionWorkflow.indexOf('border-ledger-acceptance:v1');
+    const deletionIndex = promotionWorkflow.indexOf('gh release delete-asset');
+
+    expect(markerIndex).toBeGreaterThan(-1);
+    expect(markerIndex).toBeLessThan(deletionIndex);
+    expect(promotionWorkflow).toContain('--notes-file');
+    expect(promotionWorkflow).toContain('if ($assetNames -contains $assetName)');
+  });
+
   it('uses gh api endpoints without the unsupported --repo flag', () => {
     const apiCalls = promotionWorkflow.split('\n').filter(line => line.includes('gh api'));
     expect(apiCalls.length).toBeGreaterThan(0);
     expect(apiCalls.every(line => !line.includes('gh api --repo'))).toBe(true);
     expect(apiCalls.every(line => line.includes('repos/$env:GITHUB_REPOSITORY/'))).toBe(true);
+  });
+
+  it('recognizes shorthand action steps before checking every immutable pin', () => {
+    const androidCheckoutRefs = extractActionRefs(androidCiWorkflow).filter((ref) => ref.startsWith('actions/checkout@'));
+    expect(androidCheckoutRefs.some((ref) => /^actions\/checkout@[a-f0-9]{40}$/i.test(ref))).toBe(true);
+
+    const actionRefs = workflowSources.flatMap((source) => extractActionRefs(source));
+    expect(actionRefs.length).toBeGreaterThan(0);
+    expect(actionRefs.filter((ref) => !/@[a-f0-9]{40}$/i.test(ref))).toEqual([]);
+  });
+
+  it('builds the Java/Kotlin CodeQL database with the production debug variant', () => {
+    expect(codeqlWorkflow).toContain('build-mode: manual');
+    expect(codeqlWorkflow).toContain(':app:assembleDebug');
+    expect(codeqlWorkflow).toContain('-PmobileEnvironment=production');
+    expect(codeqlWorkflow).toContain('platforms;android-37.0');
+    expect(codeqlWorkflow).toContain('npm ci');
   });
 
   it('deploys the existing Cloudflare production Worker and fails closed on missing credentials', () => {
@@ -129,13 +174,27 @@ describe('release automation contract', () => {
   });
 
   it('targets the existing production Worker bindings instead of creating a shadow Worker', () => {
-    expect(wrangler).toContain('"name": "border-ledger"');
-    expect(wrangler).toContain('"account_id": "a0af41818e1b715f66046b0d7870ce70"');
-    expect(productionConfig).toContain('"name": "border-ledger"');
-    expect(productionConfig).toContain('"database_name": "border-ledger"');
-    expect(productionConfig).toContain('"database_id": "14378887-f604-4d04-95f1-26930405b5a8"');
-    expect(productionConfig).toContain('"queue": "border-ledger-sync"');
-    expect(productionConfig).not.toContain('border-ledger-production');
-    expect(productionConfig).toContain('"MOBILE_ACCESS_AUTHORIZATION_URL": "https://pf.lofuyu.com/mobile/authorize"');
+    expect(wranglerConfig.name).toBe('border-ledger-local');
+    expect(wranglerConfig.workers_dev).toBe(false);
+    expect(wranglerConfig.vars.PLAID_ENV).toBe('production');
+    expect(wranglerConfig.vars.LEDGER_APP_ORIGIN).toBe('http://localhost:8787');
+    expect(wranglerConfig.vars).not.toHaveProperty('PLAID_WEBHOOK_URL');
+    expect(wranglerConfig.d1_databases[0]).toMatchObject({
+      binding: 'DB',
+      database_name: 'border-ledger-local',
+      database_id: '00000000-0000-0000-0000-000000000000',
+    });
+    expect(wranglerConfig.queues.producers[0].queue).toBe('border-ledger-local-sync');
+
+    expect(wranglerConfig.account_id).toBe('a0af41818e1b715f66046b0d7870ce70');
+    expect(productionConfig.name).toBe('border-ledger');
+    expect(productionConfig.vars.PLAID_ENV).toBe('production');
+    expect(productionConfig.d1_databases[0]).toMatchObject({
+      binding: 'DB',
+      database_name: 'border-ledger',
+      database_id: '14378887-f604-4d04-95f1-26930405b5a8',
+    });
+    expect(productionConfig.queues.producers[0].queue).toBe('border-ledger-sync');
+    expect(productionConfig.vars.MOBILE_ACCESS_AUTHORIZATION_URL).toBe('https://pf.lofuyu.com/mobile/authorize');
   });
 });

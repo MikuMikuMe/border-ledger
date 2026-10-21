@@ -104,7 +104,9 @@ function plaidConfig(env: ConnectionServiceEnv) {
 }
 
 function webhook(env: Pick<ConnectionServiceEnv, 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>) {
-  if (!env.PLAID_WEBHOOK_URL) throw new ConnectionServiceError('configuration', 'The Plaid webhook URL is not configured.', 503, true);
+  if (!env.PLAID_WEBHOOK_URL) {
+    throw new ConnectionServiceError('configuration', 'The Plaid webhook URL is not configured.', 503, true);
+  }
   try {
     const url = new URL(env.PLAID_WEBHOOK_URL);
     if (url.protocol !== 'https:' || url.pathname !== '/api/webhooks/plaid' || url.search || url.hash) throw new Error('invalid');
@@ -115,7 +117,13 @@ function webhook(env: Pick<ConnectionServiceEnv, 'PLAID_WEBHOOK_URL' | 'LEDGER_A
   }
 }
 
-export function buildNativePlaidLinkTokenPayload(env: Pick<ConnectionServiceEnv, 'PLAID_CLIENT_USER_ID' | 'PLAID_ANDROID_PACKAGE_NAME' | 'PLAID_ANDROID_REDIRECT_URI' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>, accessToken?: string) {
+function linkTokenWebhookUrl(env: Pick<ConnectionServiceEnv, 'PLAID_ENV' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>) {
+  if (env.PLAID_ENV === 'sandbox' && !env.PLAID_WEBHOOK_URL) return undefined;
+  return webhook(env);
+}
+
+export function buildNativePlaidLinkTokenPayload(env: Pick<ConnectionServiceEnv, 'PLAID_CLIENT_USER_ID' | 'PLAID_ENV' | 'PLAID_ANDROID_PACKAGE_NAME' | 'PLAID_ANDROID_REDIRECT_URI' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>, accessToken?: string) {
+  const webhookUrl = linkTokenWebhookUrl(env);
   const payload: Record<string, unknown> = {
     client_name: 'Border Ledger',
     user: { client_user_id: env.PLAID_CLIENT_USER_ID ?? 'border-ledger-owner' },
@@ -127,8 +135,8 @@ export function buildNativePlaidLinkTokenPayload(env: Pick<ConnectionServiceEnv,
       depository: { account_subtypes: ['checking', 'savings'] },
       credit: { account_subtypes: ['credit card'] },
     },
-    webhook: webhook(env),
   };
+  if (webhookUrl) payload.webhook = webhookUrl;
   if (env.PLAID_ANDROID_PACKAGE_NAME) payload.android_package_name = env.PLAID_ANDROID_PACKAGE_NAME;
   if (env.PLAID_ANDROID_REDIRECT_URI) payload.redirect_uri = env.PLAID_ANDROID_REDIRECT_URI;
   if (accessToken) payload.access_token = accessToken;

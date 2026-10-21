@@ -10,6 +10,31 @@ describe('Android App Links metadata', () => {
     expect(config.assets.run_worker_first).toContain('/.well-known/assetlinks.json');
   });
 
+  it('defines security headers for static pages and assets', () => {
+    const headersPath = resolve(process.cwd(), 'public/_headers');
+    expect(existsSync(headersPath)).toBe(true);
+    if (!existsSync(headersPath)) return;
+
+    const headers = readFileSync(headersPath, 'utf8');
+    expect(headers).toContain('Content-Security-Policy:');
+    expect(headers).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
+    expect(headers).toContain("font-src 'self' https://fonts.gstatic.com");
+    expect(headers).toContain('X-Content-Type-Options: nosniff');
+    expect(headers).toContain('Referrer-Policy: no-referrer');
+    expect(headers).toContain('X-Frame-Options: DENY');
+    expect(headers).toContain('Strict-Transport-Security: max-age=31536000');
+  });
+
+  it('defaults Plaid to production and keeps the local webhook unconfigured until an HTTPS endpoint is supplied', () => {
+    const config = JSON.parse(readFileSync(resolve(process.cwd(), 'wrangler.jsonc'), 'utf8'));
+
+    expect(config.vars.PLAID_ENV).toBe('production');
+    expect(config.vars.LEDGER_APP_ORIGIN).toBe('http://localhost:8787');
+    expect(config.vars).not.toHaveProperty('PLAID_WEBHOOK_URL');
+    expect(config.env.production.vars.PLAID_ENV).toBe('production');
+    expect(config.env.production.vars.LEDGER_APP_ORIGIN).toBe('https://pf.lofuyu.com');
+    expect(config.env.production.vars.PLAID_WEBHOOK_URL).toBe('https://pf.lofuyu.com/api/webhooks/plaid');
+  });
   it('ships a static well-known association file so SPA fallback cannot mask it', () => {
     const assetLinksPath = resolve(process.cwd(), 'public/.well-known/assetlinks.json');
     expect(existsSync(assetLinksPath)).toBe(true);

@@ -5,6 +5,7 @@ import {
   decryptAccessToken,
   encryptAccessToken,
   fetchAllPlaidTransactions,
+  getPlaidEnvironment,
   mapPlaidTransaction,
   upsertPlaidTransaction,
 } from '../worker/plaid';
@@ -19,6 +20,12 @@ afterEach(async () => {
 });
 
 describe('Plaid integration primitives', () => {
+  it('defaults to production and rejects unsupported environment values', () => {
+    expect(getPlaidEnvironment(undefined)).toBe('production');
+    expect(getPlaidEnvironment('production')).toBe('production');
+    expect(getPlaidEnvironment('sandbox')).toBe('sandbox');
+    expect(() => getPlaidEnvironment('prod')).toThrow('PLAID_ENV must be sandbox, development, or production.');
+  });
   it('maps a CAD debit into a confirmed ledger expense', () => {
     const transaction = mapPlaidTransaction({
       transaction_id: 'txn-1',
@@ -235,5 +242,15 @@ describe('Plaid integration primitives', () => {
         credit: { account_subtypes: ['credit card'] },
       },
     });
+  });
+});
+
+describe('production Plaid configuration', () => {
+  it('requires a webhook for production even when developing against localhost', () => {
+    expect(() => buildPlaidLinkTokenPayload({
+      PLAID_ENV: 'production',
+      PLAID_CLIENT_USER_ID: 'production-owner',
+      LEDGER_APP_ORIGIN: 'http://localhost:8787',
+    })).toThrow('Plaid webhook URL is not configured.');
   });
 });

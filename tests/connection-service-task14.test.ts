@@ -269,3 +269,13 @@ describe('Task 14 connection service boundaries', () => {
     }
   });
 });
+
+describe('production native Plaid configuration', () => {
+  it('requires a webhook for production even when developing against localhost', () => {
+    expect(() => buildNativePlaidLinkTokenPayload({
+      PLAID_ENV: 'production',
+      PLAID_ANDROID_PACKAGE_NAME: 'com.lofuyu.borderledger',
+      LEDGER_APP_ORIGIN: 'http://localhost:8787',
+    })).toThrow('The Plaid webhook URL is not configured.');
+  });
+});

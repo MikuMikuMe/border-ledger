@@ -16,6 +16,7 @@
     "@react-navigation/native-stack": "7.21.0",
     "@rn-primitives/slot": "1.5.2",
     "@shopify/react-native-skia": "2.14.0",
+    "braces": "file:vendor/braces",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "react": "19.2.3",

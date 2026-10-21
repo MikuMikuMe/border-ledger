@@ -22,5 +22,6 @@ android/**/.cxx/
 
 # Local planning and QA artifacts (screenshots, logs, and test signing material).
 .superpowers/
+task-*-report.md
 
 

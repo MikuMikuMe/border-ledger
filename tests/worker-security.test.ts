@@ -5,6 +5,8 @@ import {
   isAllowedApplicationOrigin,
   isSameOriginMutation,
   readJsonBody,
+  readRequestText,
+  staticSecurityHeaders,
 } from '../worker/security';
 
 describe('Worker security boundaries', () => {
@@ -39,11 +41,37 @@ describe('Worker security boundaries', () => {
     await expect(readJsonBody(request, 8)).rejects.toBeInstanceOf(BodyTooLargeError);
   });
 
+  it('cancels an oversized streaming request body as soon as the byte limit is crossed', async () => {
+    let chunksRead = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        chunksRead += 1;
+        controller.enqueue(new Uint8Array(4).fill(0x61));
+        if (chunksRead === 20) controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = new Request('https://pf.example.com/api/imports/commit', {
+      method: 'POST',
+      body: body as never,
+      duplex: 'half',
+    } as RequestInit);
+
+    await expect(readRequestText(request, 8)).rejects.toBeInstanceOf(BodyTooLargeError);
+    expect(chunksRead).toBeLessThan(20);
+    expect(cancelled).toBe(true);
+  });
+
   it('provides private API response headers', () => {
     expect(apiSecurityHeaders()).toMatchObject({
       'cache-control': 'no-store',
+      'strict-transport-security': 'max-age=31536000',
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'no-referrer',
     });
+    expect(staticSecurityHeaders()['strict-transport-security']).toBe('max-age=31536000');
   });
 });

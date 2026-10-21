@@ -85,8 +85,11 @@ export function buildPlaidRequest(environment: PlaidEnvironment, path: string, b
 }
 
 export function getPlaidEnvironment(value: string | undefined): PlaidEnvironment {
-  if (value === 'development' || value === 'production') return value;
-  return 'sandbox';
+  const environment = value ?? 'production';
+  if (!Object.prototype.hasOwnProperty.call(plaidHosts, environment)) {
+    throw new Error('PLAID_ENV must be sandbox, development, or production.');
+  }
+  return environment as PlaidEnvironment;
 }
 
 function normalizedCurrency(transaction: PlaidTransaction): Currency | null {
