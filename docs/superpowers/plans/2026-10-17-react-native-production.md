@@ -19,7 +19,7 @@
 - [x] Add a direct `/.well-known/assetlinks.json` response with the production package and verified release certificate; preserve normal SPA routing elsewhere.
 - [x] Add exact Cloudflare Access public overrides for only the asset-links file and `/api/mobile/v1/*`; preserve browser OAuth, web APIs, policies, Plaid webhook, and the Worker authorization checks.
 - [ ] Deploy and verify these routing prerequisites before production sign-in.
-- [ ] Verify the app-link signing certificate matches the retained Samsung installation before an in-place upgrade.
+- [ ] Deploy and verify the GitHub signing-key certificate with App Links and a fresh Android install.
 
 ## Candidate build and acceptance
 
@@ -29,7 +29,7 @@
 - [ ] Pass root web/Worker, mobile TypeScript/tests/Codegen, Android lint/unit/instrumentation/release gates. Diagnose the intermittent Miniflare `bad port` failure without suppressing or retrying it away.
 - [ ] Verify release startup without Metro, production bundle and native modules, debug-tool exclusion, and the canonical Thread Field at 412×915 on Pixel 10.
 - [ ] Exercise F01–F18, authentication/callback/lifecycle/revision/offline/background/file/Plaid/appearance/accessibility flows with fixtures for mutations.
-- [ ] Upgrade the already-installed Samsung build in place with the same signer; verify encrypted records, preferences, device identity, outbox and production session remain readable before fresh browser sign-in checks.
+- [ ] Treat the GitHub-key build as a fresh install on devices signed with the previous certificate; preserve any needed local data first, then verify app links and production sign-in after reinstall.
 - [ ] Record redacted, objective evidence bound to candidate SHA and APK hash; only CPU optimization and iOS packaging are deferred.
 
 ## Promotion

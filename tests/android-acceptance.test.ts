@@ -1,15 +1,42 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { verifyAndroidAcceptance as verifyAndroidAcceptanceType } from '../scripts/verify-android-acceptance.mjs';
+
+type Assert<T extends true> = T;
+type AndroidAcceptanceResult = Awaited<ReturnType<typeof verifyAndroidAcceptanceType>>;
+type InstallationModeContract = Assert<
+  AndroidAcceptanceResult['installationMode'] extends 'in-place-upgrade' | 'fresh-install'
+    ? 'in-place-upgrade' extends AndroidAcceptanceResult['installationMode']
+      ? 'fresh-install' extends AndroidAcceptanceResult['installationMode'] ? true : false
+      : false
+    : false
+>;
 
 const packageId = 'com.lofuyu.borderledger';
 const assetLinksUrl = 'https://pf.lofuyu.com/.well-known/assetlinks.json';
 const sourceSha = 'a'.repeat(40);
 const apkSha256 = 'b'.repeat(64);
-const certificateSha256 = '1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED';
+const certificateSha256 = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
+const legacySignerSha256 = '1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED';
 const temporaryDirectories: string[] = [];
+
+type InstallationAcceptance = {
+  mode: 'in-place-upgrade' | 'fresh-install';
+  status: 'passed';
+  packageId: string;
+  signingCertificateSha256: string;
+  fromVersionCode?: number;
+  toVersionCode?: number;
+  previousSigningCertificateSha256?: string;
+  versionCode?: number;
+  dataDisposition?: string;
+  evidence: ReturnType<typeof writeEvidence>;
+};
 
 function sha256(value: Buffer | string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -34,22 +61,21 @@ function attestEvidence(evidence: ReturnType<typeof writeEvidence>, gateId: stri
   };
 }
 
-function validAssetLinks(certificate = certificateSha256) {
+function validAssetLinks(fingerprints = [certificateSha256, legacySignerSha256]) {
   return JSON.stringify([{
     relation: ['delegate_permission/common.handle_all_urls'],
     target: {
       namespace: 'android_app',
       package_name: packageId,
-      sha256_cert_fingerprints: [certificate],
+      sha256_cert_fingerprints: fingerprints,
     },
   }]);
 }
 
-function createAcceptanceFixture() {
+function createAcceptanceFixture(assetLinksBody = validAssetLinks()) {
   const directory = mkdtempSync(join(tmpdir(), 'border-ledger-acceptance-'));
   temporaryDirectories.push(directory);
 
-  const assetLinksBody = validAssetLinks();
   const appLinksEvidence = writeEvidence(directory, 'assetlinks.json', assetLinksBody);
   const upgradeEvidenceBody = JSON.stringify({
     packageId,
@@ -60,6 +86,15 @@ function createAcceptanceFixture() {
     existingAppDataPreserved: true,
   });
   const upgradeEvidence = writeEvidence(directory, 'upgrade.json', upgradeEvidenceBody);
+  const installationAcceptance: InstallationAcceptance = {
+    mode: 'in-place-upgrade',
+    status: 'passed',
+    packageId,
+    signingCertificateSha256: certificateSha256,
+    fromVersionCode: 999,
+    toVersionCode: 1000,
+    evidence: upgradeEvidence,
+  };
   const gates = Object.fromEntries(Array.from({ length: 18 }, (_, index) => {
     const id = 'F' + String(index + 1).padStart(2, '0');
     const evidence = writeEvidence(directory, id + '.txt', 'sanitized acceptance evidence for ' + id);
@@ -68,7 +103,7 @@ function createAcceptanceFixture() {
 
   const manifestPath = join(directory, 'acceptance-manifest.json');
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceSha,
     apkSha256,
     packageId,
@@ -83,19 +118,37 @@ function createAcceptanceFixture() {
       responseSha256: appLinksEvidence.sha256,
       responseEvidence: appLinksEvidence,
     },
-    inPlaceUpgrade: {
-      status: 'passed',
-      packageId,
-      signingCertificateSha256: certificateSha256,
-      fromVersionCode: 999,
-      toVersionCode: 1000,
-      evidence: upgradeEvidence,
-    },
+    installationAcceptance,
     gates,
   };
   writeFileSync(manifestPath, JSON.stringify(manifest));
 
   return { directory, manifestPath, manifest, assetLinksBody };
+}
+
+function configureFreshInstallAcceptance(fixture: ReturnType<typeof createAcceptanceFixture>) {
+  const previousSigningCertificateSha256 = '1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed';
+  const freshInstallEvidence = writeEvidence(fixture.directory, 'fresh-install.json', JSON.stringify({
+    packageId,
+    previousSigningCertificateSha256,
+    signingCertificateSha256: certificateSha256,
+    versionCode: 1000,
+    freshInstallCompleted: true,
+    previousAppAbsent: true,
+    dataDisposition: 'no-existing-data',
+  }));
+  fixture.manifest.installationAcceptance = {
+    mode: 'fresh-install',
+    status: 'passed',
+    packageId,
+    previousSigningCertificateSha256,
+    signingCertificateSha256: certificateSha256,
+    versionCode: 1000,
+    dataDisposition: 'no-existing-data',
+    evidence: freshInstallEvidence,
+  };
+  writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+  return fixture;
 }
 
 function testFetch(body: string) {
@@ -132,7 +185,73 @@ describe('Android release acceptance evidence', () => {
     await expect(verify(fixture)).resolves.toEqual({
       verified: true,
       featureGateCount: 18,
+      installationMode: 'in-place-upgrade',
     });
+  });
+
+  it('rejects a checksummed App Links response without the legacy production signer', async () => {
+    const fixture = createAcceptanceFixture(validAssetLinks([certificateSha256]));
+    await expect(verify(fixture)).rejects.toThrow('live App Links response does not authorize both production signers');
+  });
+
+  it('accepts a fresh install when the candidate uses a different signing key', async () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+
+    await expect(verify(fixture)).resolves.toEqual({
+      verified: true,
+      featureGateCount: 18,
+      installationMode: 'fresh-install',
+    });
+  });
+
+  it('rejects fresh-install acceptance when the previous certificate is not the known production signer', async () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+    fixture.manifest.installationAcceptance.previousSigningCertificateSha256 = '11'.repeat(32);
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+    await expect(verify(fixture)).rejects.toThrow('Fresh-install acceptance previous signing certificate does not match the known previous production signer');
+  });
+
+  it('reports fresh-install acceptance accurately in CLI output', () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+    const fetchShimPath = resolve(process.cwd(), 'tests/helpers/android-acceptance-fetch-shim.mjs');
+
+    const result = spawnSync(process.execPath, [
+      '--import', pathToFileURL(fetchShimPath).href,
+      resolve(process.cwd(), 'scripts/verify-android-acceptance.mjs'),
+      '--manifest', fixture.manifestPath,
+      '--evidence-dir', fixture.directory,
+      '--source-sha', sourceSha,
+      '--apk-sha256', apkSha256,
+      '--signing-cert-sha256', certificateSha256,
+      '--version-code', '1000',
+    ], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        ANDROID_ACCEPTANCE_ASSET_LINKS_BODY: fixture.assetLinksBody,
+      },
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain('fresh install.');
+    expect(result.stdout).not.toContain('in-place upgrade');
+  });
+
+  it('rejects fresh-install acceptance when the previous certificate matches the candidate', async () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+    fixture.manifest.installationAcceptance.previousSigningCertificateSha256 = certificateSha256;
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('Fresh-install acceptance requires a different previous signing certificate');
+  });
+
+  it('requires an explicit data disposition for fresh-install acceptance', async () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+    fixture.manifest.installationAcceptance.dataDisposition = 'unrecorded';
+    writeFileSync(fixture.manifestPath, JSON.stringify(fixture.manifest));
+
+    await expect(verify(fixture)).rejects.toThrow('Fresh-install dataDisposition must be "backup-verified" or "no-existing-data"');
   });
 
   it('rejects a pending feature gate even when it has a file attached', async () => {
@@ -238,8 +357,8 @@ describe('Android release acceptance evidence', () => {
   it('rejects a live App Links response with the wrong release certificate', async () => {
     const fixture = createAcceptanceFixture();
 
-    await expect(verify(fixture, { liveAssetLinksBody: validAssetLinks('00'.repeat(32)) }))
-      .rejects.toThrow('live App Links response does not authorize the release certificate');
+    await expect(verify(fixture, { liveAssetLinksBody: validAssetLinks(['00'.repeat(32), legacySignerSha256]) }))
+      .rejects.toThrow('live App Links response does not authorize both production signers');
   });
 
   it('rejects evidence paths that escape the acceptance bundle', async () => {

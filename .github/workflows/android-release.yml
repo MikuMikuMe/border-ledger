@@ -225,7 +225,7 @@ jobs:
       actions: read
       contents: read
     env:
-      EXPECTED_CERT_SHA256: 1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed
+      EXPECTED_CERT_SHA256: 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417
       SOURCE_SHA: ${{ needs.build-unsigned.outputs.source_sha }}
       VERSION_CODE: '1000'
       VERSION_NAME: '0.2.0'
@@ -310,7 +310,7 @@ jobs:
           $cert = [regex]::Match($certificateOutput, 'Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F:]+)')
           if (-not $cert.Success) { throw 'The release certificate fingerprint could not be read.' }
           $fingerprint = $cert.Groups[1].Value.Replace(':', '').ToLowerInvariant()
-          if ($fingerprint -ne $env:EXPECTED_CERT_SHA256) { throw 'Release certificate does not match the Samsung installation and Android App Links identity.' }
+          if ($fingerprint -ne $env:EXPECTED_CERT_SHA256) { throw 'Release certificate does not match the GitHub signing key fingerprint.' }
           $badging = (& $aapt2 dump badging $signed) -join "`n"
           if ($LASTEXITCODE -ne 0) { throw 'APK manifest inspection failed.' }
           if ($badging -notmatch "package: name='com\.lofuyu\.borderledger'.*versionCode='1000'.*versionName='0\.2\.0'") { throw 'APK identity is not com.lofuyu.borderledger versionCode 1000 / 0.2.0.' }

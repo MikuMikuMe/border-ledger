@@ -11,4 +11,5 @@ export interface AndroidAcceptanceOptions {
 export function verifyAndroidAcceptance(options: AndroidAcceptanceOptions): Promise<{
   verified: true;
   featureGateCount: 18;
+  installationMode: 'in-place-upgrade' | 'fresh-install';
 }>;

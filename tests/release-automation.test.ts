@@ -12,6 +12,10 @@ const extractActionRefs = (source: string) =>
 const promotionPath = resolve(root, '.github/workflows/android-promote.yml');
 const promotionWorkflow = existsSync(promotionPath) ? readFileSync(promotionPath, 'utf8') : '';
 const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'), 'utf8');
+const assetLinks = readFileSync(resolve(root, 'public/.well-known/assetlinks.json'), 'utf8');
+const workerSource = readFileSync(resolve(root, 'worker/index.ts'), 'utf8');
+const acceptanceVerifier = readFileSync(resolve(root, 'scripts/verify-android-acceptance.mjs'), 'utf8');
+const androidValidationDocs = readFileSync(resolve(root, 'docs/android-validation.md'), 'utf8');
 const wrangler = readFileSync(resolve(root, 'wrangler.jsonc'), 'utf8');
 const wranglerConfig = JSON.parse(wrangler);
 const productionConfig = wranglerConfig.env.production;
@@ -29,10 +33,12 @@ describe('release automation contract', () => {
     expect(gradle).toContain('buildConfigField("String", "MOBILE_ENVIRONMENT"');
   });
 
-  it('blocks debug packaging when its keystore uses the protected production certificate', () => {
+  it('blocks debug packaging when its keystore uses either production signer', () => {
     expect(gradle).toContain('verifyDebugSigningIdentity');
     expect(gradle).toContain('getCertificate(debugKeyAlias)');
+    expect(gradle).toContain('5827E817EBAD9D478CA2C3C470A3742D783FC7D2BFBFFB8CC58219B5F3E68417');
     expect(gradle).toContain('1FF2A25E39136EEFA79D23CC7531F702B2A162280538410509CA2FF65B4744ED');
+    expect(gradle).toContain('actualFingerprint in protectedProductionSigningCertificatesSha256');
     expect(gradle).toContain('validateSigningDebug');
     expect(gradle).toMatch(/it\.name\.startsWith\("packageDebug"\)/);
     expect(gradle).toMatch(/it\.name\.startsWith\("signDebug"\)/);
@@ -67,6 +73,8 @@ describe('release automation contract', () => {
     expect(signer).toContain('actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
     expect(signer).toContain('apksigner sign');
     expect(signer).toContain('EXPECTED_CERT_SHA256');
+    expect(signer).toContain('EXPECTED_CERT_SHA256: 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417');
+    expect(signer).toContain('Release certificate does not match the GitHub signing key fingerprint.');
     expect(signer).toContain('android-signed-${{ github.run_id }}');
     expect(signer).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
     expect(signer).toContain('candidate-manifest.json');
@@ -88,6 +96,8 @@ describe('release automation contract', () => {
     expect(promotionWorkflow).toMatch(/^  workflow_dispatch:/m);
     expect(promotionWorkflow).toContain("github.ref == 'refs/heads/main'");
     expect(promotionWorkflow).toContain('candidate-manifest.json');
+    expect(promotionWorkflow).toContain('EXPECTED_CERT_SHA256: 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417');
+    expect(promotionWorkflow).toContain('Candidate certificate does not match the GitHub signing key fingerprint.');
     expect(promotionWorkflow).toContain('SOURCE_SHA');
     expect(promotionWorkflow).toContain('SHA256SUMS.txt');
     expect(promotionWorkflow).toContain('gh release edit');
@@ -164,15 +174,32 @@ describe('release automation contract', () => {
     expect(deployWorkflow).not.toContain('deployment skipped');
   });
 
-  it('verifies the production Android App Links response against the existing release signer after deployment', () => {
+  it('verifies the production Android App Links response against the GitHub signing key after deployment', () => {
     expect(deployWorkflow).toContain('https://pf.lofuyu.com/.well-known/assetlinks.json');
     expect(deployWorkflow).toContain('sha256_cert_fingerprints');
+    expect(deployWorkflow).toContain('58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17');
     expect(deployWorkflow).toContain('1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED');
     expect(deployWorkflow.indexOf('Deploy the named production Worker')).toBeLessThan(
       deployWorkflow.indexOf('https://pf.lofuyu.com/.well-known/assetlinks.json'),
     );
   });
 
+  it('uses the GitHub signing key for releases and both expected signers for App Links', () => {
+    const expectedCompact = '5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417';
+    const expectedDisplay = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
+    const signingSources = [releaseWorkflow, promotionWorkflow]
+      .join(String.fromCharCode(10))
+      .toLowerCase();
+
+    expect(gradle).toContain(expectedCompact.toUpperCase());
+    expect(releaseWorkflow).toContain(`EXPECTED_CERT_SHA256: ${expectedCompact}`);
+    expect(promotionWorkflow).toContain(`EXPECTED_CERT_SHA256: ${expectedCompact}`);
+    for (const source of [deployWorkflow, assetLinks, workerSource]) {
+      expect(source).toContain(expectedDisplay);
+    }
+    expect(signingSources).not.toContain('1f:f2');
+    expect(signingSources).not.toContain('44:ed');
+  });
   it('targets the existing production Worker bindings instead of creating a shadow Worker', () => {
     expect(wranglerConfig.name).toBe('border-ledger-local');
     expect(wranglerConfig.workers_dev).toBe(false);
