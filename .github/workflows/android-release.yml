@@ -407,7 +407,7 @@ jobs:
           $generatedNotes = & gh api @noteArguments
           if ($LASTEXITCODE -ne 0 -or -not $generatedNotes) { throw 'GitHub could not generate app release notes.' }
           $generatedNotesText = ($generatedNotes -join "`n").Trim()
-          $appPathPattern = '^(?:android/app/src/main/|mobile/|shared/|src/|contracts/|index\.html$|tsconfig\.json$|vite\.config\.ts$|public/)'
+          $appPathPattern = '^(?:android/|mobile/|shared/|src/|contracts/|index\.html$|tsconfig\.json$|vite\.config\.ts$|public/)'
           $nonAppSourcePattern = '(?:^|/)(?:tests?|androidTest|__tests__)(?:/|$)|(?:^|/)[^/]+\.(?:test|spec)\.[^/]+$'
           $features = [System.Collections.Generic.List[string]]::new()
           $fixes = [System.Collections.Generic.List[string]]::new()
@@ -427,7 +427,7 @@ jobs:
               $features.Add($entry)
             } elseif ($title -match '^(?i:fix|bug|resolve|prevent|retry|restore|repair|correct|handle)(?:[\s(:-]|$)') {
               $fixes.Add($entry)
-            } elseif ($title -match '^(?i:chore|docs|test|ci|build|refactor|style|perf)(?:[\s(:-]|$)') {
+            } elseif ($title -match '^(?i:chore|docs|test|ci|build|refactor|style)(?:[\s(:-]|$)') {
               continue
             } else {
               $improvements.Add($entry)
