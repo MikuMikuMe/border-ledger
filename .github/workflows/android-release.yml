@@ -5,8 +5,6 @@ on:
     branches: [main]
     paths:
       - android/**
-      - tests/**
-      - vitest.config.ts
       - mobile/**
       - shared/**
       - src/**
@@ -17,7 +15,6 @@ on:
       - tsconfig.json
       - vite.config.ts
       - public/**
-      - .github/workflows/android-release.yml
   workflow_dispatch:
     inputs:
       source_sha:
@@ -29,12 +26,44 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-release-candidate-${{ github.event_name }}-${{ github.sha }}
+  group: android-release-candidate-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build-unsigned:
+  detect-app-change:
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      app_changed: ${{ steps.detect.outputs.app_changed }}
+      version_code: ${{ steps.version.outputs.version_code }}
+      version_name: ${{ steps.version.outputs.version_name }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Detect app changes in the source commit range
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.before || '0000000000000000000000000000000000000000' }}
+          HEAD_SHA: ${{ inputs.source_sha || github.sha }}
+        run: node scripts/detect-android-release-change.mjs
+
+      - name: Resolve the next Android release version
+        id: version
+        if: steps.detect.outputs.app_changed == 'true'
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: node scripts/resolve-android-release-version.mjs
+
+  build-unsigned:
+    needs: [detect-app-change]
+    if: github.ref == 'refs/heads/main' && needs.detect-app-change.outputs.app_changed == 'true'
     runs-on: windows-latest
     permissions:
       contents: read
@@ -120,7 +149,7 @@ jobs:
         run: |
           pwsh -NoProfile -File task17-static-check.ps1 -RequireAndroidToolchain
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          .\gradlew.bat :app:lintDebug :app:testDebugUnitTest :sharedCore:testAndroidHostTest :app:assembleRelease --no-daemon --console=plain -PmobileEnvironment=production -PreleaseVersionCode=1000 '-PreleaseVersionName=0.2.0'
+          .\gradlew.bat :app:lintDebug :app:testDebugUnitTest :sharedCore:testAndroidHostTest :app:assembleRelease --no-daemon --console=plain -PmobileEnvironment=production -PreleaseVersionCode=${{ needs.detect-app-change.outputs.version_code }} '-PreleaseVersionName=${{ needs.detect-app-change.outputs.version_name }}'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\react-native-host-check.ps1 -Merged
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -137,7 +166,8 @@ jobs:
           retention-days: 3
 
   android-instrumentation:
-    if: github.ref == 'refs/heads/main'
+    needs: [detect-app-change]
+    if: github.ref == 'refs/heads/main' && needs.detect-app-change.outputs.app_changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -217,8 +247,8 @@ jobs:
           script: bash "$GITHUB_WORKSPACE/.github/scripts/run-android-instrumentation.sh"
 
   sign-artifact:
-    needs: [build-unsigned, android-instrumentation]
-    if: github.ref == 'refs/heads/main'
+    needs: [detect-app-change, build-unsigned, android-instrumentation]
+    if: github.ref == 'refs/heads/main' && needs.detect-app-change.outputs.app_changed == 'true'
     runs-on: ubuntu-latest
     environment: android-production-signing
     permissions:
@@ -227,8 +257,8 @@ jobs:
     env:
       EXPECTED_CERT_SHA256: 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417
       SOURCE_SHA: ${{ needs.build-unsigned.outputs.source_sha }}
-      VERSION_CODE: '1000'
-      VERSION_NAME: '0.2.0'
+      VERSION_CODE: ${{ needs.detect-app-change.outputs.version_code }}
+      VERSION_NAME: ${{ needs.detect-app-change.outputs.version_name }}
     steps:
       # This job is defined by the main-branch workflow. It intentionally has
       # no checkout and executes no files or scripts from the candidate APK.
@@ -262,13 +292,12 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
 
       - name: Verify version floor against published Android APKs
-        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $releases = (& gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName,isDraft) | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Published Android versions could not be enumerated; refusing version 1000.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Published Android versions could not be enumerated; refusing the release.' }
           $androidReleases = @($releases | Where-Object { -not $_.isDraft -and $_.tagName -match '^android-v' })
           foreach ($release in $androidReleases) {
             $downloadDir = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N'))
@@ -281,7 +310,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Could not inspect version of $($release.tagName)." }
             $version = [regex]::Match($apkBadging, "versionCode='(\d+)'")
             if (-not $version.Success) { throw "No Android version code in $($release.tagName); refusing to guess." }
-            if ([int]$version.Groups[1].Value -ge 1000) { throw "Published Android version $($version.Groups[1].Value) is not lower than candidate 1000." }
+            if ([int]$version.Groups[1].Value -ge [int]$env:VERSION_CODE) { throw "Published Android version $($version.Groups[1].Value) is not lower than release $env:VERSION_CODE." }
           }
 
       - name: Sign and verify production APK
@@ -313,7 +342,10 @@ jobs:
           if ($fingerprint -ne $env:EXPECTED_CERT_SHA256) { throw 'Release certificate does not match the GitHub signing key fingerprint.' }
           $badging = (& $aapt2 dump badging $signed) -join "`n"
           if ($LASTEXITCODE -ne 0) { throw 'APK manifest inspection failed.' }
-          if ($badging -notmatch "package: name='com\.lofuyu\.borderledger'.*versionCode='1000'.*versionName='0\.2\.0'") { throw 'APK identity is not com.lofuyu.borderledger versionCode 1000 / 0.2.0.' }
+          $identity = [regex]::Match($badging, "(?m)^package:\s+name='([^']+)'\s+versionCode='([0-9]+)'\s+versionName='([^']*)'")
+          if (-not $identity.Success) { throw 'APK package and version metadata could not be read.' }
+          if ($identity.Groups[1].Value -ne 'com.lofuyu.borderledger') { throw 'APK package identity is incorrect.' }
+          if ([int]$identity.Groups[2].Value -ne [int]$env:VERSION_CODE -or $identity.Groups[3].Value -ne $env:VERSION_NAME) { throw 'APK version metadata does not match the resolved release version.' }
           $manifestTree = (& $aapt2 dump xmltree --file AndroidManifest.xml $signed) -join "`n"
           if ($LASTEXITCODE -ne 0) { throw 'Release manifest inspection failed.' }
           if ($manifestTree -match 'com\.lofuyu\.borderledger\.probe|ReactNativeActivity|FixtureHost|PreviewActivity') { throw 'A debug-only component leaked into the release manifest.' }
@@ -324,8 +356,8 @@ jobs:
             schemaVersion = 1
             sourceSha = $env:SOURCE_SHA
             packageId = 'com.lofuyu.borderledger'
-            versionCode = 1000
-            versionName = '0.2.0'
+            versionCode = [int]$env:VERSION_CODE
+            versionName = $env:VERSION_NAME
             mobileEnvironment = 'production'
             apkFileName = $artifactName
             apkSha256 = $checksum
@@ -340,24 +372,25 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  create-candidate-draft:
-    needs: [build-unsigned, android-instrumentation, sign-artifact]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+  publish-release:
+    needs: [detect-app-change, build-unsigned, android-instrumentation, sign-artifact]
+    if: github.ref == 'refs/heads/main' && needs.detect-app-change.outputs.app_changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: write
     env:
       SOURCE_SHA: ${{ needs.build-unsigned.outputs.source_sha }}
-      VERSION_CODE: '1000'
-      VERSION_NAME: '0.2.0'
+      VERSION_CODE: ${{ needs.detect-app-change.outputs.version_code }}
+      VERSION_NAME: ${{ needs.detect-app-change.outputs.version_name }}
+      PREVIOUS_TAG: ${{ needs.detect-app-change.outputs.previous_tag }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: android-signed-${{ github.run_id }}
           path: release-artifacts
 
-      - name: Create a new unpublished candidate release
+      - name: Publish the Android release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -368,14 +401,21 @@ jobs:
           $existingRef = & gh api -i "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" 2>&1
           if ($LASTEXITCODE -eq 0) { throw "Git tag $tag already exists; release tags are never replaced." }
           if (($existingRef -join "`n") -notmatch '404') { throw 'Tag absence could not be verified; refusing to create a candidate.' }
-          $notes = Join-Path $env:RUNNER_TEMP 'candidate-notes.md'
+          $noteArguments = @('--method', 'POST', "repos/$env:GITHUB_REPOSITORY/releases/generate-notes", '-f', "tag_name=$tag", '-f', "target_commitish=$env:SOURCE_SHA", '--jq', '.body')
+          if ($env:PREVIOUS_TAG) { $noteArguments += @('-f', "previous_tag_name=$env:PREVIOUS_TAG") }
+          $generatedNotes = & gh api @noteArguments
+          if ($LASTEXITCODE -ne 0 -or -not $generatedNotes) { throw 'GitHub could not generate feature and fix notes for this release.' }
+          $checksum = (Get-Content -Raw -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'release-artifacts/SHA256SUMS.txt')).Trim().Split(' ')[0]
+          $notes = Join-Path $env:RUNNER_TEMP 'android-release-notes.md'
           @(
-            "Border Ledger Android $env:VERSION_NAME — unpublished candidate"
+            "# Border Ledger Android $env:VERSION_NAME"
             ''
             "Source commit: $env:SOURCE_SHA"
-            "APK SHA-256: $((Get-Content (Join-Path $env:GITHUB_WORKSPACE 'release-artifacts/SHA256SUMS.txt')).Split(' ')[0])"
-            'This draft is not production-approved. Promote only after the release plan acceptance gates pass.'
+            "APK SHA-256: $checksum"
+            ''
+            '## Features and fixes'
+            [string]$generatedNotes
           ) | Set-Content -Encoding utf8 -LiteralPath $notes
           $files = @(Get-ChildItem -LiteralPath 'release-artifacts' -File | ForEach-Object { $_.FullName })
-          & gh release create $tag @files --repo $env:GITHUB_REPOSITORY --target $env:SOURCE_SHA --draft --title "Border Ledger Android $env:VERSION_NAME candidate" --notes-file $notes
-          if ($LASTEXITCODE -ne 0) { throw "Draft candidate creation failed for $tag." }
+          & gh release create $tag @files --repo $env:GITHUB_REPOSITORY --target $env:SOURCE_SHA --title "Border Ledger Android $env:VERSION_NAME" --notes-file $notes
+          if ($LASTEXITCODE -ne 0) { throw "Release publication failed for $tag." }
