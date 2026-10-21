@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -9,8 +9,6 @@ const codeqlWorkflow = readFileSync(resolve(root, '.github/workflows/codeql.yml'
 const androidCiWorkflow = readFileSync(resolve(root, '.github/workflows/android-ci.yml'), 'utf8');
 const extractActionRefs = (source: string) =>
   [...source.matchAll(/^[ \t]*-?[ \t]*uses:[ \t]+([^\s#]+)/gm)].map((match) => match[1]);
-const promotionPath = resolve(root, '.github/workflows/android-promote.yml');
-const promotionWorkflow = existsSync(promotionPath) ? readFileSync(promotionPath, 'utf8') : '';
 const deployWorkflow = readFileSync(resolve(root, '.github/workflows/deploy.yml'), 'utf8');
 const assetLinks = readFileSync(resolve(root, 'public/.well-known/assetlinks.json'), 'utf8');
 const workerSource = readFileSync(resolve(root, 'worker/index.ts'), 'utf8');
@@ -59,7 +57,7 @@ describe('release automation contract', () => {
     expect(releaseWorkflow).toContain('node scripts/resolve-android-release-version.mjs');
     expect(releaseWorkflow).toContain("needs.detect-app-change.outputs.app_changed == 'true'");
     expect(releaseWorkflow).toContain('inputs.source_sha || github.sha');
-    expect(releaseWorkflow).toContain('group: android-release-candidate-${{ github.ref }}');
+    expect(releaseWorkflow).toContain('group: android-release-${{ github.ref }}');
     expect(releaseWorkflow).toContain('source_sha');
     expect(releaseWorkflow).toContain('must equal the workflow main SHA');
     const buildJob = releaseWorkflow.split('  sign-artifact:')[0];
@@ -84,13 +82,13 @@ describe('release automation contract', () => {
     expect(signer).toContain('Release certificate does not match the GitHub signing key fingerprint.');
     expect(signer).toContain('android-signed-${{ github.run_id }}');
     expect(signer).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
-    expect(signer).toContain('candidate-manifest.json');
+    expect(signer).toContain('release-manifest.json');
     expect(signer).not.toContain('actions/checkout');
     expect(signer).not.toContain('contents: write');
     expect(signer).not.toContain('gh release create');
   });
 
-  it('publishes a normal release for app pushes and manual main-branch dispatches with generated change notes', () => {
+  it('publishes a normal release for app pushes and manual main-branch dispatches with app-focused change notes', () => {
     const publishedRelease = releaseWorkflow.split('  publish-release:')[1] ?? '';
     expect(publishedRelease).toContain("github.ref == 'refs/heads/main' && needs.detect-app-change.outputs.app_changed == 'true'");
     expect(publishedRelease).toContain('contents: write');
@@ -100,49 +98,6 @@ describe('release automation contract', () => {
     expect(publishedRelease).not.toContain('--draft');
     expect(publishedRelease).not.toContain('--prerelease');
     expect(publishedRelease).not.toContain('--clobber');
-  });
-
-  it('promotes the accepted draft by verifying the exact source and APK hash without rebuilding or replacing bytes', () => {
-    expect(promotionWorkflow).toMatch(/^  workflow_dispatch:/m);
-    expect(promotionWorkflow).toContain("github.ref == 'refs/heads/main'");
-    expect(promotionWorkflow).toContain('candidate-manifest.json');
-    expect(promotionWorkflow).toContain('EXPECTED_CERT_SHA256: 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417');
-    expect(promotionWorkflow).toContain('Candidate certificate does not match the GitHub signing key fingerprint.');
-    expect(promotionWorkflow).toContain('SOURCE_SHA');
-    expect(promotionWorkflow).toContain('SHA256SUMS.txt');
-    expect(promotionWorkflow).toContain('gh release edit');
-    expect(promotionWorkflow).toContain('--draft=false');
-    expect(promotionWorkflow).not.toContain('actions/checkout');
-    expect(promotionWorkflow).not.toContain('assembleRelease');
-    expect(promotionWorkflow).not.toContain('apksigner sign');
-    expect(promotionWorkflow).not.toContain('--clobber');
-  });
-
-  it('removes private owner acceptance evidence before making the release public', () => {
-    const deletionIndex = promotionWorkflow.indexOf('gh release delete-asset');
-    const publishIndex = promotionWorkflow.indexOf('--draft=false');
-
-    expect(deletionIndex).toBeGreaterThan(-1);
-    expect(deletionIndex).toBeLessThan(publishIndex);
-    expect(promotionWorkflow).toContain('acceptance-manifest.json');
-    expect(promotionWorkflow).toContain('acceptance-evidence.zip');
-  });
-
-  it('records an acceptance marker before private-asset cleanup so promotion can resume', () => {
-    const markerIndex = promotionWorkflow.indexOf('border-ledger-acceptance:v1');
-    const deletionIndex = promotionWorkflow.indexOf('gh release delete-asset');
-
-    expect(markerIndex).toBeGreaterThan(-1);
-    expect(markerIndex).toBeLessThan(deletionIndex);
-    expect(promotionWorkflow).toContain('--notes-file');
-    expect(promotionWorkflow).toContain('if ($assetNames -contains $assetName)');
-  });
-
-  it('uses gh api endpoints without the unsupported --repo flag', () => {
-    const apiCalls = promotionWorkflow.split('\n').filter(line => line.includes('gh api'));
-    expect(apiCalls.length).toBeGreaterThan(0);
-    expect(apiCalls.every(line => !line.includes('gh api --repo'))).toBe(true);
-    expect(apiCalls.every(line => line.includes('repos/$env:GITHUB_REPOSITORY/'))).toBe(true);
   });
 
   it('recognizes shorthand action steps before checking every immutable pin', () => {
@@ -198,13 +153,10 @@ describe('release automation contract', () => {
   it('uses the GitHub signing key for releases and both expected signers for App Links', () => {
     const expectedCompact = '5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417';
     const expectedDisplay = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
-    const signingSources = [releaseWorkflow, promotionWorkflow]
-      .join(String.fromCharCode(10))
-      .toLowerCase();
+    const signingSources = releaseWorkflow.toLowerCase();
 
     expect(gradle).toContain(expectedCompact.toUpperCase());
     expect(releaseWorkflow).toContain(`EXPECTED_CERT_SHA256: ${expectedCompact}`);
-    expect(promotionWorkflow).toContain(`EXPECTED_CERT_SHA256: ${expectedCompact}`);
     for (const source of [productionAppLinksVerifier, assetLinks, workerSource]) {
       expect(source).toContain(expectedDisplay);
     }

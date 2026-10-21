@@ -45,6 +45,9 @@ This is API-observed metadata for the queried D1 database IDs at query time. It 
 
 ## Release and schema gate
 
+This historical gate applies to Cloudflare D1/schema changes. Android APK
+releases follow Task 17 below and do not wait for device acceptance.
+
 Do not design or apply an executable database upgrade, deploy, or claim Android acceptance until the authoritative writable source is attached and effective target bindings/deployment behavior are established. The configured databases' migration history and schema object names were observed via the Cloudflare API as documented above. No secrets, credentials, private screenshots, signing material, or real transaction data are recorded here.
 
 ## Task 1 — notification probe validation (2026-10-13)
@@ -72,11 +75,11 @@ No real CMB notification sample or source-capability evidence is available. CMB 
 
 ## Task 17 — release and verification runbook
 
-Status: **local native gate complete; device/signing/remote-release gates remain owner-controlled**. This document records the acceptance boundary and commands. The recovered checkout has a working wrapper JAR and SDK, and the unsigned native test/lint/release assembly gate passed. It does not claim a signed production release, physical-device acceptance, or remote deployment acceptance.
+Status: **local native gate complete; normal Android releases publish automatically after app changes pass the build checks**. The F01–F18 device matrix below is optional post-release validation and does not block publication.
 
 ### F01–F18 parity ledger
 
-Each row needs a reachable native path, real service behavior, and an owner-captured acceptance record. A website link or placeholder does not close a row. `Pending` is the honest initial state for this runbook.
+These rows form an optional post-release owner validation matrix. Install the published APK and record the checks that apply; bank/WeChat-dependent rows may remain pending while the app is iterated. These checks do not gate publication.
 
 | ID | Native acceptance boundary | Owner evidence to capture | Status |
 |---|---|---|---|
@@ -126,89 +129,17 @@ Each row needs a reachable native path, real service behavior, and an owner-capt
 
 - [ ] Keep signing material in owner-controlled secure backup and protected CI secrets (`ANDROID_KEYSTORE_BASE64`, password, alias, and key password). It never enters the repository or logs.
 - [ ] Verify stable application/package identity, App Link/redirect registrations, release manifest permissions, absence of debug-only probe components, and separate owner/capture authorization.
-- [ ] Run `assembleRelease`, `apksigner verify`, SHA-256 output, and actual installation/update/recovery evidence with an available Gradle wrapper/SDK. This workspace has not met those conditions.
-- [ ] Confirm the private release workflow remains credential/toolchain-gated. A missing wrapper JAR or signing secret must fail or gate with an explicit message; it must never produce a success-shaped placeholder.
+- [ ] The release workflow runs `assembleRelease`, `apksigner verify`, and SHA-256 generation. Install the published APK to collect device-specific upgrade and recovery evidence after release; this workspace has not captured that device evidence.
+- [ ] Confirm the automatic release workflow fails explicitly when its Android toolchain or signing secrets are unavailable; it must never publish a success-shaped placeholder.
 
-### Production promotion acceptance bundle
+### Iterating after publication
 
-The signed candidate workflow creates an unpublished draft only. The promotion
-workflow now requires an owner-captured `acceptance-manifest.json`, the
-matching `acceptance-evidence.zip`, and the manifest SHA-256 as an explicit
-input. Before making a draft public, it checks that the manifest is bound to
-the exact `main` source SHA, APK digest, production package, version, and
-GitHub signing-key certificate; every F01–F18 gate is marked passed and points
-to checksum-verified evidence; the evidence contains either a preserved-data
-in-place upgrade from a lower version or a verified fresh install after a
-signing-certificate transition; and the production App Links endpoint currently
-serves the same checksummed association response authorizing the GitHub candidate
-and previous production signer during the transition. Missing, stale, modified,
-or mismatched evidence fails closed.
-
-The manifest is JSON with `schemaVersion: 2`, exact `sourceSha`, `apkSha256`,
-`packageId`, `mobileEnvironment`, `signingCertificateSha256`, `versionCode`,
-`appLinks`, `installationAcceptance`, and `gates` objects. Each gate F01–F18 has
-`status: "passed"` and a nonempty `evidence` list; each evidence item has a
-bundle-relative `path`, lowercase hexadecimal `sha256`, and an `attestation`
-with matching `sourceSha` and `gateId`, UTC `capturedAt`, `device`, and
-lowercase-slug `evidenceType`. Capture attestations must be no more than 30
-days old. Evidence files must be nonempty, checksum-valid, and unique by path
-and content across the F01–F18 gates. The App Links record
-includes the production URL, package/certificate, response digest, and an
-evidence-file reference. `installationAcceptance.mode` is either
-`in-place-upgrade` or `fresh-install`. In-place upgrades include source and
-target version codes and checksummed JSON evidence confirming the upgrade and
-existing-data preservation. Fresh installs require the known previous production
-signer SHA-256 (1ff2a25e39136eefa79d23cc7531f702b2a162280538410509ca2ff65b4744ed),
-distinct from the candidate. They also require
-the candidate version code and a
-`dataDisposition` of `backup-verified` or `no-existing-data`; checksummed JSON
-evidence must confirm the new install completed with the previous app absent.
-The static App Links association temporarily authorizes both the legacy signer
-(1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED) and the GitHub release signer so existing installs retain
-verified auth callbacks. New APKs remain signed only with the GitHub key.
-Remove the legacy association after old installs retire.
-Use a device with no valuable local data or verify a backup before uninstalling
-an app signed with the previous key, because Android cannot update it in place
-across signing certificates. Capture evidence without personal financial data,
-credentials, or signing material.
-
-### Attaching the owner acceptance bundle
-
-The signed-candidate workflow creates the draft with only its APK, checksum,
-and candidate manifest. After all owner checks are complete, create the
-acceptance manifest and evidence ZIP from sanitized artifacts, then upload only
-those two acceptance files to the same still-draft release:
-
-```powershell
-$tag = '<exact draft candidate tag from the GitHub release>'
-$candidateDir = Join-Path (Get-Location) "candidate-download-$([guid]::NewGuid().ToString('N'))"
-if (Test-Path -LiteralPath $candidateDir) { throw 'Use a fresh candidate download directory.' }
-New-Item -ItemType Directory -Path $candidateDir | Out-Null
-gh release download $tag --repo MikuMikuMe/border-ledger `
-  --pattern candidate-manifest.json --dir $candidateDir
-$candidate = Get-Content -Raw -LiteralPath (Join-Path $candidateDir 'candidate-manifest.json') | ConvertFrom-Json
-Compress-Archive -Path .\acceptance-evidence\* -DestinationPath .\acceptance-evidence.zip -Force
-gh release upload $tag .\acceptance-manifest.json .\acceptance-evidence.zip `
-  --repo MikuMikuMe/border-ledger
-$manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath .\acceptance-manifest.json).Hash.ToLowerInvariant()
-gh workflow run android-promote.yml --repo MikuMikuMe/border-ledger --ref main `
-  -f tag=$tag `
-  -f "source_sha=$($candidate.sourceSha)" `
-  -f "apk_sha256=$($candidate.apkSha256)" `
-  -f "acceptance_manifest_sha256=$manifestHash"
-```
-
-Replace the tag placeholder with the exact still-draft candidate release tag.
-The commands derive the source and APK digests from that candidate's manifest
-and compute the acceptance manifest digest locally. Do not replace the
-candidate APK, checksum, or candidate manifest. Promotion independently verifies the downloaded APK's
-cryptographic signer with `apksigner` and its package/version metadata with
-`aapt2`; it also binds the owner manifest to the exact source and APK digests.
-The draft and its acceptance assets remain unpublished until that protected
-workflow succeeds. All F01–F18 rows above remain **Pending** until the owner
-performs and records the actual checks; automated wiring and fixtures are not
-acceptance evidence.
-
+The main-branch release workflow builds, signs, and publishes a normal public
+Android release when application files change and automated build checks pass.
+Install the APK from GitHub Releases and record any problems for the next
+iteration. F01–F18 are optional post-release owner checks; checks that require a
+bank or WeChat app may stay pending and do not delay publication. Fixes merged
+into application files trigger a later normal release automatically.
 ### CMB outcome
 
 CMB is an explicit unsupported outcome for this release. No source package, channel, account type, payload, or parser support is asserted. Keep `CMB_UNSUPPORTED` disabled and use statement import/review until an independent real-sample capability test proves the channel, fields, lifecycle labels, and posting time. No BOC parser reuse or fabricated CMB charge is acceptable.

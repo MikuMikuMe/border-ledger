@@ -73,6 +73,6 @@ The Plaid/RBC connection flow uses production. Configure production credentials 
 
 ## Android production releases
 
-Android production releases are built and signed by `.github/workflows/android-release.yml`, then promoted by `.github/workflows/android-promote.yml` after validating the accepted source SHA, APK checksum, signing certificate, and owner acceptance evidence. Private acceptance evidence is removed before the release is made public.
+Android production releases are built, signed, and published as normal public releases by `.github/workflows/android-release.yml` when application files change on `main`. Device-specific acceptance checks can continue after installation and do not delay publication.
 
 The checked-in Gradle wrapper and Android build configuration are used by CI. CMB remains unsupported and statement-import-only until independent source evidence exists. See [`docs/android-validation.md`](docs/android-validation.md) for the native feature and acceptance matrix.

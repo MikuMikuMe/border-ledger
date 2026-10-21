@@ -1,17 +1,20 @@
 # React Native migration acceptance
 
+> **Release policy update — 2026-10-21:** Android 0.2.0 is a normal public
+> release. App changes on `main` build, sign, and publish a normal release
+> through one workflow. F01–F18 device checks are post-release validation;
+> checks requiring bank or WeChat apps do not delay publication.
+
 The implementation branch now selects React Native from the existing
 `com.lofuyu.borderledger.MainActivity`; the `.probe` host remains debug-only.
 The unsigned production APK is built as `versionCode=1000` / `0.2.0`, contains
 the embedded RN bundle and local fonts, and excludes the probe/fixture hosts.
-This remains a **candidate, not an accepted production release**. Current-source
-Pixel debug instrumentation and a 412×915 login capture pass, and the live
-production App Links file authorizes the expected release certificate. The
-Pixel debug build uses a different signer and therefore is not eligible for
-domain verification; the connected Samsung still has signed v0.1.921, not the
-current source. A current-source production-signed App Links check, real-device
-data-preserving upgrade, owner F01–F18 acceptance, and controlled promotion
-remain open. No signing identity may be invented to close those gates.
+This validation record predates the public release. Current-source Pixel debug
+instrumentation and a 412×915 login capture pass, and the live production App
+Links file authorizes the expected release certificate. The Pixel debug build
+uses a different signer and is not eligible for domain verification. Physical
+device upgrade and owner F01–F18 checks remain useful follow-up validation, not
+release blockers.
 
 The live `/login-demo` now derives from the first-generated ThreadLoginConcept,
 not the superseded simplified migration adaptation: 88 strands ×73 vertices,
@@ -35,7 +38,7 @@ min SDK 26 / target SDK 36, `index.android.bundle`, the three local fonts, and
 Hermes/React Native/Reanimated/Skia/Worklets/screens/codegen libraries for
 arm64-v8a and x86_64. Its SHA-256 is
 `10B08C8AC2D6BE54B29449E2A85CE889BE4341AD179F32B2F76FF5EA7345D08D`. This is
-an unsigned local artifact, not the reviewed-SHA signed candidate; no device
+an unsigned local artifact, not the signed production release; no device
 startup or in-place upgrade is implied. The production Worker workflow now
 allows `workflow_dispatch` only from `main`; dispatching from this feature
 branch would otherwise replace Worker and web assets and apply remote D1
@@ -62,11 +65,11 @@ and no competing Gradle build was found. The exact configure then passed
 single-worker, and the complete Android gates plus fresh JVM/core tests passed.
 No ACL or source workaround was applied; transient root cause is unconfirmed.
 
-The Android production candidate signer is SHA-256 fingerprint
+The Android production release signer is SHA-256 fingerprint
 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417. This
 fingerprint was verified against the owner-provided GitHub keystore certificate.
-The release and promotion workflows and Android debug-signer guard use this
-identity. The Worker response and static App Links file authorize it alongside
+The Android release workflow and debug-signer guard use this identity. The
+Worker response and static App Links file authorize it alongside
 the previous production signer during the transition.
 
 The previous validation observed a Samsung installation signed by
@@ -186,11 +189,10 @@ in `android-validation.md`.
 - macOS 26/Xcode 26.4.1 framework compile/link must actually run successfully.
 - Measure release startup, frames, memory stability and APK-size delta against
   the prior signed artifact. Metro/debug/emulator timing is diagnostic only.
-- Keep the existing signing-secret, explicit-production and protected-release
-  workflow gates. A missing secret, failed check or unverified acceptance gate
-  stops release; never publish/push to shared `main` to test a workflow.
+- Keep signing secrets, explicit-production builds, and main-branch protections.
+  Automated build, instrumentation, and signing checks still gate publication;
+  device-specific owner acceptance happens after release.
 
-React Native is already the launcher in this candidate branch. Do not publish
-or remove remaining Compose presentation dependencies until the evidence above
-is accepted; retain Android services, background workers, native secret
-ownership, binary codecs, and the installed signing identity.
+React Native is the production launcher. Retain Android services, background
+workers, native secret ownership, binary codecs, and the installed signing
+identity while iterating on post-release findings.

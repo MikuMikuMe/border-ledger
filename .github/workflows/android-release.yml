@@ -1,4 +1,4 @@
-name: Android release candidate
+name: Android release
 
 on:
   push:
@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-release-candidate-${{ github.ref }}
+  group: android-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -81,7 +81,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
         run: |
-          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Release candidates may be built only from main.' }
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Android releases may be built only from main.' }
           if ($env:SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') { throw 'source_sha must be a full 40-character commit SHA.' }
           if ($env:SOURCE_SHA.ToLowerInvariant() -ne $env:GITHUB_SHA.ToLowerInvariant()) { throw 'source_sha must equal the workflow main SHA.' }
           if ((git rev-parse HEAD).Trim().ToLowerInvariant() -ne $env:SOURCE_SHA.ToLowerInvariant()) { throw 'The checked-out tree does not match source_sha.' }
@@ -261,7 +261,7 @@ jobs:
       VERSION_NAME: ${{ needs.detect-app-change.outputs.version_name }}
     steps:
       # This job is defined by the main-branch workflow. It intentionally has
-      # no checkout and executes no files or scripts from the candidate APK.
+      # no checkout and executes no files or scripts from the unsigned APK.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: android-unsigned-${{ github.run_id }}
@@ -303,7 +303,7 @@ jobs:
             $downloadDir = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $downloadDir | Out-Null
             & gh release download $release.tagName --repo $env:GITHUB_REPOSITORY --pattern '*.apk' --dir $downloadDir
-            if ($LASTEXITCODE -ne 0) { throw "Published Android APK for $($release.tagName) could not be inspected; refusing the candidate." }
+            if ($LASTEXITCODE -ne 0) { throw "Published Android APK for $($release.tagName) could not be inspected; refusing the release." }
             $apks = @(Get-ChildItem -LiteralPath $downloadDir -Filter '*.apk' -File)
             if ($apks.Count -ne 1) { throw "Expected one APK in $($release.tagName); refusing to guess its version." }
             $apkBadging = (& "$env:ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging $apks[0].FullName) -join "`n"
@@ -349,7 +349,7 @@ jobs:
           $manifestTree = (& $aapt2 dump xmltree --file AndroidManifest.xml $signed) -join "`n"
           if ($LASTEXITCODE -ne 0) { throw 'Release manifest inspection failed.' }
           if ($manifestTree -match 'com\.lofuyu\.borderledger\.probe|ReactNativeActivity|FixtureHost|PreviewActivity') { throw 'A debug-only component leaked into the release manifest.' }
-          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Candidate source SHA is invalid.' }
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Release source SHA is invalid.' }
           $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $signed).Hash.ToLowerInvariant()
           "$checksum  $artifactName" | Set-Content -Encoding utf8 -LiteralPath (Join-Path $artifactDirectory 'SHA256SUMS.txt')
           @{
@@ -363,7 +363,7 @@ jobs:
             apkSha256 = $checksum
             signingCertificateSha256 = $fingerprint
             workflowRunId = $env:GITHUB_RUN_ID
-          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -LiteralPath (Join-Path $artifactDirectory 'candidate-manifest.json')
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -LiteralPath (Join-Path $artifactDirectory 'release-manifest.json')
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -379,6 +379,7 @@ jobs:
     permissions:
       actions: read
       contents: write
+      pull-requests: read
     env:
       SOURCE_SHA: ${{ needs.build-unsigned.outputs.source_sha }}
       VERSION_CODE: ${{ needs.detect-app-change.outputs.version_code }}
@@ -400,22 +401,66 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; release assets are never overwritten." }
           $existingRef = & gh api -i "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" 2>&1
           if ($LASTEXITCODE -eq 0) { throw "Git tag $tag already exists; release tags are never replaced." }
-          if (($existingRef -join "`n") -notmatch '404') { throw 'Tag absence could not be verified; refusing to create a candidate.' }
+          if (($existingRef -join "`n") -notmatch '404') { throw 'Tag absence could not be verified; refusing to publish a release.' }
           $noteArguments = @('--method', 'POST', "repos/$env:GITHUB_REPOSITORY/releases/generate-notes", '-f', "tag_name=$tag", '-f', "target_commitish=$env:SOURCE_SHA", '--jq', '.body')
           if ($env:PREVIOUS_TAG) { $noteArguments += @('-f', "previous_tag_name=$env:PREVIOUS_TAG") }
           $generatedNotes = & gh api @noteArguments
-          if ($LASTEXITCODE -ne 0 -or -not $generatedNotes) { throw 'GitHub could not generate feature and fix notes for this release.' }
+          if ($LASTEXITCODE -ne 0 -or -not $generatedNotes) { throw 'GitHub could not generate app release notes.' }
+          $generatedNotesText = ($generatedNotes -join "`n").Trim()
+          $appPathPattern = '^(?:android/app/src/main/|mobile/|shared/|src/|contracts/|index\.html$|tsconfig\.json$|vite\.config\.ts$|public/)'
+          $nonAppSourcePattern = '(?:^|/)(?:tests?|androidTest|__tests__)(?:/|$)|(?:^|/)[^/]+\.(?:test|spec)\.[^/]+$'
+          $features = [System.Collections.Generic.List[string]]::new()
+          $fixes = [System.Collections.Generic.List[string]]::new()
+          $improvements = [System.Collections.Generic.List[string]]::new()
+          $seenPullRequests = [System.Collections.Generic.HashSet[int]]::new()
+          $pullRequestPattern = '(?m)^\* (?<title>.+?) by @.+? in (?<url>https://github\.com/[^/]+/[^/]+/pull/(?<number>\d+))\s*$'
+          foreach ($pullRequest in [regex]::Matches($generatedNotesText, $pullRequestPattern)) {
+            $title = $pullRequest.Groups['title'].Value.Trim()
+            $pullRequestNumber = [int]$pullRequest.Groups['number'].Value
+            if (-not $seenPullRequests.Add($pullRequestNumber)) { continue }
+            if ($title -match '^(?i:chore\(deps(?:-[^)]*)?\):)') { continue }
+            $changedPaths = @(& gh api --paginate "repos/$env:GITHUB_REPOSITORY/pulls/$pullRequestNumber/files?per_page=100" --jq '.[].filename')
+            if ($LASTEXITCODE -ne 0) { throw "Changed files for app release note PR #$pullRequestNumber could not be read." }
+            if (-not ($changedPaths | Where-Object { $_ -match $appPathPattern -and $_ -notmatch $nonAppSourcePattern } | Select-Object -First 1)) { continue }
+            $entry = "- [$title]($($pullRequest.Groups['url'].Value))"
+            if ($title -match '^(?i:feat|feature|add|migrate|introduce|implement|support|enable)(?:[\s(:-]|$)') {
+              $features.Add($entry)
+            } elseif ($title -match '^(?i:fix|bug|resolve|prevent|retry|restore|repair|correct|handle)(?:[\s(:-]|$)') {
+              $fixes.Add($entry)
+            } elseif ($title -match '^(?i:chore|docs|test|ci|build|refactor|style|perf)(?:[\s(:-]|$)') {
+              continue
+            } else {
+              $improvements.Add($entry)
+            }
+          }
           $checksum = (Get-Content -Raw -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'release-artifacts/SHA256SUMS.txt')).Trim().Split(' ')[0]
           $notes = Join-Path $env:RUNNER_TEMP 'android-release-notes.md'
-          @(
-            "# Border Ledger Android $env:VERSION_NAME"
-            ''
-            "Source commit: $env:SOURCE_SHA"
-            "APK SHA-256: $checksum"
-            ''
-            '## Features and fixes'
-            [string]$generatedNotes
-          ) | Set-Content -Encoding utf8 -LiteralPath $notes
+          $body = [System.Collections.Generic.List[string]]::new()
+          $body.Add("# Border Ledger Android $env:VERSION_NAME")
+          $body.Add('')
+          if ($features.Count -gt 0) { $body.Add('## Features'); $body.AddRange($features); $body.Add('') }
+          if ($fixes.Count -gt 0) { $body.Add('## Fixes'); $body.AddRange($fixes); $body.Add('') }
+          if ($improvements.Count -gt 0) { $body.Add('## Improvements'); $body.AddRange($improvements); $body.Add('') }
+          if ($features.Count + $fixes.Count + $improvements.Count -eq 0) {
+            $body.Add('App changes are included in this release. See the full changelog for commit details.')
+            $body.Add('')
+          }
+          if ($env:PREVIOUS_TAG) {
+            $comparison = "$env:PREVIOUS_TAG...$tag"
+            $changelogUrl = "https://github.com/$env:GITHUB_REPOSITORY/compare/$comparison"
+          } else {
+            $comparison = $tag
+            $changelogUrl = "https://github.com/$env:GITHUB_REPOSITORY/commits/$tag"
+          }
+          $body.Add("Full changelog: [$comparison]($changelogUrl)")
+          $body.Add('')
+          $body.Add('<details>')
+          $body.Add('<summary>Build details</summary>')
+          $body.Add('')
+          $body.Add("Source commit: [$env:SOURCE_SHA](https://github.com/$env:GITHUB_REPOSITORY/commit/$env:SOURCE_SHA)")
+          $body.Add("APK SHA-256: $checksum")
+          $body.Add('</details>')
+          [System.IO.File]::WriteAllText($notes, ($body -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
           $files = @(Get-ChildItem -LiteralPath 'release-artifacts' -File | ForEach-Object { $_.FullName })
           & gh release create $tag @files --repo $env:GITHUB_REPOSITORY --target $env:SOURCE_SHA --title "Border Ledger Android $env:VERSION_NAME" --notes-file $notes
           if ($LASTEXITCODE -ne 0) { throw "Release publication failed for $tag." }
