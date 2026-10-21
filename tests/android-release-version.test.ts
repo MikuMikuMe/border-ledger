@@ -6,15 +6,23 @@ import { resolveNextAndroidReleaseVersion } from '../scripts/resolve-android-rel
 describe('Android release version resolver', () => {
   it('writes version outputs when invoked as a GitHub Actions step', () => {
     const script = resolve(process.cwd(), 'scripts/resolve-android-release-version.mjs');
+    const tags = spawnSync('git', ['tag', '--list', 'android-v*'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    expect(tags.status).toBe(0);
+
     const result = spawnSync(process.execPath, [script], {
       cwd: process.cwd(),
       encoding: 'utf8',
       env: { ...process.env, GITHUB_OUTPUT: '', RUN_NUMBER: '37' },
     });
+    const expected = resolveNextAndroidReleaseVersion(tags.stdout.split(/\r?\n/).filter(Boolean), 37);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('version_name=0.2.0');
-    expect(result.stdout).toContain('version_code=1037');
+    expect(result.stdout).toContain(`version_name=${expected.versionName}`);
+    expect(result.stdout).toContain(`version_code=${expected.versionCode}`);
+    expect(result.stdout).toContain(`previous_tag=${expected.previousTagName}`);
   });
 
   it('starts the React Native release line at 0.2.0 after the 0.1.x releases', () => {
