@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const packageId = 'com.lofuyu.borderledger';
@@ -172,6 +174,7 @@ describe('Android release acceptance evidence', () => {
     await expect(verify(fixture)).resolves.toEqual({
       verified: true,
       featureGateCount: 18,
+      installationMode: 'in-place-upgrade',
     });
   });
 
@@ -181,7 +184,32 @@ describe('Android release acceptance evidence', () => {
     await expect(verify(fixture)).resolves.toEqual({
       verified: true,
       featureGateCount: 18,
+      installationMode: 'fresh-install',
     });
+  });
+
+  it('reports fresh-install acceptance accurately in CLI output', () => {
+    const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
+    const fetchShimPath = join(fixture.directory, 'fetch-shim.mjs');
+    writeFileSync(fetchShimPath, `globalThis.fetch = async () => new Response(${JSON.stringify(fixture.assetLinksBody)}, {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });\n`);
+
+    const result = spawnSync(process.execPath, [
+      '--import', pathToFileURL(fetchShimPath).href,
+      resolve(process.cwd(), 'scripts/verify-android-acceptance.mjs'),
+      '--manifest', fixture.manifestPath,
+      '--evidence-dir', fixture.directory,
+      '--source-sha', sourceSha,
+      '--apk-sha256', apkSha256,
+      '--signing-cert-sha256', certificateSha256,
+      '--version-code', '1000',
+    ], { encoding: 'utf8', timeout: 10_000 });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain('fresh install.');
+    expect(result.stdout).not.toContain('in-place upgrade');
   });
 
   it('rejects fresh-install acceptance when the previous certificate matches the candidate', async () => {

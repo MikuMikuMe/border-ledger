@@ -434,7 +434,7 @@ export async function verifyAndroidAcceptance({
   const installationMetadata = verifyInstallationMetadata(installation, signingCertificateSha256, versionCode);
   await verifyInstallationEvidence(installation, evidenceRoot, signingCertificateSha256, installationMetadata);
 
-  return { verified: true, featureGateCount: GATE_IDS.length };
+  return { verified: true, featureGateCount: GATE_IDS.length, installationMode: installationMetadata.mode };
 }
 
 function parseArguments(argv) {
@@ -467,7 +467,8 @@ async function runCli() {
     expectedSigningCertificateSha256: args.get('signing-cert-sha256'),
     expectedVersionCode: Number(args.get('version-code')),
   });
-  process.stdout.write(`Android acceptance verified: ${result.featureGateCount} feature gates, App Links, and signed in-place upgrade.\n`);
+  const installationDescription = result.installationMode === 'fresh-install' ? 'fresh install' : 'signed in-place upgrade';
+  process.stdout.write(`Android acceptance verified: ${result.featureGateCount} feature gates, App Links, and ${installationDescription}.\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
