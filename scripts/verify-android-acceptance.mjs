@@ -145,7 +145,10 @@ function isAuthorizedAppLinkEntry(entry, expectedCertificate) {
 
 function appLinksAuthorizes(payload, signingCertificateSha256) {
   return Array.isArray(payload)
-    && payload.some((entry) => isAuthorizedAppLinkEntry(entry, signingCertificateSha256));
+    && payload.some((entry) => (
+      isAuthorizedAppLinkEntry(entry, signingCertificateSha256)
+      && isAuthorizedAppLinkEntry(entry, PREVIOUS_SIGNING_CERTIFICATE_SHA256)
+    ));
 }
 
 async function verifyLiveAppLinks({ fetchImpl, expectedDigest, signingCertificateSha256 }) {
@@ -168,7 +171,7 @@ async function verifyLiveAppLinks({ fetchImpl, expectedDigest, signingCertificat
     fail('live App Links response is not valid JSON');
   }
   if (!appLinksAuthorizes(payload, signingCertificateSha256)) {
-    fail('live App Links response does not authorize the release certificate');
+    fail('live App Links response does not authorize both production signers');
   }
   if (sha256(Buffer.from(body, 'utf8')) !== expectedDigest) {
     fail('live App Links response does not match the checksummed acceptance evidence');

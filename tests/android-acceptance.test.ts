@@ -22,6 +22,7 @@ const assetLinksUrl = 'https://pf.lofuyu.com/.well-known/assetlinks.json';
 const sourceSha = 'a'.repeat(40);
 const apkSha256 = 'b'.repeat(64);
 const certificateSha256 = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
+const legacySignerSha256 = '1F:F2:A2:5E:39:13:6E:EF:A7:9D:23:CC:75:31:F7:02:B2:A1:62:28:05:38:41:05:09:CA:2F:F6:5B:47:44:ED';
 const temporaryDirectories: string[] = [];
 
 type InstallationAcceptance = {
@@ -60,22 +61,21 @@ function attestEvidence(evidence: ReturnType<typeof writeEvidence>, gateId: stri
   };
 }
 
-function validAssetLinks(certificate = certificateSha256) {
+function validAssetLinks(fingerprints = [certificateSha256, legacySignerSha256]) {
   return JSON.stringify([{
     relation: ['delegate_permission/common.handle_all_urls'],
     target: {
       namespace: 'android_app',
       package_name: packageId,
-      sha256_cert_fingerprints: [certificate],
+      sha256_cert_fingerprints: fingerprints,
     },
   }]);
 }
 
-function createAcceptanceFixture() {
+function createAcceptanceFixture(assetLinksBody = validAssetLinks()) {
   const directory = mkdtempSync(join(tmpdir(), 'border-ledger-acceptance-'));
   temporaryDirectories.push(directory);
 
-  const assetLinksBody = validAssetLinks();
   const appLinksEvidence = writeEvidence(directory, 'assetlinks.json', assetLinksBody);
   const upgradeEvidenceBody = JSON.stringify({
     packageId,
@@ -187,6 +187,11 @@ describe('Android release acceptance evidence', () => {
       featureGateCount: 18,
       installationMode: 'in-place-upgrade',
     });
+  });
+
+  it('rejects a checksummed App Links response without the legacy production signer', async () => {
+    const fixture = createAcceptanceFixture(validAssetLinks([certificateSha256]));
+    await expect(verify(fixture)).rejects.toThrow('live App Links response does not authorize both production signers');
   });
 
   it('accepts a fresh install when the candidate uses a different signing key', async () => {
@@ -352,8 +357,8 @@ describe('Android release acceptance evidence', () => {
   it('rejects a live App Links response with the wrong release certificate', async () => {
     const fixture = createAcceptanceFixture();
 
-    await expect(verify(fixture, { liveAssetLinksBody: validAssetLinks('00'.repeat(32)) }))
-      .rejects.toThrow('live App Links response does not authorize the release certificate');
+    await expect(verify(fixture, { liveAssetLinksBody: validAssetLinks(['00'.repeat(32), legacySignerSha256]) }))
+      .rejects.toThrow('live App Links response does not authorize both production signers');
   });
 
   it('rejects evidence paths that escape the acceptance bundle', async () => {

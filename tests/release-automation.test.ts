@@ -33,10 +33,12 @@ describe('release automation contract', () => {
     expect(gradle).toContain('buildConfigField("String", "MOBILE_ENVIRONMENT"');
   });
 
-  it('blocks debug packaging when its keystore uses the protected production certificate', () => {
+  it('blocks debug packaging when its keystore uses either production signer', () => {
     expect(gradle).toContain('verifyDebugSigningIdentity');
     expect(gradle).toContain('getCertificate(debugKeyAlias)');
     expect(gradle).toContain('5827E817EBAD9D478CA2C3C470A3742D783FC7D2BFBFFB8CC58219B5F3E68417');
+    expect(gradle).toContain('1FF2A25E39136EEFA79D23CC7531F702B2A162280538410509CA2FF65B4744ED');
+    expect(gradle).toContain('actualFingerprint in protectedProductionSigningCertificatesSha256');
     expect(gradle).toContain('validateSigningDebug');
     expect(gradle).toMatch(/it\.name\.startsWith\("packageDebug"\)/);
     expect(gradle).toMatch(/it\.name\.startsWith\("signDebug"\)/);
@@ -185,7 +187,7 @@ describe('release automation contract', () => {
   it('uses the GitHub signing key for releases and both expected signers for App Links', () => {
     const expectedCompact = '5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417';
     const expectedDisplay = '58:27:E8:17:EB:AD:9D:47:8C:A2:C3:C4:70:A3:74:2D:78:3F:C7:D2:BF:BF:FB:8C:C5:82:19:B5:F3:E6:84:17';
-    const signingSources = [gradle, releaseWorkflow, promotionWorkflow]
+    const signingSources = [releaseWorkflow, promotionWorkflow]
       .join(String.fromCharCode(10))
       .toLowerCase();
 
