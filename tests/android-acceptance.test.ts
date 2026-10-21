@@ -201,11 +201,7 @@ describe('Android release acceptance evidence', () => {
 
   it('reports fresh-install acceptance accurately in CLI output', () => {
     const fixture = configureFreshInstallAcceptance(createAcceptanceFixture());
-    const fetchShimPath = join(fixture.directory, 'fetch-shim.mjs');
-    writeFileSync(fetchShimPath, `globalThis.fetch = async () => new Response(${JSON.stringify(fixture.assetLinksBody)}, {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });\n`);
+    const fetchShimPath = resolve(process.cwd(), 'tests/helpers/android-acceptance-fetch-shim.mjs');
 
     const result = spawnSync(process.execPath, [
       '--import', pathToFileURL(fetchShimPath).href,
@@ -216,7 +212,14 @@ describe('Android release acceptance evidence', () => {
       '--apk-sha256', apkSha256,
       '--signing-cert-sha256', certificateSha256,
       '--version-code', '1000',
-    ], { encoding: 'utf8', timeout: 10_000 });
+    ], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        ANDROID_ACCEPTANCE_ASSET_LINKS_BODY: fixture.assetLinksBody,
+      },
+    });
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.stdout).toContain('fresh install.');
