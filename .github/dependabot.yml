@@ -13,6 +13,7 @@ updates:
           - react-dom
           - "@types/react"
           - "@types/react-dom"
+          - lucide-react
       web-toolchain:
         patterns:
           - vite
@@ -20,6 +21,8 @@ updates:
           - vitest
           - "@vitest/*"
           - typescript
+          - jsdom
+          - "@types/node"
 
   - package-ecosystem: npm
     directory: /mobile
@@ -73,8 +76,10 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
-      android-ci-toolchain:
+      workflow-toolchain:
         patterns:
+          - actions/checkout
+          - actions/setup-node
           - actions/setup-java
           - gradle/actions/setup-gradle
           - android-actions/setup-android
