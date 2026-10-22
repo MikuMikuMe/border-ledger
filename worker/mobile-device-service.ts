@@ -1,4 +1,5 @@
 import type { D1Database } from './db-types';
+import { bindConsentedCaptureDevice } from './mobile-capture-device-binding';
 import { getCurrencyMeta, supportedCurrencyCodes } from '../src/domain/currencies';
 import {
   createOpaqueCredential,
@@ -183,11 +184,29 @@ export async function readDevices(db: D1Database): Promise<DeviceView[]> {
 
 export async function replaceDeviceSourceConfig(db: D1Database, deviceId: string, input: unknown): Promise<DeviceView> {
   const config = sourceConfig(input);
-  const row = await readDeviceRow(db, deviceId);
+  await validateSourceConfig(db, config);
+  return writeDeviceSourceConfig(db, { deviceId, config });
+}
+
+function requireWritableDevice(row: DeviceRow | null, config: SourceConfigInput): DeviceRow {
   if (!row) throw new MobileDeviceError('not_found', 'The mobile device was not found.', 404);
   if (row.status === 'revoked') throw new MobileDeviceError('revoked', 'The mobile device is revoked.', 409);
   if (config.expectedRevision !== row.source_config_revision) throw new MobileDeviceError('revision_conflict', 'The source configuration revision is stale.', 409, row.source_config_revision);
-  await validateSourceConfig(db, config);
+  return row;
+}
+
+function deviceScopeStatements(db: D1Database, device: DeviceRow, config: SourceConfigInput) {
+  return config.mappings.flatMap((mapping) => mapping.allowedCurrencies.map((currency) => db.prepare(`INSERT INTO device_source_scopes
+    (id, device_id, source_profile_id, account_id, currency, instrument_hint_kind, instrument_hint_value, status, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', NULL)`).bind(
+    crypto.randomUUID(), device.id, mapping.sourceProfileId, mapping.accountId, currency,
+    mapping.instrumentHint?.kind ?? 'none', mapping.instrumentHint?.value ?? '',
+  )));
+}
+
+async function writeDeviceSourceConfig(db: D1Database, update: { deviceId: string; config: SourceConfigInput }): Promise<DeviceView> {
+  const { deviceId, config } = update;
+  const device = requireWritableDevice(await readDeviceRow(db, deviceId), config);
   const updated = await db.prepare(`UPDATE mobile_devices SET source_config_revision = source_config_revision + 1, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND ledger_id = 'personal' AND status <> 'revoked' AND source_config_revision = ?`).bind(deviceId, config.expectedRevision).run();
   if (updated.meta?.changes !== 1) {
@@ -195,42 +214,48 @@ export async function replaceDeviceSourceConfig(db: D1Database, deviceId: string
     throw new MobileDeviceError('revision_conflict', 'The source configuration revision is stale.', 409, current?.source_config_revision);
   }
   await db.batch([
-    db.prepare(`DELETE FROM device_source_scopes WHERE device_id = ?`).bind(deviceId),
-    ...config.mappings.flatMap((mapping) => mapping.allowedCurrencies.map((currency) => db.prepare(`INSERT INTO device_source_scopes
-      (id, device_id, source_profile_id, account_id, currency, instrument_hint_kind, instrument_hint_value, status, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', NULL)`).bind(
-      crypto.randomUUID(), deviceId, mapping.sourceProfileId, mapping.accountId, currency,
-      mapping.instrumentHint?.kind ?? 'none', mapping.instrumentHint?.value ?? '',
-    ))),
+    db.prepare('DELETE FROM device_source_scopes WHERE device_id = ?').bind(deviceId),
+    ...deviceScopeStatements(db, device, config),
   ]);
   return readDevice(db, deviceId);
 }
 
-export async function issueCaptureAuthorization(db: D1Database, owner: OwnerContext, input: unknown, config: MobileAuthConfig) {
-  if (!owner.deviceId) throw new MobileDeviceError('device_required', 'The owner session is not bound to a device.', 403);
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new MobileDeviceError('invalid_request', 'The capture authorization is not valid.');
-  const body = input as Record<string, unknown>;
+function isCaptureAuthorizationBody(input: unknown): input is Record<string, unknown> {
+  return input !== null && typeof input === 'object' && !Array.isArray(input);
+}
+
+function captureAuthorizationInput(input: unknown) {
+  if (!isCaptureAuthorizationBody(input)) throw new MobileDeviceError('invalid_request', 'The capture authorization is not valid.');
+  const body = input;
   if (body.consent !== true) throw new MobileDeviceError('consent_required', 'Explicit capture consent is required.', 403);
   const credentialHash = bounded(body.credentialHash, 'credential hash', 128);
   if (!/^[A-Fa-f0-9]{64}$/.test(credentialHash)) throw new MobileDeviceError('invalid_request', 'The capture credential hash is not valid.');
-  const device = await readDevice(db, owner.deviceId);
-  const updated = await replaceDeviceSourceConfig(db, owner.deviceId, body.sourceConfig);
+  const captureConfig = sourceConfig(body.sourceConfig);
+  return { credentialHash, captureConfig };
+}
+
+export async function issueCaptureAuthorization(db: D1Database, owner: OwnerContext, input: unknown, config: MobileAuthConfig) {
+  const { credentialHash, captureConfig } = captureAuthorizationInput(input);
+  await validateSourceConfig(db, captureConfig);
+  if (!owner.deviceId && captureConfig.expectedRevision !== 0) throw new MobileDeviceError('revision_conflict', 'A new capture device must start at revision zero.', 409, 0);
+  const deviceId = await bindConsentedCaptureDevice(db, { ...owner, consent: true }, config);
+  const updated = await writeDeviceSourceConfig(db, { deviceId, config: captureConfig });
   const at = now(config);
   const expiresAt = isoAfter(at, CAPTURE_LIFETIME_MS);
-  const current = await db.prepare(`SELECT generation FROM capture_credentials WHERE device_id = ? ORDER BY generation DESC LIMIT 1`).bind(owner.deviceId).first<{ generation: number }>();
+  const current = await db.prepare(`SELECT generation FROM capture_credentials WHERE device_id = ? ORDER BY generation DESC LIMIT 1`).bind(deviceId).first<{ generation: number }>();
   const generation = (current?.generation ?? 0) + 1;
   const credentialId = crypto.randomUUID();
   const revocationCapability = await createOpaqueCredential({ kind: 'revocation', grantType: 'capture-credential', grantId: credentialId, generation, expiresAt, environmentHash: await hashSecret(config.environment) }, config);
   const environmentHash = await hashSecret(config.environment);
   await db.batch([
     db.prepare(`UPDATE capture_credentials SET revoked_at = COALESCE(revoked_at, ?)
-      WHERE device_id = ? AND revoked_at IS NULL`).bind(at.toISOString(), owner.deviceId),
-    db.prepare(`UPDATE mobile_devices SET expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(expiresAt, owner.deviceId),
+      WHERE device_id = ? AND revoked_at IS NULL`).bind(at.toISOString(), deviceId),
+    db.prepare(`UPDATE mobile_devices SET expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(expiresAt, deviceId),
     db.prepare(`INSERT INTO capture_credentials
       (id, device_id, credential_hash, credential_type, scope, generation, issued_at, expires_at, environment_hash, revocation_capability_hash)
-      VALUES (?, ?, ?, 'capture', 'alerts:write', ?, ?, ?, ?, ?)`).bind(credentialId, owner.deviceId, credentialHash, generation, at.toISOString(), expiresAt, environmentHash, await hashSecret(revocationCapability)),
+      VALUES (?, ?, ?, 'capture', 'alerts:write', ?, ?, ?, ?, ?)`).bind(credentialId, deviceId, credentialHash, generation, at.toISOString(), expiresAt, environmentHash, await hashSecret(revocationCapability)),
   ]);
-  return { ...updated, deviceId: device.id, generation, credentialExpiresAt: expiresAt, revocationCapability };
+  return { ...updated, deviceId, generation, credentialExpiresAt: expiresAt, revocationCapability };
 }
 
 export async function revokeDevice(db: D1Database, owner: OwnerContext, deviceId: string, config: MobileAuthConfig) {
