@@ -66,7 +66,7 @@ describe('release automation contract', () => {
     expect(buildJob).toContain('-PreleaseVersionCode=${{ needs.detect-app-change.outputs.version_code }}');
     expect(buildJob).toContain('-PreleaseVersionName=${{ needs.detect-app-change.outputs.version_name }}');
     expect(buildJob).toContain('mobileEnvironment=production');
-    expect(buildJob).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
+    expect(buildJob).toContain('actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9');
     expect(buildJob).not.toMatch(/secrets\./);
     expect(buildJob).not.toContain('contents: write');
   });
@@ -81,7 +81,7 @@ describe('release automation contract', () => {
     expect(signer).toContain('EXPECTED_CERT_SHA256: 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417');
     expect(signer).toContain('Release certificate does not match the GitHub signing key fingerprint.');
     expect(signer).toContain('android-signed-${{ github.run_id }}');
-    expect(signer).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
+    expect(signer).toContain('actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9');
     expect(signer).toContain('release-manifest.json');
     expect(signer).not.toContain('actions/checkout');
     expect(signer).not.toContain('contents: write');
