@@ -5,7 +5,7 @@ import type { D1Database } from '../../worker/db-types';
 
 const legacyMigrationNames = ['0000-ledger-base.sql', '0001-plaid.sql', '0002-recurring.sql'] as const;
 export const task3MigrationNames = ['0003-multicurrency.sql', '0004-mobile-alerts.sql', '0005-native-parity.sql'] as const;
-export const task4MigrationNames = [...task3MigrationNames, '0006-mobile-auth-hardening.sql', '0007-mobile-receipt-device-ownership.sql'] as const;
+export const task4MigrationNames = [...task3MigrationNames, '0006-mobile-auth-hardening.sql', '0007-mobile-receipt-device-ownership.sql', '0019-owner-installation-binding.sql'] as const;
 export const task10MigrationNames = [...legacyMigrationNames, ...task4MigrationNames, '0008-statement-reconciliation.sql', '0009-statement-reconciliation-target-uniqueness.sql'] as const;
 export const task10PreUniquenessMigrationNames = [...task10MigrationNames.slice(0, -1), '0010-mobile-import-export.sql', '0012-recurring-classification-revision.sql', '0013-mobile-settings-devices.sql', '0014-mobile-capture-scope-instrument-hints.sql', '0015-currency-registry.sql'] as const;
 export const task12MigrationNames = [...task10MigrationNames, '0010-mobile-import-export.sql'] as const;

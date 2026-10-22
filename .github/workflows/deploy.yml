@@ -152,3 +152,30 @@ jobs:
             process.exit(1);
           }
           NODE
+
+      - name: Verify owner login from a fresh unpaired installation
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          import { createHash, randomBytes, randomUUID } from 'node:crypto';
+          const origin = 'https://pf.lofuyu.com';
+          const state = randomBytes(32).toString('base64url');
+          const codeChallenge = createHash('sha256').update(randomBytes(32)).digest('base64url');
+          const response = await fetch(origin + '/api/mobile/v1/auth/requests', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: randomUUID(), state, codeChallenge, environment: 'production' }),
+            redirect: 'manual',
+            signal: AbortSignal.timeout(30_000),
+          });
+          if (response.status !== 201) throw new Error('Fresh-install owner login returned HTTP ' + response.status);
+          const body = await response.json();
+          const authorization = new URL(body.authorizationUrl);
+          if (authorization.origin !== origin || authorization.pathname !== '/mobile/authorize'
+            || authorization.searchParams.get('request_id') !== body.requestId
+            || authorization.searchParams.get('state') !== state
+            || !body.requestId || !(Date.parse(body.expiresAt) > Date.now())) {
+            throw new Error('Fresh-install owner login returned an invalid authorization launch.');
+          }
+          console.log('Fresh-install owner login reached browser authorization successfully.');
+          NODE
