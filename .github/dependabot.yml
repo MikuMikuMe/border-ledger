@@ -6,6 +6,20 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      web-react-stack:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+      web-toolchain:
+        patterns:
+          - vite
+          - "@vitejs/plugin-react"
+          - vitest
+          - "@vitest/*"
+          - typescript
 
   - package-ecosystem: npm
     directory: /mobile
@@ -13,6 +27,44 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      react-native-core:
+        patterns:
+          - react
+          - react-native
+          - react-test-renderer
+          - "@types/react"
+          - "@types/react-test-renderer"
+          - "@react-native/babel-preset"
+          - "@react-native/metro-config"
+          - "@react-native/typescript-config"
+          - "@react-native-community/cli"
+          - "@react-native-community/cli-platform-android"
+          - "@react-native-community/cli-platform-ios"
+          - typescript
+      babel-tooling:
+        patterns:
+          - "@babel/*"
+        update-types:
+          - minor
+          - patch
+      react-native-animation:
+        patterns:
+          - react-native-reanimated
+          - react-native-worklets
+      react-native-navigation:
+        patterns:
+          - "@react-navigation/*"
+      react-native-runtime-modules:
+        patterns:
+          - react-native-gesture-handler
+          - react-native-safe-area-context
+          - react-native-screens
+          - "@shopify/react-native-skia"
+    ignore:
+      - dependency-name: "@babel/core"
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
@@ -20,3 +72,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      artifact-actions:
+        patterns:
+          - actions/upload-artifact
+          - actions/download-artifact
