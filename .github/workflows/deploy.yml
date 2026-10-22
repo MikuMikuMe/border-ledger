@@ -159,23 +159,35 @@ jobs:
           node --input-type=module - <<'NODE'
           import { createHash, randomBytes, randomUUID } from 'node:crypto';
           const origin = 'https://pf.lofuyu.com';
-          const state = randomBytes(32).toString('base64url');
-          const codeChallenge = createHash('sha256').update(randomBytes(32)).digest('base64url');
-          const response = await fetch(origin + '/api/mobile/v1/auth/requests', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ deviceId: randomUUID(), state, codeChallenge, environment: 'production' }),
-            redirect: 'manual',
-            signal: AbortSignal.timeout(30_000),
-          });
-          if (response.status !== 201) throw new Error('Fresh-install owner login returned HTTP ' + response.status);
-          const body = await response.json();
-          const authorization = new URL(body.authorizationUrl);
-          if (authorization.origin !== origin || authorization.pathname !== '/mobile/authorize'
-            || authorization.searchParams.get('request_id') !== body.requestId
-            || authorization.searchParams.get('state') !== state
-            || !body.requestId || !(Date.parse(body.expiresAt) > Date.now())) {
-            throw new Error('Fresh-install owner login returned an invalid authorization launch.');
+          const maxAttempts = 6;
+          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const state = randomBytes(32).toString('base64url');
+            const codeChallenge = createHash('sha256').update(randomBytes(32)).digest('base64url');
+            const response = await fetch(origin + '/api/mobile/v1/auth/requests', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ deviceId: randomUUID(), state, codeChallenge, environment: 'production' }),
+              redirect: 'manual',
+              signal: AbortSignal.timeout(30_000),
+            });
+            // A request can still reach the previous Worker while deployment propagates.
+            // Retry server errors only; malformed responses and client errors fail immediately.
+            if (response.status >= 500 && attempt < maxAttempts) {
+              console.log(`Owner login propagation check ${attempt}/${maxAttempts}: HTTP ${response.status}; retrying.`);
+              await response.body?.cancel();
+              await new Promise((resolve) => setTimeout(resolve, 5_000));
+              continue;
+            }
+            if (response.status !== 201) throw new Error('Fresh-install owner login returned HTTP ' + response.status);
+            const body = await response.json();
+            const authorization = new URL(body.authorizationUrl);
+            if (authorization.origin !== origin || authorization.pathname !== '/mobile/authorize'
+              || authorization.searchParams.get('request_id') !== body.requestId
+              || authorization.searchParams.get('state') !== state
+              || !body.requestId || !(Date.parse(body.expiresAt) > Date.now())) {
+              throw new Error('Fresh-install owner login returned an invalid authorization launch.');
+            }
+            console.log('Fresh-install owner login reached browser authorization successfully.');
+            break;
           }
-          console.log('Fresh-install owner login reached browser authorization successfully.');
           NODE
