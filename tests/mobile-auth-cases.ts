@@ -126,6 +126,16 @@ async function expectReject(action: () => Promise<unknown>, pattern: RegExp) {
   });
 }
 
+// Exercise migrated families whose capture association predates installation bindings.
+async function legacyCaptureOwner(db: import('../worker/db-types').D1Database, accessToken: string, cfg: MobileAuthConfig, deviceId: string) {
+  const owner = await authenticateOwner(accessToken, db, cfg, 'devices:manage');
+  await db.prepare('UPDATE owner_session_families SET device_id = ?, installation_id = NULL WHERE id = ?')
+    .bind(deviceId, owner.familyId).run();
+  const legacy = await authenticateOwner(accessToken, db, cfg, 'devices:manage');
+  assert.equal(legacy.deviceId, deviceId);
+  return legacy;
+}
+
 export async function runTask4Cases() {
   const fixture = createSqliteD1Fixture();
   const clock = makeClock();
@@ -395,7 +405,7 @@ export async function runTask4Cases() {
     await seedDevice(fixture.db, 'owner-device-4');
     const fourthFlow = await beginAndApproveOwner(fixture.db, cfg, 'owner-device-4');
     const fourthOwner = await exchange(fixture.db, cfg, fourthFlow);
-    const fourthContext = await authenticateOwner(fourthOwner.accessToken, fixture.db, cfg, 'devices:manage');
+    const fourthContext = await legacyCaptureOwner(fixture.db, fourthOwner.accessToken, cfg, 'owner-device-4');
     const originalCaptureSecret = 'owner-device-4-capture-v1';
     const renewedCaptureSecret = 'owner-device-4-capture-v2';
     const captureIssuedAt = new Date(clock.value()).toISOString();

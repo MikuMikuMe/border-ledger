@@ -90,7 +90,7 @@ export interface OwnerTokenResponse {
 interface AuthRequestRow {
   id: string;
   ledger_id: 'personal';
-  device_id: string | null;
+  installation_id: string | null;
   state_hash: string;
   pkce_challenge_hash: string;
   request_digest: string;
@@ -110,7 +110,7 @@ interface SessionFamilyRow {
   id: string;
   ledger_id: 'personal';
   subject_hash: string;
-  device_id: string | null;
+  installation_id: string | null;
   access_generation: number;
   refresh_generation: number;
   access_expires_at: string;
@@ -177,7 +177,7 @@ async function readReplay<T>(db: D1Database, requestKind: string, digest: string
 }
 
 async function readAuthRequest(db: D1Database, requestId: string) {
-  return db.prepare(`SELECT id, ledger_id, device_id, state_hash, pkce_challenge_hash, request_digest,
+  return db.prepare(`SELECT id, ledger_id, COALESCE(installation_id, device_id) AS installation_id, state_hash, pkce_challenge_hash, request_digest,
       expires_at, consumed_at, revoked_at, code_hash, code_expires_at, callback_origin, callback_path,
       environment_hash, approved_subject_hash, approved_at
     FROM mobile_auth_requests WHERE id = ?`).bind(requestId).first<AuthRequestRow>();
@@ -204,7 +204,7 @@ export async function startOwnerLogin(db: D1Database, input: OwnerLoginStart, co
   const pkceChallengeHash = await hashSecret(input.codeChallenge);
   const digest = await requestDigest({ flow: 'owner-login', requestId, stateHash, pkceChallengeHash, deviceId: input.deviceId ?? null, environmentHash, callback });
   await db.prepare(`INSERT INTO mobile_auth_requests
-    (id, ledger_id, device_id, state_hash, pkce_challenge_hash, request_digest, expires_at,
+    (id, ledger_id, installation_id, state_hash, pkce_challenge_hash, request_digest, expires_at,
       callback_origin, callback_path, environment_hash)
     VALUES (?, 'personal', ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
     requestId,
@@ -308,10 +308,10 @@ async function atomicExchange(db: D1Database, request: AuthRequestRow, input: Ow
     db.prepare(`UPDATE mobile_auth_requests SET consumed_at = ?
       WHERE id = ? AND code_hash = ? AND code_expires_at > ? AND consumed_at IS NULL AND revoked_at IS NULL`).bind(at.toISOString(), request.id, await hashSecret(input.code), at.toISOString()),
     db.prepare(`INSERT INTO owner_session_families
-      (id, ledger_id, subject_hash, device_id, access_generation, refresh_generation, access_expires_at,
+      (id, ledger_id, subject_hash, installation_id, access_generation, refresh_generation, access_expires_at,
        refresh_expires_at, stay_signed_in_until, scope_json, environment_hash, revocation_capability_hash, revocation_generation)
       SELECT ?, 'personal', ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, 1 WHERE changes() = 1`).bind(
-      familyId, subjectHash, request.device_id, accessExpiresAt, refreshExpiresAt, staySignedInUntil,
+      familyId, subjectHash, request.installation_id, accessExpiresAt, refreshExpiresAt, staySignedInUntil,
       JSON.stringify(OWNER_SCOPES), await hashSecret(config.environment), revocationHash,
     ),
     db.prepare(`INSERT INTO owner_refresh_generations (family_id, generation, token_hash, issued_at, expires_at)
@@ -346,7 +346,7 @@ export async function exchangeOwnerCode(db: D1Database, input: OwnerCodeExchange
   if (!constantTimeEqual(request.state_hash, stateHash)) throw new MobileAuthError('state_mismatch', 'The owner login state is not valid.', 401);
   if (!constantTimeEqual(request.pkce_challenge_hash, await hashSecret(await pkceChallenge(input.verifier)))) throw new MobileAuthError('pkce_mismatch', 'The PKCE verifier is not valid.', 401);
   if (request.environment_hash !== environmentHash || request.callback_origin !== callback.origin || request.callback_path !== callback.path) throw new MobileAuthError('environment_mismatch', 'The owner login request does not match this environment.', 401);
-  if (request.device_id !== (input.deviceId ?? null) || !request.approved_subject_hash) throw new MobileAuthError('device_mismatch', 'The owner login device binding is not valid.', 401);
+  if (request.installation_id !== (input.deviceId ?? null) || !request.approved_subject_hash) throw new MobileAuthError('device_mismatch', 'The owner login device binding is not valid.', 401);
   const refreshLifetime = input.staySignedIn === true ? THIRTY_DAYS : DAY;
   const refreshExpiresAt = isoAfter(at, refreshLifetime);
   const accessExpiresAt = isoAfter(at, Math.min(FIFTEEN_MINUTES, refreshLifetime));
@@ -355,7 +355,7 @@ export async function exchangeOwnerCode(db: D1Database, input: OwnerCodeExchange
   const refreshHash = await hashSecret(refreshTokenPlaceholder);
   const capabilityPlaceholder = await revocationCapability(config, familyId, 1, refreshExpiresAt);
   const revocationHash = await hashSecret(capabilityPlaceholder);
-  const response = await ownerResponse(config, familyId, 1, request.approved_subject_hash, request.device_id, refreshExpiresAt, accessExpiresAt, capabilityPlaceholder, 1);
+  const response = await ownerResponse(config, familyId, 1, request.approved_subject_hash, request.installation_id, refreshExpiresAt, accessExpiresAt, capabilityPlaceholder, 1);
   // The refresh token hash must describe the token returned to the client.
   const exactRefreshHash = await hashSecret(response.refreshToken);
   const committed = await atomicExchange(db, request, input, digest, response, config, at, familyId, request.approved_subject_hash, exactRefreshHash, revocationHash, accessExpiresAt, refreshExpiresAt, input.staySignedIn === true ? refreshExpiresAt : null);
@@ -366,7 +366,7 @@ export async function exchangeOwnerCode(db: D1Database, input: OwnerCodeExchange
 }
 
 async function readFamily(db: D1Database, familyId: string) {
-  return db.prepare(`SELECT id, ledger_id, subject_hash, device_id, access_generation, refresh_generation,
+  return db.prepare(`SELECT id, ledger_id, subject_hash, COALESCE(installation_id, device_id) AS installation_id, access_generation, refresh_generation,
       access_expires_at, refresh_expires_at, stay_signed_in_until, revoked_at, scope_json,
       environment_hash, revocation_capability_hash, revocation_generation
     FROM owner_session_families WHERE id = ?`).bind(familyId).first<SessionFamilyRow>();
@@ -424,7 +424,7 @@ export async function refreshOwnerSession(db: D1Database, input: OwnerRefreshInp
   const accessExpiresAt = isoAfter(at, Math.min(FIFTEEN_MINUTES, Date.parse(family.refresh_expires_at) - at.getTime()));
   const refreshExpiresAt = family.refresh_expires_at;
   const nextCapability = await revocationCapability(config, family.id, nextGeneration, refreshExpiresAt);
-  const response = await ownerResponse(config, family.id, nextGeneration, family.subject_hash, family.device_id, refreshExpiresAt, accessExpiresAt, nextCapability, nextAccessGeneration);
+  const response = await ownerResponse(config, family.id, nextGeneration, family.subject_hash, family.installation_id, refreshExpiresAt, accessExpiresAt, nextCapability, nextAccessGeneration);
   const committed = await atomicRefresh(db, family, input, digest, payload.generation, nextGeneration, nextAccessGeneration, accessExpiresAt, refreshExpiresAt, await hashSecret(response.refreshToken), await hashSecret(nextCapability), response, config, at, refreshExpiresAt);
   if (committed) return response;
   const recovered = await readReplay<OwnerTokenResponse>(db, 'owner-refresh', digest, at, config);
