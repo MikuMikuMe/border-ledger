@@ -75,7 +75,7 @@ describe('release automation contract', () => {
     const signer = releaseWorkflow.split('  sign-artifact:')[1]?.split('  publish-release:')[0] ?? '';
     expect(signer).toContain("if: github.ref == 'refs/heads/main'");
     expect(signer).toContain('environment: android-production-signing');
-    expect(signer).toContain('actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
+    expect(signer).toContain('actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333');
     expect(signer).toContain('apksigner sign');
     expect(signer).toContain('EXPECTED_CERT_SHA256');
     expect(signer).toContain('EXPECTED_CERT_SHA256: 5827e817ebad9d478ca2c3c470a3742d783fc7d2bfbffb8cc58219b5f3e68417');
