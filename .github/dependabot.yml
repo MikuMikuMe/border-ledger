@@ -23,6 +23,12 @@ updates:
           - typescript
           - jsdom
           - "@types/node"
+      cloudflare-toolchain:
+        patterns:
+          - wrangler
+          - miniflare
+          - workerd
+          - "@cloudflare/*"
 
   - package-ecosystem: npm
     directory: /mobile
@@ -64,6 +70,11 @@ updates:
           - react-native-safe-area-context
           - react-native-screens
           - "@shopify/react-native-skia"
+      react-native-styling:
+        patterns:
+          - uniwind
+          - tailwindcss
+          - tailwind-merge
     ignore:
       - dependency-name: "@babel/core"
         update-types:
