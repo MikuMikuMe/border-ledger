@@ -8,7 +8,7 @@ const MIGRATION = '0019-owner-installation-binding.sql';
 
 describe('owner installation binding migration', () => {
   it('preserves existing sessions and their refresh children while allowing an unpaired installation', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames.filter(name => name !== MIGRATION));
+    const fixture = await createD1Fixture(task18MigrationNames);
     try {
       await fixture.db.prepare("INSERT INTO mobile_devices (id, ledger_id, device_name, platform, status) VALUES ('legacy-device', 'personal', 'Legacy device', 'android', 'paired')").run();
       await createOwnerAuthRequest(fixture.db, {

@@ -342,7 +342,7 @@ export async function authenticateOwner(credential: Request | string, db: D1Data
   validExpiry(payload.expiresAt, current);
   const expectedEnvironmentHash = await hashSecret(config.environment);
   if (!constantTimeEqual(payload.environmentHash, expectedEnvironmentHash)) throw new MobileAuthError('environment_mismatch', 'The mobile environment is not valid.', 401);
-  const family = await db.prepare(`SELECT id, ledger_id, subject_hash, COALESCE(installation_id, device_id) AS device_id, access_generation, access_expires_at,
+  const family = await db.prepare(`SELECT id, ledger_id, subject_hash, device_id, access_generation, access_expires_at,
       refresh_expires_at, revoked_at, scope_json, environment_hash
     FROM owner_session_families WHERE id = ?`).bind(payload.familyId).first<{
     id: string;

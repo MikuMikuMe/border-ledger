@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { handleMobileRequest } from '../worker/mobile';
 import { authenticateOwner, pkceChallenge } from '../worker/mobile-auth';
 import { exchangeOwnerCode, refreshOwnerSession } from '../worker/mobile-owner-auth';
+import { issueCaptureAuthorization } from '../worker/mobile-device-service';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 
 const ORIGIN = 'https://pf.example.test';
@@ -23,9 +24,10 @@ const fixtures: Array<{ close(): void }> = [];
 afterEach(() => { while (fixtures.length) fixtures.pop()?.close(); });
 
 describe('owner login from an unpaired installation', () => {
-  it('starts, approves, exchanges and refreshes without a capture device, retaining the installation binding', async () => {
+  it.each([false, true])('retains the login binding without granting capture access (existing device: %s)', async (existingDevice) => {
     const fixture = createSqliteD1Fixture();
     fixtures.push(fixture);
+    if (existingDevice) await fixture.db.prepare("INSERT INTO mobile_devices (id, ledger_id, device_name, platform, status) VALUES (?, 'personal', 'Existing capture device', 'android', 'paired')").bind(DEVICE_ID).run();
     const env = {
       DB: fixture.db,
       LEDGER_APP_ORIGIN: ORIGIN,
@@ -53,9 +55,16 @@ describe('owner login from an unpaired installation', () => {
     const exchange = { requestId: start.requestId, code: approval.code, verifier: VERIFIER, state: STATE, deviceId: DEVICE_ID, staySignedIn: true };
     await expect(exchangeOwnerCode(fixture.db, { ...exchange, deviceId: 'different-installation' }, config)).rejects.toMatchObject({ code: 'device_mismatch' });
     const tokens = await exchangeOwnerCode(fixture.db, exchange, config);
-    await expect(authenticateOwner(tokens.accessToken, fixture.db, config)).resolves.toMatchObject({ deviceId: DEVICE_ID });
+    const owner = await authenticateOwner(tokens.accessToken, fixture.db, config);
+    expect(owner.deviceId).toBeNull();
+    await expect(fixture.db.prepare('SELECT installation_id FROM owner_session_families WHERE id = ?').bind(owner.familyId).first()).resolves.toMatchObject({ installation_id: DEVICE_ID });
+    await expect(issueCaptureAuthorization(fixture.db, owner, {
+      consent: true, credentialHash: 'a'.repeat(64), sourceConfig: { expectedRevision: 0, mappings: [] },
+    }, config)).rejects.toMatchObject({ code: 'device_required' });
+    await expect(fixture.db.prepare('SELECT COUNT(*) AS count FROM capture_credentials').first()).resolves.toMatchObject({ count: 0 });
+    if (existingDevice) await expect(fixture.db.prepare('SELECT source_config_revision FROM mobile_devices WHERE id = ?').bind(DEVICE_ID).first()).resolves.toMatchObject({ source_config_revision: 0 });
     const refreshed = await refreshOwnerSession(fixture.db, { refreshToken: tokens.refreshToken, idempotencyKey: 'new-device-refresh' }, config);
-    await expect(authenticateOwner(refreshed.accessToken, fixture.db, config)).resolves.toMatchObject({ deviceId: DEVICE_ID });
-    await expect(fixture.db.prepare('SELECT COUNT(*) AS count FROM mobile_devices').first()).resolves.toMatchObject({ count: 0 });
+    await expect(authenticateOwner(refreshed.accessToken, fixture.db, config)).resolves.toMatchObject({ deviceId: null });
+    await expect(fixture.db.prepare('SELECT COUNT(*) AS count FROM mobile_devices').first()).resolves.toMatchObject({ count: existingDevice ? 1 : 0 });
   });
 });
