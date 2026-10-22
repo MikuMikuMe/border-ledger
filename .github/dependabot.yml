@@ -73,6 +73,11 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
+      android-ci-toolchain:
+        patterns:
+          - actions/setup-java
+          - gradle/actions/setup-gradle
+          - android-actions/setup-android
       artifact-actions:
         patterns:
           - actions/upload-artifact
