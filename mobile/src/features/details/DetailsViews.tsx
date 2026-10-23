@@ -3,7 +3,7 @@ import {Pressable,StyleSheet,TextInput,View} from 'react-native';
 import {Action,Card,Copy,DetailModal,MutationStatus,Status} from '../finance/FinanceViews';
 import {formatMoney,type LoadState} from '../finance/model';
 import type {MutationState} from '../finance/contracts';
-import type {Account,AccountsData,Alert,Connection,Detail,LinkSnapshot,ReviewPage} from './contracts';
+import type {Account,AccountsData,Alert,Connection,Detail,LinkSnapshot,LunchFlowAccount,LunchFlowAccountKind,LunchFlowAccounts,LunchFlowSelection,ReviewPage} from './contracts';
 import {reviewDisabledReason} from './DetailsController';
 import type {Classification,ReviewDecision} from './DetailsController';
 type Theme={dark:boolean};
@@ -108,6 +108,65 @@ function AccountCards({dark,data,onSelect}:{dark:boolean;data:AccountsData;onSel
   return <>{!data.page.accounts.length?<Copy dark={dark}>No selected accounts are available.</Copy>:null}{data.page.accounts.map(account=><View key={account.providerAccountId}><Action dark={dark} label={`Open account ${account.name}`} onPress={()=>onSelect(account)}/><Copy dark={dark}>{account.currency} · {account.kind} · {account.mask?`••${account.mask}`:'mask unavailable'}</Copy></View>)}</>;
 }
 
+type LunchFlowDraft={selected:boolean;currency:string;kind:LunchFlowAccountKind};
+const lunchFlowKinds:readonly LunchFlowAccountKind[]=['chequing','savings','credit'];
+const emptyLunchFlow:LunchFlowAccounts={configured:false,accounts:[]};
+function lunchFlowDrafts(value:LunchFlowAccounts):Record<string,LunchFlowDraft>{
+  return Object.fromEntries(value.accounts.map(account=>[account.providerAccountId,{
+    selected:account.selected,
+    currency:account.currency??account.currencies[0]??'',
+    kind:account.kind??'chequing',
+  }])) as Record<string,LunchFlowDraft>;
+}
+function LunchFlowAccountCard({dark,account,draft,disabled,onChange}:{dark:boolean;account:LunchFlowAccount;draft:LunchFlowDraft;disabled:boolean;onChange(value:LunchFlowDraft):void}){
+  const currencyDisabled=disabled||!draft.selected;
+  return <Card dark={dark}>
+    <Pressable accessibilityRole="checkbox" accessibilityLabel={`${draft.selected?'Deselect':'Select'} Lunch Flow account ${account.name}`} accessibilityState={{checked:draft.selected,disabled:disabled||(!account.currencies.length&&!draft.selected)}} disabled={disabled||(!account.currencies.length&&!draft.selected)} onPress={()=>onChange({...draft,selected:!draft.selected})} style={styles.choice}>
+      <Copy dark={dark} heading>{account.name}</Copy><Copy dark={dark}>{account.institution} · {draft.selected?'Selected':'Not selected'} · Provider account {account.providerAccountId}</Copy>
+    </Pressable>
+    <Copy dark={dark}>Currency</Copy>
+    {!account.currencies.length?<Copy dark={dark}>No provider currencies are available for this account.</Copy>:<View style={styles.wrap}>{account.currencies.map(currency=><Action key={currency} dark={dark} label={`Lunch Flow currency ${currency}`} radio selected={draft.currency===currency} disabled={currencyDisabled} onPress={()=>onChange({...draft,currency})}/>)}</View>}
+    <Copy dark={dark}>Kind</Copy><View style={styles.wrap}>{lunchFlowKinds.map(kind=><Action key={kind} dark={dark} label={`Lunch Flow kind ${kind}`} radio selected={draft.kind===kind} disabled={currencyDisabled} onPress={()=>onChange({...draft,kind})}/>)}</View>
+    <Copy dark={dark}>Last sync {account.lastSyncedAt??'not synced yet'}</Copy>{account.lastError?<Copy dark={dark} error>Provider status: {account.lastError}</Copy>:null}
+  </Card>;
+}
+function draftForLunchFlowAccount(account:LunchFlowAccount,drafts:Record<string,LunchFlowDraft>):LunchFlowDraft{
+  return drafts[account.providerAccountId]??{selected:false,currency:account.currencies[0]??'',kind:'chequing'};
+}
+function lunchFlowSelections(accounts:LunchFlowAccount[],drafts:Record<string,LunchFlowDraft>):LunchFlowSelection[]{
+  return accounts.flatMap(account=>{
+    const draft=drafts[account.providerAccountId];
+    if(!draft?.selected||!draft.currency)return [];
+    return [{providerAccountId:account.providerAccountId,currency:draft.currency,kind:draft.kind}];
+  });
+}
+function hasInvalidLunchFlowSelection(accounts:LunchFlowAccount[],drafts:Record<string,LunchFlowDraft>):boolean{
+  return accounts.some(account=>{
+    const draft=drafts[account.providerAccountId];
+    if(!draft?.selected||!account.currencies.length)return false;
+    return !draft.currency||!account.currencies.includes(draft.currency);
+  });
+}
+function LunchFlowConfigured({dark,value,drafts,disabled,onChange,onSave,onSync}:{dark:boolean;value:LunchFlowAccounts;drafts:Record<string,LunchFlowDraft>;disabled:boolean;onChange(account:LunchFlowAccount,draft:LunchFlowDraft):void;onSave(selections:LunchFlowSelection[]):void;onSync():void}){
+  const selections=lunchFlowSelections(value.accounts,drafts),invalid=hasInvalidLunchFlowSelection(value.accounts,drafts);
+  return <>
+    <Copy dark={dark}>{selections.length} selected · Provider accounts are discovered from Lunch Flow.</Copy>
+    {value.accounts.length?value.accounts.map(account=><LunchFlowAccountCard key={account.providerAccountId} dark={dark} account={account} draft={draftForLunchFlowAccount(account,drafts)} disabled={disabled} onChange={draft=>onChange(account,draft)}/>):<Copy dark={dark}>No Lunch Flow accounts were discovered.</Copy>}
+    <Action dark={dark} label="Save Lunch Flow selection" disabled={disabled||invalid} onPress={()=>onSave(selections)}/>
+    <Action dark={dark} label="Refresh Lunch Flow" disabled={disabled} onPress={onSync}/>
+    <Copy dark={dark}>Refresh requests are queued. Imported history appears after a completed refresh.</Copy>
+  </>;
+}
+function LunchFlowSection({dark,value,disabled,onSave,onSync}:{dark:boolean;value:LunchFlowAccounts|undefined;disabled:boolean;onSave(selections:LunchFlowSelection[]):void;onSync():void}){
+  const lunchFlow=value??emptyLunchFlow,[drafts,setDrafts]=useState<Record<string,LunchFlowDraft>>(()=>lunchFlowDrafts(lunchFlow));
+  useEffect(()=>{setDrafts(lunchFlowDrafts(lunchFlow));},[lunchFlow]);
+  const update=(account:LunchFlowAccount,draft:LunchFlowDraft)=>setDrafts(current=>({...current,[account.providerAccountId]:draft}));
+  return <View style={styles.section}>
+    <Copy dark={dark} heading>Lunch Flow</Copy>
+    {lunchFlow.configured?<LunchFlowConfigured dark={dark} value={lunchFlow} drafts={drafts} disabled={disabled} onChange={update} onSave={onSave} onSync={onSync}/>:<Copy dark={dark}>Lunch Flow is not configured. Manage the Personal API connection in Lunch Flow.</Copy>}
+  </View>;
+}
+
 function PendingAccountChooser({dark,link,disabled,selected,setSelected,onSelect,onCancel}:{dark:boolean;link:LinkSnapshot;disabled:boolean;selected:string[];setSelected:React.Dispatch<React.SetStateAction<string[]>>;onSelect(ids:string[]):void;onCancel():void}){
   return <><Copy dark={dark} heading>Choose accounts</Copy>{link.accounts.map(account=>{const checked=selected.includes(account.providerAccountId);return <Pressable key={account.providerAccountId} accessibilityRole="checkbox" accessibilityLabel={`Select account ${account.name}, ${account.currency}, ending ${account.mask??'unavailable'}`} accessibilityState={{checked,disabled}} disabled={disabled} onPress={()=>setSelected(ids=>checked?ids.filter(id=>id!==account.providerAccountId):[...ids,account.providerAccountId])} style={styles.choice}><Copy dark={dark}>{account.name} · {account.kind} · {account.currency} · {account.mask?`••${account.mask}`:'mask unavailable'} · {checked?'Selected':'Select'}</Copy></Pressable>;})}<Action dark={dark} label="Confirm selected accounts" disabled={disabled||!selected.length} onPress={()=>onSelect(selected)}/><Action dark={dark} label="Cancel pending connection" disabled={disabled} onPress={onCancel}/></>;
 }
@@ -125,25 +184,25 @@ function ConnectionFlow({dark,link,disabled,selected,setSelected,onSelect,onCanc
   return <Action dark={dark} label="Start bank connection" disabled={disabled||link?.state==='loading'||link?.state==='linking'} onPress={()=>onConnect(null)}/>;
 }
 
-function AccountsDataSection({dark,state,data,link,disabled,selected,setSelected,onLoadMore,onConnect,onSelect,onCancel,onSync,onDisconnect,onOpenAccount}:{dark:boolean;state:LoadState<AccountsData>;data:AccountsData;link:LinkSnapshot|undefined;disabled:boolean;selected:string[];setSelected:React.Dispatch<React.SetStateAction<string[]>>;onLoadMore():void;onConnect(reconnect:string|null):void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(connection:Connection):void;onOpenAccount(account:Account):void}){
+function AccountsDataSection({dark,state,data,link,disabled,lunchFlowDisabled,selected,setSelected,onLoadMore,onConnect,onSelect,onCancel,onSync,onDisconnect,onOpenAccount,onLunchFlowSelection,onLunchFlowSync}:{dark:boolean;state:LoadState<AccountsData>;data:AccountsData;link:LinkSnapshot|undefined;disabled:boolean;lunchFlowDisabled:boolean;selected:string[];setSelected:React.Dispatch<React.SetStateAction<string[]>>;onLoadMore():void;onConnect(reconnect:string|null):void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(connection:Connection):void;onOpenAccount(account:Account):void;onLunchFlowSelection(selections:LunchFlowSelection[]):void;onLunchFlowSync():void}){
   const connectionDisabled=disabled||link?.state==='pending'||link?.state==='loading'||link?.state==='linking';
-  return <><Copy dark={dark} heading>Bank connections</Copy><ConnectionCards dark={dark} data={data} disabled={connectionDisabled} onConnect={onConnect} onDisconnect={onDisconnect}/><Action dark={dark} label="Request bank sync" disabled={disabled} onPress={onSync}/><Copy dark={dark}>A confirmed request may remain queued. Last sync changes only when the native service reports it.</Copy><Copy dark={dark} heading>Accounts</Copy><AccountCards dark={dark} data={data} onSelect={onOpenAccount}/><AccountPagination dark={dark} data={data} state={state} onLoadMore={onLoadMore}/><ConnectionFlow dark={dark} link={link} disabled={disabled} selected={selected} setSelected={setSelected} onSelect={onSelect} onCancel={onCancel} onConnect={onConnect}/></>;
+  return <><Copy dark={dark} heading>Bank connections</Copy><ConnectionCards dark={dark} data={data} disabled={connectionDisabled} onConnect={onConnect} onDisconnect={onDisconnect}/><Action dark={dark} label="Request bank sync" disabled={disabled} onPress={onSync}/><Copy dark={dark}>A confirmed request may remain queued. Last sync changes only when the native service reports it.</Copy><Copy dark={dark} heading>Accounts</Copy><AccountCards dark={dark} data={data} onSelect={onOpenAccount}/><AccountPagination dark={dark} data={data} state={state} onLoadMore={onLoadMore}/><ConnectionFlow dark={dark} link={link} disabled={disabled} selected={selected} setSelected={setSelected} onSelect={onSelect} onCancel={onCancel} onConnect={onConnect}/><LunchFlowSection dark={dark} value={data.lunchFlow} disabled={lunchFlowDisabled} onSave={onLunchFlowSelection} onSync={onLunchFlowSync}/></>;
 }
 
-function AccountsBody({dark,state,data,link,disabled,selected,setSelected,message,onRetry,onCancelConnect,onLoadMore,onConnect,onSelect,onCancel,onSync,onDisconnect,onOpenAccount}:{dark:boolean;state:LoadState<AccountsData>;data:AccountsData|null;link:LinkSnapshot|undefined;disabled:boolean;selected:string[];setSelected:React.Dispatch<React.SetStateAction<string[]>>;message:string;onRetry():void;onCancelConnect():void;onLoadMore():void;onConnect(reconnect:string|null):void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(connection:Connection):void;onOpenAccount(account:Account):void}){
+function AccountsBody({dark,state,data,link,disabled,lunchFlowDisabled,selected,setSelected,message,onRetry,onCancelConnect,onLoadMore,onConnect,onSelect,onCancel,onSync,onDisconnect,onOpenAccount,onLunchFlowSelection,onLunchFlowSync}:{dark:boolean;state:LoadState<AccountsData>;data:AccountsData|null;link:LinkSnapshot|undefined;disabled:boolean;lunchFlowDisabled:boolean;selected:string[];setSelected:React.Dispatch<React.SetStateAction<string[]>>;message:string;onRetry():void;onCancelConnect():void;onLoadMore():void;onConnect(reconnect:string|null):void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(connection:Connection):void;onOpenAccount(account:Account):void;onLunchFlowSelection(selections:LunchFlowSelection[]):void;onLunchFlowSync():void}){
   const canCancel=link?.state==='linking'&&!!link.canCancel;
-  return <><Copy dark={dark}>Plaid handles bank authorization. Select which accounts Border Ledger can use.</Copy><Status dark={dark} state={state} onRetry={onRetry} label="bank status"/>{message?<View accessibilityLiveRegion="polite"><Copy dark={dark}>{message}</Copy></View>:null}{canCancel?<View><Copy dark={dark}>Authorization has not opened yet. You can safely cancel this handoff.</Copy><Action dark={dark} label="Cancel bank authorization" disabled={state.phase!=='ready'} onPress={onCancelConnect}/></View>:null}{data?<AccountsDataSection dark={dark} state={state} data={data} link={link} disabled={disabled} selected={selected} setSelected={setSelected} onLoadMore={onLoadMore} onConnect={onConnect} onSelect={onSelect} onCancel={onCancel} onSync={onSync} onDisconnect={onDisconnect} onOpenAccount={onOpenAccount}/>:null}</>;
+  return <><Copy dark={dark}>Plaid handles bank authorization. Select which accounts Border Ledger can use.</Copy><Status dark={dark} state={state} onRetry={onRetry} label="bank status"/>{message?<View accessibilityLiveRegion="polite"><Copy dark={dark}>{message}</Copy></View>:null}{canCancel?<View><Copy dark={dark}>Authorization has not opened yet. You can safely cancel this handoff.</Copy><Action dark={dark} label="Cancel bank authorization" disabled={state.phase!=='ready'} onPress={onCancelConnect}/></View>:null}{data?<AccountsDataSection dark={dark} state={state} data={data} link={link} disabled={disabled} lunchFlowDisabled={lunchFlowDisabled} selected={selected} setSelected={setSelected} onLoadMore={onLoadMore} onConnect={onConnect} onSelect={onSelect} onCancel={onCancel} onSync={onSync} onDisconnect={onDisconnect} onOpenAccount={onOpenAccount} onLunchFlowSelection={onLunchFlowSelection} onLunchFlowSync={onLunchFlowSync}/>:null}</>;
 }
 
-export function AccountsView({dark,state,mutation,onRetry,onLoadMore,onConnect,onCancelConnect,onSelect,onCancel,onSync,onDisconnect}:Base&{state:LoadState<AccountsData>;onConnect(reconnect:string|null):void;onCancelConnect():void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(id:string):void}) {
+export function AccountsView({dark,state,mutation,lunchFlowBusy=false,onRetry,onLoadMore,onConnect,onCancelConnect,onSelect,onCancel,onSync,onDisconnect,onLunchFlowSelection=()=>{},onLunchFlowSync=()=>{}}:Base&{state:LoadState<AccountsData>;lunchFlowBusy?:boolean;onConnect(reconnect:string|null):void;onCancelConnect():void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(id:string):void;onLunchFlowSelection?(selections:LunchFlowSelection[]):void;onLunchFlowSync?():void}) {
   const data=state.data,link=data?.link,[selected,setSelected]=useState<string[]>([]),[account,setAccount]=useState<Account|null>(null),[disconnect,setDisconnect]=useState<Connection|null>(null);
   useEffect(()=>{setSelected([]);},[link?.pendingConnectionId]);
   useEffect(()=>{if(state.phase==='locked'){setAccount(null);setDisconnect(null);setSelected([]);}},[state.phase]);
-  const disabled=isMutationDisabled(state,mutation)||link?.state==='reconciliation_required';
+  const disabled=isMutationDisabled(state,mutation)||link?.state==='reconciliation_required',lunchFlowDisabled=disabled||lunchFlowBusy;
   const message=linkMessage(link);
   const confirmDisconnect=()=>{if(disconnect){onDisconnect(disconnect.connectionId);setDisconnect(null);}};
   return <View style={styles.section}>
-    <AccountsBody dark={dark} state={state} data={data} link={link} disabled={disabled} selected={selected} setSelected={setSelected} message={message} onRetry={onRetry} onCancelConnect={onCancelConnect} onLoadMore={onLoadMore} onConnect={onConnect} onSelect={onSelect} onCancel={onCancel} onSync={onSync} onDisconnect={connection=>setDisconnect(connection)} onOpenAccount={setAccount}/>
+    <AccountsBody dark={dark} state={state} data={data} link={link} disabled={disabled} lunchFlowDisabled={lunchFlowDisabled} selected={selected} setSelected={setSelected} message={message} onRetry={onRetry} onCancelConnect={onCancelConnect} onLoadMore={onLoadMore} onConnect={onConnect} onSelect={onSelect} onCancel={onCancel} onSync={onSync} onDisconnect={connection=>setDisconnect(connection)} onOpenAccount={setAccount} onLunchFlowSelection={onLunchFlowSelection} onLunchFlowSync={onLunchFlowSync}/>
     <MutationStatus dark={dark} mutation={mutation}/>
     <AccountModals dark={dark} state={state} account={account} disconnect={disconnect} disabled={disabled} onCloseAccount={()=>setAccount(null)} onConfirmDisconnect={confirmDisconnect} onCloseDisconnect={()=>setDisconnect(null)}/>
   </View>;

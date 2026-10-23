@@ -15,7 +15,7 @@ import java.net.URLEncoder
 private val OWNER_DATE_PATTERN = Regex("^\\d{4}-\\d{2}-\\d{2}$")
 private val OWNER_TIME_ZONES = setOf("America/Toronto", "Asia/Shanghai", "UTC")
 private val OWNER_TRANSACTION_STATUSES = setOf("confirmed", "provisional", "needs_review")
-private val OWNER_TRANSACTION_SOURCES = setOf("statement", "plaid", "alert", "manual")
+private val OWNER_TRANSACTION_SOURCES = setOf("statement", "plaid", "alert", "manual", "lunchflow")
 
 data class OwnerReportQuery(
     val startDate: String,

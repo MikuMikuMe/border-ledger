@@ -71,6 +71,11 @@ object BridgePayloads {
         "linkDisabledReason" to v.linkDisabledReason, "transactionId" to v.transactionId, "annotation" to v.annotation?.let { mapOf("transactionId" to it.transactionId, "expectedRevision" to it.expectedRevision, "category" to it.category, "note" to it.note) }, "annotationDisabledReason" to v.annotationDisabledReason)
     fun account(v: BankAccount) = mapOf("providerAccountId" to v.providerAccountId, "name" to v.name, "mask" to v.mask, "subtype" to v.subtype, "currency" to v.currency, "kind" to v.kind)
     fun accountPage(v: AccountPage) = mapOf("accounts" to v.accounts.map(::account), "nextCursor" to v.nextCursor, "limit" to v.limit)
+    fun lunchFlowAccounts(v: LunchFlowAccounts) = mapOf("configured" to v.configured, "accounts" to v.accounts.map { account ->
+        mapOf("providerAccountId" to account.providerAccountId, "name" to account.name, "institution" to account.institution,
+            "currencies" to account.currencies, "selected" to account.selected, "accountId" to account.accountId,
+            "kind" to account.kind, "currency" to account.currency, "lastSyncedAt" to account.lastSyncedAt, "lastError" to account.lastError)
+    })
     fun connection(v: ConnectionStatus) = mapOf("connectionId" to v.connectionId, "institution" to v.institution, "state" to v.state, "expiresAt" to v.expiresAt, "cleanupState" to v.cleanupState, "lastSyncedAt" to v.lastSyncedAt, "lastError" to v.lastError?.let { "source_error" })
     fun link(v: ConnectionCoordinatorState): Map<String, Any?> = mapOf("state" to when(v) {
         ConnectionCoordinatorState.Idle -> "idle"; ConnectionCoordinatorState.LoadingLink -> "loading"; ConnectionCoordinatorState.Linking -> "linking"; is ConnectionCoordinatorState.Pending -> "pending"

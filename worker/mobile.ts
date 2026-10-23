@@ -48,6 +48,9 @@ import {
 import { createLedgerExportResponse, MobileExportError } from './mobile-export';
 import { ImportStoreError } from './import-store';
 import { ConnectionServiceError, createConnectionService } from './connection-service';
+import { LunchFlowError } from './lunchflow';
+import { createLunchFlowService } from './lunchflow-service';
+import { parseLunchFlowMobileSelectionAccounts } from './lunchflow-routing';
 import {
   annotateMobileTransaction,
   applyMobileAlertReview,
@@ -81,6 +84,8 @@ export interface MobileRouteEnv {
   PLAID_WEBHOOK_URL?: string;
   PLAID_ANDROID_PACKAGE_NAME?: string;
   PLAID_ANDROID_REDIRECT_URI?: string;
+  LUNCHFLOW_API_KEY?: string;
+  LUNCHFLOW_API_BASE_URL?: string;
   SYNC_QUEUE?: { send(message: unknown): Promise<void> };
 }
 
@@ -192,6 +197,11 @@ function requestId() {
   return crypto.randomUUID();
 }
 
+function typedServiceErrorResponse(error: unknown, id: string) {
+  if (!(error instanceof ConnectionServiceError) && !(error instanceof LunchFlowError)) return null;
+  return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable }, { status: error.status });
+}
+
 function errorResponse(error: unknown) {
   const id = requestId();
   if (error instanceof RangeError) return json({ code: 'invalid_request', message: error.message, requestId: id, retryable: false }, { status: 400 });
@@ -208,7 +218,8 @@ function errorResponse(error: unknown) {
   if (error instanceof MobileDeviceError) return json({ code: error.code, message: error.message, ...(error.currentRevision === undefined ? {} : { currentRevision: error.currentRevision }), requestId: id, retryable: false }, { status: error.status });
   if (error instanceof AlertBatchError) return json({ code: error.code, message: error.message, requestId: id, retryable: false }, { status: error.code === 'payload_too_large' ? 413 : 400 });
   if (error instanceof MobileImportError || error instanceof MobileExportError || error instanceof ImportStoreError) return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable ?? false }, { status: error.status });
-  if (error instanceof ConnectionServiceError) return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable }, { status: error.status });
+  const typedServiceResponse = typedServiceErrorResponse(error, id);
+  if (typedServiceResponse) return typedServiceResponse;
   if (error instanceof RecurringServiceError) return json({
     code: error.code,
     message: error.message,
@@ -267,6 +278,204 @@ function routeRows(body: Record<string, unknown>) {
 function sourceScopes(body: Record<string, unknown>) {
   if (!Array.isArray(body.sourceScopes)) throw new MobileAuthError('invalid_request', 'Source scopes are required.', 400);
   return body.sourceScopes as Array<{ sourceProfileId: string; accountId: string; currency: string; hintKind?: string; hintValue?: string }>;
+}
+
+function lunchFlowSelectionBody(value: unknown) {
+  const body = bodyRecord(value);
+  const accounts = parseLunchFlowMobileSelectionAccounts(body.accounts);
+  if (!accounts) throw new MobileAuthError('invalid_request', 'The Lunch Flow account selection is not valid.', 400);
+  return accounts;
+}
+
+async function lunchFlowAccountsResponse(service: ReturnType<typeof createLunchFlowService>, url: URL) {
+  const result = url.searchParams.get('status') === 'local' ? await service.readStatus() : await service.readAccounts();
+  return json(result, { status: 200, headers: { 'cache-control': 'no-store' } });
+}
+
+async function handleLunchFlowMobileRequest(request: Request, env: MobileRouteEnv, config: MobileAuthConfig): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith('/api/mobile/v1/lunchflow/')) return null;
+  const service = createLunchFlowService(env);
+  if (request.method === 'GET' && url.pathname === '/api/mobile/v1/lunchflow/accounts') {
+    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    return lunchFlowAccountsResponse(service, url);
+  }
+  if (request.method === 'POST' && url.pathname === '/api/mobile/v1/lunchflow/account-selection') {
+    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    const body = lunchFlowSelectionBody(await readJsonBody<unknown>(request, 32 * 1024));
+    return json(await service.selectAccounts({
+      accounts: body,
+      ownerSubjectHash: owner.subjectHash,
+      idempotencyKey: requiredIdempotencyKey(request),
+    }), { status: 200 });
+  }
+  if (request.method === 'POST' && url.pathname === '/api/mobile/v1/lunchflow/sync') {
+    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    return json(await service.requestSync(owner.subjectHash, requiredIdempotencyKey(request)), { status: 202 });
+  }
+  return null;
+}
+
+type ConnectionRouteContext = {
+  request: Request;
+  env: MobileRouteEnv;
+  config: MobileAuthConfig;
+  url: URL;
+  service: ReturnType<typeof createConnectionService>;
+};
+
+type ConnectionRouteHandler = (context: ConnectionRouteContext) => Promise<Response | null>;
+
+function connectionMode(value: string | null): 'create' | 'update' {
+  const mode = value ?? 'create';
+  if (!new Set(['create', 'update']).has(mode)) throw new MobileAuthError('invalid_request', 'The connection mode is not valid.', 400);
+  return mode as 'create' | 'update';
+}
+
+function isProviderAccountId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (value.length < 1) return false;
+  return value.length <= 128;
+}
+
+function providerAccountIdList(value: unknown) {
+  if (!Array.isArray(value)) throw new MobileAuthError('invalid_request', 'The selected provider accounts are not valid.', 400);
+  if (value.length < 1) throw new MobileAuthError('invalid_request', 'The selected provider accounts are not valid.', 400);
+  if (value.length > 100) throw new MobileAuthError('invalid_request', 'The selected provider accounts are not valid.', 400);
+  return value;
+}
+
+function selectedProviderAccountIds(body: Record<string, unknown>) {
+  const value = providerAccountIdList(body.accountIds);
+  if (!value.every(isProviderAccountId)) throw new MobileAuthError('invalid_request', 'The selected provider accounts are not valid.', 400);
+  return value as string[];
+}
+
+function accountListLimit(value: string | null) {
+  const limit = Number(value ?? '50');
+  if (!Number.isSafeInteger(limit)) throw new MobileAuthError('invalid_request', 'The account limit is not valid.', 400);
+  if (limit < 1) throw new MobileAuthError('invalid_request', 'The account limit is not valid.', 400);
+  if (limit > 100) throw new MobileAuthError('invalid_request', 'The account limit is not valid.', 400);
+  return limit;
+}
+
+async function handleConnectionLinkToken(context: ConnectionRouteContext) {
+  const { request, env, config, url, service } = context;
+  if (request.method !== 'POST') return null;
+  if (url.pathname !== '/api/mobile/v1/connections/link-tokens') return null;
+  const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+  authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+  const mode = connectionMode(url.searchParams.get('mode'));
+  const connectionId = url.searchParams.get('connectionId') ?? undefined;
+  return json(await service.createLinkToken(owner, { mode, connectionId }), { status: 200 });
+}
+
+async function handleConnectionExchange(context: ConnectionRouteContext) {
+  const { request, env, config, url, service } = context;
+  if (request.method !== 'POST') return null;
+  if (url.pathname !== '/api/mobile/v1/connections/exchanges') return null;
+  const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+  authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+  const body = bodyRecord(await readJsonBody<unknown>(request, 32 * 1024));
+  const mode = connectionMode(request.headers.get('x-connection-mode'));
+  return json(await service.exchangePublicToken(owner, {
+    publicToken: stringField(body, 'publicToken', 4096),
+    idempotencyKey: requiredIdempotencyKey(request),
+    mode,
+    connectionId: request.headers.get('x-connection-id') ?? undefined,
+  }), { status: 200 });
+}
+
+async function handleConnectionSync(context: ConnectionRouteContext) {
+  const { request, env, config, url, service } = context;
+  if (request.method !== 'POST') return null;
+  if (url.pathname !== '/api/mobile/v1/connections/sync') return null;
+  const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+  authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+  return json(await service.requestSync(owner, requiredIdempotencyKey(request)), { status: 202 });
+}
+
+async function handlePendingSelection(context: ConnectionRouteContext) {
+  const { request, env, config, url, service } = context;
+  if (request.method !== 'POST') return null;
+  const match = url.pathname.match(/^\/api\/mobile\/v1\/connections\/pending\/([^/]+)\/account-selection$/);
+  if (!match) return null;
+  const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+  authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+  const body = bodyRecord(await readJsonBody<unknown>(request, 32 * 1024));
+  const accountIds = selectedProviderAccountIds(body);
+  return json(await service.selectPendingAccounts(owner, {
+    pendingConnectionId: pathId(match[1], 'pendingConnectionId'),
+    accountIds,
+    idempotencyKey: requiredIdempotencyKey(request),
+  }), { status: 200 });
+}
+
+async function handleConnectionDeleteRoutes(context: ConnectionRouteContext) {
+  const { request, env, config, url, service } = context;
+  if (request.method !== 'DELETE') return null;
+  const pendingMatch = url.pathname.match(/^\/api\/mobile\/v1\/connections\/pending\/([^/]+)$/);
+  if (pendingMatch) {
+    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    const pendingId = pathId(pendingMatch[1], 'pendingConnectionId');
+    await service.cancelPending(owner, pendingId, request.headers.get('idempotency-key')?.trim() || `cancel:${pendingId}`);
+    return new Response(null, { status: 204, headers: apiSecurityHeaders() });
+  }
+  const connectionMatch = url.pathname.match(/^\/api\/mobile\/v1\/connections\/([^/]+)$/);
+  if (!connectionMatch) return null;
+  const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+  authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+  const connectionId = pathId(connectionMatch[1], 'connectionId');
+  const confirmed = request.headers.get('x-confirm-disconnect') === 'true';
+  await service.disconnect(owner, connectionId, request.headers.get('idempotency-key')?.trim() || `disconnect:${connectionId}`, confirmed);
+  return new Response(null, { status: 204, headers: apiSecurityHeaders() });
+}
+
+async function handleAccountsList(context: ConnectionRouteContext) {
+  const { request, env, config, url, service } = context;
+  if (request.method !== 'GET') return null;
+  if (url.pathname !== '/api/mobile/v1/accounts') return null;
+  const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
+  authorizeMobileRoute(owner, url.pathname, 'ledger:read');
+  const limit = accountListLimit(url.searchParams.get('limit'));
+  return json(await service.listAccounts(limit, url.searchParams.get('cursor') ?? undefined), { status: 200, headers: { 'cache-control': 'no-store' } });
+}
+
+async function handleConnectionsList(context: ConnectionRouteContext) {
+  const { request, env, config, url, service } = context;
+  if (request.method !== 'GET') return null;
+  if (url.pathname !== '/api/mobile/v1/connections') return null;
+  const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+  authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+  return json({ connections: await service.readConnections(owner) }, { status: 200, headers: { 'cache-control': 'no-store' } });
+}
+
+const connectionRouteHandlers: readonly ConnectionRouteHandler[] = [
+  handleConnectionLinkToken,
+  handleConnectionExchange,
+  handleConnectionSync,
+  handlePendingSelection,
+  handleConnectionDeleteRoutes,
+  handleAccountsList,
+  handleConnectionsList,
+];
+
+async function handleConnectionMobileRequest(
+  request: Request,
+  env: MobileRouteEnv,
+  config: MobileAuthConfig,
+  url: URL,
+): Promise<Response | null> {
+  const context: ConnectionRouteContext = { request, env, config, url, service: createConnectionService(env) };
+  for (const handler of connectionRouteHandlers) {
+    const response = await handler(context);
+    if (response) return response;
+  }
+  return null;
 }
 
 function isAccessApprovalPath(pathname: string) {
@@ -521,76 +730,10 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
       return json(await readOwnerLedgerSnapshot(env.DB), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
-    const connectionService = createConnectionService(env);
-    if (request.method === 'POST' && url.pathname === '/api/mobile/v1/connections/link-tokens') {
-      const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-      authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-      const mode = url.searchParams.get('mode') ?? 'create';
-      if (mode !== 'create' && mode !== 'update') throw new MobileAuthError('invalid_request', 'The connection mode is not valid.', 400);
-      const connectionId = url.searchParams.get('connectionId') ?? undefined;
-      return json(await connectionService.createLinkToken(owner, { mode, connectionId }), { status: 200 });
-    }
-    if (request.method === 'POST' && url.pathname === '/api/mobile/v1/connections/exchanges') {
-      const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-      authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-      const body = bodyRecord(await readJsonBody<unknown>(request, 32 * 1024));
-      const mode = request.headers.get('x-connection-mode') ?? 'create';
-      if (mode !== 'create' && mode !== 'update') throw new MobileAuthError('invalid_request', 'The connection mode is not valid.', 400);
-      return json(await connectionService.exchangePublicToken(owner, {
-        publicToken: stringField(body, 'publicToken', 4096),
-        idempotencyKey: requiredIdempotencyKey(request),
-        mode,
-        connectionId: request.headers.get('x-connection-id') ?? undefined,
-      }), { status: 200 });
-    }
-    if (request.method === 'POST' && url.pathname === '/api/mobile/v1/connections/sync') {
-      const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-      authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-      return json(await connectionService.requestSync(owner, requiredIdempotencyKey(request)), { status: 202 });
-    }
-    const pendingSelectionMatch = url.pathname.match(/^\/api\/mobile\/v1\/connections\/pending\/([^/]+)\/account-selection$/);
-    if (request.method === 'POST' && pendingSelectionMatch) {
-      const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-      authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-      const body = bodyRecord(await readJsonBody<unknown>(request, 32 * 1024));
-      if (!Array.isArray(body.accountIds) || body.accountIds.length < 1 || body.accountIds.length > 100 || !body.accountIds.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 128)) {
-        throw new MobileAuthError('invalid_request', 'The selected provider accounts are not valid.', 400);
-      }
-      return json(await connectionService.selectPendingAccounts(owner, {
-        pendingConnectionId: pathId(pendingSelectionMatch[1], 'pendingConnectionId'),
-        accountIds: body.accountIds,
-        idempotencyKey: requiredIdempotencyKey(request),
-      }), { status: 200 });
-    }
-    const pendingCancelMatch = url.pathname.match(/^\/api\/mobile\/v1\/connections\/pending\/([^/]+)$/);
-    if (request.method === 'DELETE' && pendingCancelMatch) {
-      const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-      authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-      const pendingId = pathId(pendingCancelMatch[1], 'pendingConnectionId');
-      await connectionService.cancelPending(owner, pendingId, request.headers.get('idempotency-key')?.trim() || `cancel:${pendingId}`);
-      return new Response(null, { status: 204, headers: apiSecurityHeaders() });
-    }
-    const connectionMatch = url.pathname.match(/^\/api\/mobile\/v1\/connections\/([^/]+)$/);
-    if (request.method === 'DELETE' && connectionMatch) {
-      const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-      authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-      const connectionId = pathId(connectionMatch[1], 'connectionId');
-      const confirmed = request.headers.get('x-confirm-disconnect') === 'true';
-      await connectionService.disconnect(owner, connectionId, request.headers.get('idempotency-key')?.trim() || `disconnect:${connectionId}`, confirmed);
-      return new Response(null, { status: 204, headers: apiSecurityHeaders() });
-    }
-    if (request.method === 'GET' && url.pathname === '/api/mobile/v1/accounts') {
-      const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
-      authorizeMobileRoute(owner, url.pathname, 'ledger:read');
-      const limit = Number(url.searchParams.get('limit') ?? '50');
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new MobileAuthError('invalid_request', 'The account limit is not valid.', 400);
-      return json(await connectionService.listAccounts(limit, url.searchParams.get('cursor') ?? undefined), { status: 200, headers: { 'cache-control': 'no-store' } });
-    }
-    if (request.method === 'GET' && url.pathname === '/api/mobile/v1/connections') {
-      const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-      authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-      return json({ connections: await connectionService.readConnections(owner) }, { status: 200, headers: { 'cache-control': 'no-store' } });
-    }
+    const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
+    if (lunchFlowResponse) return lunchFlowResponse;
+    const connectionResponse = await handleConnectionMobileRequest(request, env, config, url);
+    if (connectionResponse) return connectionResponse;
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/transactions') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');

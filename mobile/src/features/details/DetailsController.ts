@@ -1,4 +1,4 @@
-import type {AccountsData,Alert,Detail,DetailsPorts,LinkSnapshot,ReviewPage} from './contracts';
+import type {AccountsData,Alert,Detail,DetailsPorts,LinkSnapshot,LunchFlowAccount,LunchFlowAccounts,LunchFlowSelection,ReviewPage} from './contracts';
 import type {Operation,Stream} from '../finance/contracts';
 import {Resource,MutationGate,errorState} from '../finance/model';
 import type {LoadState} from '../finance/model';
@@ -13,6 +13,7 @@ export type ClassifyRecurringCommand=OperationCommand&{classification:Classifica
 export type ConnectAccountsCommand=OperationCommand&{reconnect:string|null};
 export type SelectAccountsCommand=OperationCommand&{ids:string[]};
 export type DisconnectAccountsCommand=OperationCommand&{connectionId:string;confirmed:boolean};
+export type LunchFlowSelectionCommand=OperationCommand&{accounts:LunchFlowSelection[]};
 
 type DetailsPhase=LoadState<unknown>['phase'];
 
@@ -49,6 +50,49 @@ function canSelectAccounts(state:DetailsPhase,link:LinkSnapshot,selected:string[
 }
 function canCancelPending(state:DetailsPhase,link:LinkSnapshot){return isReady(state)&&link.state==='pending'&&!!link.pendingConnectionId;}
 function canDisconnect(state:DetailsPhase,data:AccountsData|null,id:string,confirmed:boolean){return isReady(state)&&confirmed&&!!data?.connections.some(connection=>connection.connectionId===id);}
+const lunchFlowKinds:readonly LunchFlowSelection['kind'][]=['chequing','savings','credit'];
+function isLunchFlowKind(value:string):value is LunchFlowSelection['kind']{return lunchFlowKinds.includes(value as LunchFlowSelection['kind']);}
+function validLunchFlowSelection(account:LunchFlowAccount|undefined,selection:LunchFlowSelection){
+  if(!account)return false;
+  if(!account.currencies.includes(selection.currency))return false;
+  return isLunchFlowKind(selection.kind);
+}
+function canSelectLunchFlow(state:DetailsPhase,data:AccountsData|null,selections:LunchFlowSelection[]){
+  if(!isReady(state))return false;
+  const lunchFlow=data?.lunchFlow;
+  if(!lunchFlow)return false;
+  if(selections.length>25)return false;
+  const seen=new Set<string>();
+  return selections.every(selection=>{
+    if(seen.has(selection.providerAccountId))return false;
+    seen.add(selection.providerAccountId);
+    const account=lunchFlow.accounts.find(value=>value.providerAccountId===selection.providerAccountId);
+    return validLunchFlowSelection(account,selection);
+  });
+}
+type LunchFlowBaseline=Map<string,{lastSyncedAt:string|null;lastError:string|null}>;
+const lunchFlowStatusDelays=[0,500,1000,2000,3000,3500] as const;
+function lunchFlowBaseline(value:LunchFlowAccounts|undefined):LunchFlowBaseline{
+  return new Map((value?.accounts??[]).map(account=>[account.providerAccountId,{lastSyncedAt:account.lastSyncedAt,lastError:account.lastError}]));
+}
+function lunchFlowStatusChanged(account:LunchFlowAccount|undefined,before:{lastSyncedAt:string|null;lastError:string|null}|undefined){
+  return Boolean(account&&before&&(account.lastSyncedAt!==before.lastSyncedAt||account.lastError!==before.lastError));
+}
+function lunchFlowCompleted(value:LunchFlowAccounts,targetIds:string[],baseline:LunchFlowBaseline){
+  return targetIds.length===0||targetIds.every(id=>lunchFlowStatusChanged(value.accounts.find(account=>account.providerAccountId===id),baseline.get(id)));
+}
+function mergeLunchFlowStatus(discovery:LunchFlowAccounts,status:LunchFlowAccounts):LunchFlowAccounts{
+  const local=new Map(status.accounts.map(account=>[account.providerAccountId,account]));
+  const seen=new Set<string>();
+  const accounts=discovery.accounts.map(account=>{
+    const current=local.get(account.providerAccountId);if(!current)return account;
+    seen.add(account.providerAccountId);
+    return {...current,currencies:account.currencies.length?account.currencies:current.currencies};
+  });
+  status.accounts.forEach(account=>{if(!seen.has(account.providerAccountId))accounts.push(account);});
+  return {configured:discovery.configured||status.configured,accounts};
+}
+function waitForLunchFlowStatus(delay:number){return delay?new Promise<void>(resolve=>setTimeout(resolve,delay)):Promise.resolve();}
 function cancelableOperation(available:boolean,link:LinkSnapshot){return available&&link.canCancel?link.operationId:null;}
 function classificationStream(current:Resource<Detail>,classification:Classification):Stream|null {
   const state=current.current();
@@ -58,11 +102,14 @@ function classificationStream(current:Resource<Detail>,classification:Classifica
   return stream;
 }
 const emptyLink:LinkSnapshot={state:'idle',outcomeCode:null,operationId:null,canCancel:false,pendingConnectionId:null,connectionId:null,accounts:[]};
+const emptyLunchFlow:LunchFlowAccounts={configured:false,accounts:[]};
 export class DetailsController {
   readonly review:Resource<ReviewPage>;readonly detail:Resource<Detail>;readonly accounts:Resource<AccountsData>;readonly mutation:MutationGate;
-  private subscriptions:{remove():void}[]=[];private disposed=false;private locked=false;private selectedId:string|null=null;
+  private subscriptions:{remove():void}[]=[];private disposed=false;private locked=false;private selectedId:string|null=null;private lunchFlowSettling=false;
   private alerts=new Map<string,Alert>();private streams=new Map<string,Stream>();private link=emptyLink;private linkEpoch=0;private accountsRequest=0;
   constructor(private ports:DetailsPorts,private changed:()=>void=()=>{}){this.review=new Resource(changed);this.detail=new Resource(changed);this.accounts=new Resource(changed);this.mutation=new MutationGate(changed);}
+  get lunchFlowBusy(){return this.lunchFlowSettling;}
+  private setLunchFlowBusy(value:boolean){if(this.lunchFlowSettling===value)return;this.lunchFlowSettling=value;if(!this.disposed)this.changed();}
   async start(){
     this.subscriptions=[this.ports.review.onChanged(()=>{void this.loadReview();}),this.ports.recurring.onChanged(()=>{if(this.selectedId)void this.loadDetail();}),this.ports.accounts.onStateChanged(value=>{if(!this.available())return;this.link=value;this.linkEpoch++;const data=this.accounts.current().data;if(data)this.accounts.seed({...data,link:value},true);this.changed();})];
     await Promise.all([this.recover(),this.loadReview(),this.loadAccounts()]);
@@ -117,20 +164,46 @@ export class DetailsController {
     await this.accounts.load(()=>this.readAccountsPage(previous,epoch,request));
   }
   private async readAccountsPage(previous:AccountsData|null,epoch:number,request:number):Promise<AccountsData>{
-    const [page,connections,link]=await this.read(()=>Promise.all([
+    const [page,connections,link,lunchFlow]=await this.read(()=>Promise.all([
       this.ports.accounts.readAccounts(previous?.page.nextCursor??null,50),
       this.ports.accounts.readConnections(),
       this.ports.accounts.getSnapshot(),
+      this.ports.accounts.readLunchFlowAccounts?.()??Promise.resolve(emptyLunchFlow),
     ]));
     if(!this.available())throw {code:'unauthorized'};
     if(epoch===this.linkEpoch&&request===this.accountsRequest)this.link=link;
     const accounts=previous?merge(previous.page.accounts,page.accounts,a=>a.providerAccountId):page.accounts;
-    return {page:{...page,accounts},connections,link:this.link};
+    return {page:{...page,accounts},connections,link:this.link,lunchFlow};
+  }
+  private async refreshLunchFlowStatus(targetIds:string[],baseline:LunchFlowBaseline){
+    try {
+      const localRead=this.ports.accounts.readLunchFlowStatus;
+      if(!localRead){await this.loadAccounts();return;}
+      for(const delay of lunchFlowStatusDelays){
+        if(!this.available())return;
+        await waitForLunchFlowStatus(delay);
+        let status:LunchFlowAccounts;
+        try{status=await this.read(()=>localRead());}catch{return;}
+        const current=this.accounts.current().data;
+        if(!current)continue;
+        const lunchFlow=mergeLunchFlowStatus(current.lunchFlow??emptyLunchFlow,status);
+        this.accounts.seed({...current,lunchFlow},true);
+        if(lunchFlowCompleted(lunchFlow,targetIds,baseline))break;
+      }
+    } finally {
+      try{await this.ports.refreshLedger?.();}catch{/* A queued refresh remains visible in Accounts. */}
+    }
   }
   private async write(command:OperationCommand,call:()=>Promise<Operation>,refresh:()=>Promise<void>){
     if(!this.available()||this.mutation.current().status==='revision_conflict')return;
     await this.mutation.submit(command.operationId,()=>this.read(call),id=>this.read(()=>this.ports.session.queryOperation(id)));
     if(this.available()&&['completed','canceled'].includes(this.mutation.current().status))await refresh();
+  }
+  private async writeLunchFlow(command:OperationCommand,call:()=>Promise<Operation>,targetIds:string[],baseline:LunchFlowBaseline){
+    if(this.lunchFlowSettling)return;
+    this.setLunchFlowBusy(true);
+    try{await this.write(command,call,()=>this.refreshLunchFlowStatus(targetIds,baseline));}
+    finally{this.setLunchFlowBusy(false);}
   }
   async resolve(command:ResolveReviewCommand){
     const {operationId,alert,decision}=command;
@@ -162,5 +235,18 @@ export class DetailsController {
   async cancelPending(command:OperationCommand){const pending=this.link.pendingConnectionId;if(!canCancelPending(this.accounts.current().phase,this.link)||!pending)return;await this.write(command,()=>this.ports.accounts.startCancelPending(command.operationId,pending),()=>this.loadAccounts());}
   async sync(command:OperationCommand){if(isReady(this.accounts.current().phase))await this.write(command,()=>this.ports.accounts.startSync(command.operationId),()=>this.loadAccounts());}
   async disconnect(command:DisconnectAccountsCommand){const current=this.accounts.current();if(!canDisconnect(current.phase,current.data,command.connectionId,command.confirmed))return;await this.write(command,()=>this.ports.accounts.startDisconnect(command.operationId,command.connectionId),()=>this.loadAccounts());}
-  dispose(){this.disposed=true;this.subscriptions.forEach(s=>s.remove());this.review.dispose();this.detail.dispose();this.accounts.dispose();this.alerts.clear();this.streams.clear();this.link=emptyLink;}
+  async selectLunchFlow(command:LunchFlowSelectionCommand){
+    const current=this.accounts.current();
+    if(!this.ports.accounts.startLunchFlowAccountSelection||!canSelectLunchFlow(current.phase,current.data,command.accounts))return;
+    const baseline=lunchFlowBaseline(current.data?.lunchFlow),targetIds=command.accounts.map(account=>account.providerAccountId);
+    await this.writeLunchFlow(command,()=>this.ports.accounts.startLunchFlowAccountSelection!(command.operationId,command.accounts),targetIds,baseline);
+  }
+  async syncLunchFlow(command:OperationCommand){
+    const current=this.accounts.current();
+    if(!this.ports.accounts.startLunchFlowSync||!isReady(current.phase))return;
+    const targetIds=(current.data?.lunchFlow?.accounts??[]).filter(account=>account.selected).map(account=>account.providerAccountId);
+    const baseline=lunchFlowBaseline(current.data?.lunchFlow);
+    await this.writeLunchFlow(command,()=>this.ports.accounts.startLunchFlowSync!(command.operationId),targetIds,baseline);
+  }
+  dispose(){this.disposed=true;this.lunchFlowSettling=false;this.subscriptions.forEach(s=>s.remove());this.review.dispose();this.detail.dispose();this.accounts.dispose();this.alerts.clear();this.streams.clear();this.link=emptyLink;}
 }

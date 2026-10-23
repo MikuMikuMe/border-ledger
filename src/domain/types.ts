@@ -2,7 +2,7 @@ import type { CurrencyCode } from './currencies';
 export type Currency = CurrencyCode;
 export type TransactionKind = 'expense' | 'income' | 'transfer' | 'refund' | 'fee';
 export type TransactionStatus = 'confirmed' | 'provisional' | 'needs_review';
-export type TransactionSource = 'statement' | 'plaid' | 'alert' | 'manual';
+export type TransactionSource = 'statement' | 'plaid' | 'alert' | 'manual' | 'lunchflow';
 
 /**
  * The replay identity of a row supplied by a statement source.
@@ -28,6 +28,7 @@ export interface Account {
   status: 'connected' | 'import_only' | 'needs_attention';
   lastSyncedAt: string | null;
   plaidItemId?: string | null;
+  provider?: 'plaid' | 'lunchflow' | null;
 }
 
 export interface Transaction<Code extends CurrencyCode = CurrencyCode> {

@@ -2,6 +2,7 @@ import type { Transaction } from './types';
 
 const sourceLabels: Record<Transaction['source'], string> = {
   alert: 'BOC alert',
+  lunchflow: 'Lunch Flow',
   manual: 'Manual',
   plaid: 'Plaid',
   statement: 'Statement',

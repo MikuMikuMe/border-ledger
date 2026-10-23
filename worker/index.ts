@@ -46,6 +46,9 @@ import { readLedgerReport, warmFxSnapshot } from './ledger-reports';
 import { isFxProviderError } from './fx-rates';
 import { getCurrencyMeta, type CurrencyCode } from '../src/domain/currencies';
 import { readPreferences, updatePreferences, PreferenceRevisionConflictError } from './preferences-store';
+import { LunchFlowError } from './lunchflow';
+import { createLunchFlowService } from './lunchflow-service';
+import { parseLunchFlowQueueAccounts, parseLunchFlowSelectionAccounts } from './lunchflow-routing';
 
 interface Queue {
   send(message: unknown): Promise<void>;
@@ -79,6 +82,8 @@ interface Env {
   MOBILE_APPROVED_ACCESS_AUDIENCES?: string;
   MOBILE_APPROVED_ACCESS_SUBJECTS?: string;
   DEPLOYMENT_REVISION?: string;
+  LUNCHFLOW_API_KEY?: string;
+  LUNCHFLOW_API_BASE_URL?: string;
 }
 
 type Currency = CurrencyCode;
@@ -172,6 +177,9 @@ type PlaidQueueMessage = {
   type: 'plaid-recurring-sync';
   itemId: string;
   generation: number;
+} | {
+  type: 'lunchflow-sync';
+  accounts: Array<{ providerAccountId: string; revision: number }>;
 };
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
@@ -916,14 +924,29 @@ async function handleRecurringClassification(request: Request, env: Env, id: str
     : json({ error: 'Recurring stream not found.' }, { status: 404 });
 }
 
-function errorResponse(error: unknown) {
+function validationErrorResponse(error: unknown) {
   if (error instanceof BodyTooLargeError) return json({ error: 'The request body is too large.' }, { status: 413 });
   if (error instanceof InvalidJsonBodyError) return json({ error: 'The request body must be valid JSON.' }, { status: 400 });
   if (error instanceof RequestValidationError) return json({ error: error.message }, { status: 400 });
-  if (error instanceof PreferenceRevisionConflictError) return json({ error: error.message, currentRevision: error.currentRevision }, { status: 409 });
   if (error instanceof RangeError) return json({ error: error.message }, { status: 400 });
+  return null;
+}
+
+function serviceErrorResponse(error: unknown) {
+  if (error instanceof PreferenceRevisionConflictError) return json({ error: error.message, currentRevision: error.currentRevision }, { status: 409 });
+  if (error instanceof LunchFlowError) return json({ error: error.message }, { status: error.status });
   if (error instanceof ConfigurationError) return json({ error: 'Plaid is not fully configured on the Worker yet.' }, { status: 503 });
   if (error instanceof PlaidApiError && error.status >= 400 && error.status < 500) return json({ error: 'Plaid rejected the request. Check the connection and try again.' }, { status: 400 });
+  return null;
+}
+
+function knownErrorResponse(error: unknown) {
+  return validationErrorResponse(error) ?? serviceErrorResponse(error);
+}
+
+function errorResponse(error: unknown) {
+  const response = knownErrorResponse(error);
+  if (response) return response;
   console.error('api_error', error instanceof Error ? error.name : 'unknown');
   return json({ error: 'The ledger could not complete that request.' }, { status: 500 });
 }
@@ -953,6 +976,205 @@ async function handlePreferencesRequest(request: Request, env: Env) {
     }));
   }
   return json({ error: 'Not found' }, { status: 404 });
+}
+
+function lunchFlowSelectionBody(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new RequestValidationError('The Lunch Flow selection body is not valid.');
+  const body = value as Record<string, unknown>;
+  if (!Array.isArray(body.accounts)) throw new RequestValidationError('The Lunch Flow account selection is required.');
+  const accounts = parseLunchFlowSelectionAccounts(body.accounts);
+  if (!accounts) throw new RequestValidationError('The Lunch Flow account selection is not valid.');
+  return accounts;
+}
+
+function optionalIdempotencyKey(request: Request) {
+  const value = request.headers.get('idempotency-key')?.trim();
+  if (value && value.length > 256) throw new RequestValidationError('The idempotency key is not valid.');
+  return value || undefined;
+}
+
+function lunchFlowQueueAccounts(value: unknown) {
+  const accounts = parseLunchFlowQueueAccounts(value);
+  if (!accounts) throw new LunchFlowError('invalid_queue_message', 'The Lunch Flow sync message is invalid.', 400, false);
+  return accounts;
+}
+
+async function handleLunchFlowRequest(request: Request, env: Env) {
+  const service = createLunchFlowService(env);
+  const url = new URL(request.url);
+  if (request.method === 'GET' && url.pathname === '/api/lunchflow/accounts') {
+    const result = url.searchParams.get('status') === 'local' ? await service.readStatus() : await service.readAccounts();
+    return json(result, { status: 200, headers: { 'cache-control': 'no-store' } });
+  }
+  if (request.method === 'POST' && url.pathname === '/api/lunchflow/account-selection') {
+    const body = lunchFlowSelectionBody(await readJsonBody<unknown>(request, 32 * 1024));
+    return json(await service.selectAccounts({ accounts: body, idempotencyKey: optionalIdempotencyKey(request) }), { status: 200 });
+  }
+  if (request.method === 'POST' && url.pathname === '/api/lunchflow/sync') {
+    return json(await service.requestSync('web-owner', optionalIdempotencyKey(request)), { status: 202 });
+  }
+  return null;
+}
+
+type AuthorizedRouteDispatch = () => Promise<Response | null>;
+
+async function dispatchAuthorizedRoutes(handlers: readonly AuthorizedRouteDispatch[]) {
+  for (const handler of handlers) {
+    const response = await handler();
+    if (response) return response;
+  }
+  return null;
+}
+
+async function handleAccountsListRoute(_request: Request, env: Env, _url: URL) {
+  const result = await env.DB.prepare(`SELECT accounts.*,
+    (SELECT item_id FROM plaid_accounts WHERE account_id = accounts.id LIMIT 1) AS plaid_item_id,
+    CASE
+      WHEN EXISTS (SELECT 1 FROM lunchflow_accounts WHERE account_id = accounts.id) THEN 'lunchflow'
+      WHEN EXISTS (SELECT 1 FROM plaid_accounts WHERE account_id = accounts.id) THEN 'plaid'
+      ELSE NULL
+    END AS provider
+    FROM accounts ORDER BY institution, name`).all();
+  return json({ accounts: result.results });
+}
+
+async function handleTransactionsRoute(_request: Request, env: Env, url: URL) {
+  return json({ transactions: await readTransactions(env, url) });
+}
+
+type AuthorizedRouteHandler = (request: Request, env: Env, url: URL) => Promise<Response | null>;
+
+const accountRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
+  ['GET /api/accounts', handleAccountsListRoute],
+  ['GET /api/preferences', (request, env) => handlePreferencesRequest(request, env)],
+  ['PATCH /api/preferences', (request, env) => handlePreferencesRequest(request, env)],
+  ['GET /api/transactions', handleTransactionsRoute],
+]);
+
+async function handleAccountRoutes(request: Request, env: Env, url: URL) {
+  const handler = accountRouteHandlers.get(`${request.method} ${url.pathname}`);
+  return handler ? handler(request, env, url) : null;
+}
+
+async function reportResponse(env: Env, url: URL) {
+  const requestedCurrency = url.searchParams.get('currency');
+  const reportingCurrency = url.searchParams.get('reportingCurrency');
+  const currencyCodes = await registeredCurrencyCodes(env);
+  if (requestedCurrency && requestedCurrency !== 'all' && !currencyCodes.includes(requestedCurrency)) throw new RequestValidationError('The currency filter is not valid.');
+  if (reportingCurrency !== null && getCurrencyMeta(reportingCurrency) === null) throw new RequestValidationError('The reporting currency is not valid.');
+  const report = await readLedgerReport(env.DB, {
+    from: url.searchParams.get('from'),
+    to: url.searchParams.get('to'),
+    currency: requestedCurrency && requestedCurrency !== 'all' ? requestedCurrency : null,
+    reportingCurrency,
+    includeProvisional: url.searchParams.get('includeProvisional') === 'true',
+    timeZone: url.searchParams.get('timeZone') ?? undefined,
+  });
+  const summary = Object.fromEntries(currencyCodes.map((code) => [code, 0])) as Record<string, number>;
+  for (const total of report.currencyTotals) summary[total.currency] = total.confirmedMinorUnits + (report.includeProvisional ? total.provisionalMinorUnits : 0);
+  const transactionCount = Object.values(report.sourceCoverage).reduce((count, sourceCount) => count + sourceCount, 0);
+  return json({ ...report, summary, transactionCount });
+}
+
+async function handleReportRoutes(request: Request, env: Env, url: URL) {
+  if (request.method !== 'GET' || url.pathname !== '/api/reports/summary') return null;
+  return reportResponse(env, url);
+}
+
+const recurringRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
+  ['GET /api/recurring', (_request, env, url) => handleRecurringListRequest(env, url)],
+  ['GET /api/recurring/summary', (_request, env, url) => handleRecurringSummaryRequest(env, url)],
+]);
+
+async function handleRecurringItemRoutes(request: Request, env: Env, url: URL) {
+  if (url.pathname.startsWith('/api/recurring/') && url.pathname.endsWith('/classification') && request.method === 'PATCH') {
+    const id = recurringPathId(url.pathname.slice(0, -'/classification'.length));
+    return id ? handleRecurringClassification(request, env, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
+  }
+  if (url.pathname.startsWith('/api/recurring/') && request.method === 'GET') {
+    const id = recurringPathId(url.pathname);
+    return id ? handleRecurringDetailRequest(env, url, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
+  }
+  return null;
+}
+
+async function handleRecurringRoutes(request: Request, env: Env, url: URL) {
+  const handler = recurringRouteHandlers.get(`${request.method} ${url.pathname}`);
+  return handler ? handler(request, env, url) : handleRecurringItemRoutes(request, env, url);
+}
+
+const importAndPlaidRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
+  ['POST /api/imports/commit', handleImportCommit],
+  ['POST /api/imports/review', handleImportReview],
+  ['POST /api/plaid/link-token', handleCreateLinkToken],
+  ['POST /api/plaid/exchange', handlePlaidExchange],
+  ['POST /api/plaid/sync', handlePlaidSyncRequest],
+  ['POST /api/plaid/disconnect', handlePlaidDisconnect],
+]);
+
+async function handleImportAndPlaidRoutes(request: Request, env: Env, url: URL) {
+  const handler = importAndPlaidRouteHandlers.get(`${request.method} ${url.pathname}`);
+  return handler ? handler(request, env, url) : null;
+}
+
+async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL) {
+  try {
+    const response = await dispatchAuthorizedRoutes([
+      () => handleLunchFlowRequest(request, env),
+      () => handleAccountRoutes(request, env, url),
+      () => handleReportRoutes(request, env, url),
+      () => handleRecurringRoutes(request, env, url),
+      () => handleImportAndPlaidRoutes(request, env, url),
+    ]);
+    return response ?? json({ error: 'Not found' }, { status: 404 });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+type QueueMessageBody = { type?: unknown; itemId?: unknown; generation?: unknown; accounts?: unknown };
+type QueueBodyHandler = (body: QueueMessageBody, env: Env) => Promise<void>;
+
+async function handlePlaidQueueBody(body: QueueMessageBody, env: Env) {
+  if (typeof body.itemId !== 'string') return;
+  await syncPlaidItem(env, body.itemId);
+}
+
+async function handlePlaidRecurringQueueBody(body: QueueMessageBody, env: Env) {
+  if (typeof body.itemId !== 'string') return;
+  if (typeof body.generation !== 'number') return;
+  await syncPlaidRecurring(env, body.itemId, body.generation);
+}
+
+async function handleLunchFlowQueueBody(body: QueueMessageBody, env: Env) {
+  await createLunchFlowService(env).sync(lunchFlowQueueAccounts(body.accounts));
+}
+
+const queueBodyHandlers: ReadonlyMap<string, QueueBodyHandler> = new Map([
+  ['plaid-sync', handlePlaidQueueBody],
+  ['plaid-recurring-sync', handlePlaidRecurringQueueBody],
+  ['lunchflow-sync', handleLunchFlowQueueBody],
+]);
+
+async function handleQueueBody(body: QueueMessageBody, env: Env) {
+  const handler = queueBodyHandlers.get(typeof body.type === 'string' ? body.type : '');
+  if (handler) await handler(body, env);
+}
+
+function retryQueueMessage(message: { ack(): void; retry(): void }, error: unknown) {
+  console.error('queue_message_failed', error instanceof Error ? error.name : 'unknown');
+  if (error instanceof LunchFlowError && !error.retryable) message.ack();
+  else message.retry();
+}
+
+async function handleQueueMessage(message: { body: unknown; ack(): void; retry(): void }, env: Env) {
+  try {
+    const body = message.body as QueueMessageBody;
+    await handleQueueBody(body, env);
+    message.ack();
+  } catch (error) {
+    retryQueueMessage(message, error);
+  }
 }
 
 export default {
@@ -1016,54 +1238,7 @@ export default {
     }
     if (!(await isAuthorized(request, env))) return json({ error: 'Ledger API access is not configured.' }, { status: 401 });
 
-    try {
-      if (url.pathname === '/api/accounts' && request.method === 'GET') {
-        const result = await env.DB.prepare(`SELECT accounts.*,
-          (SELECT item_id FROM plaid_accounts WHERE account_id = accounts.id LIMIT 1) AS plaid_item_id
-          FROM accounts ORDER BY institution, name`).all();
-        return json({ accounts: result.results });
-      }
-      if (url.pathname === '/api/preferences' && (request.method === 'GET' || request.method === 'PATCH')) return await handlePreferencesRequest(request, env);
-      if (url.pathname === '/api/transactions' && request.method === 'GET') return json({ transactions: await readTransactions(env, url) });
-      if (url.pathname === '/api/reports/summary' && request.method === 'GET') {
-        const requestedCurrency = url.searchParams.get('currency');
-        const reportingCurrency = url.searchParams.get('reportingCurrency');
-        const currencyCodes = await registeredCurrencyCodes(env);
-        if (requestedCurrency && requestedCurrency !== 'all' && !currencyCodes.includes(requestedCurrency)) throw new RequestValidationError('The currency filter is not valid.');
-        if (reportingCurrency !== null && getCurrencyMeta(reportingCurrency) === null) throw new RequestValidationError('The reporting currency is not valid.');
-        const report = await readLedgerReport(env.DB, {
-          from: url.searchParams.get('from'),
-          to: url.searchParams.get('to'),
-          currency: requestedCurrency && requestedCurrency !== 'all' ? requestedCurrency : null,
-          reportingCurrency,
-          includeProvisional: url.searchParams.get('includeProvisional') === 'true',
-          timeZone: url.searchParams.get('timeZone') ?? undefined,
-        });
-        const summary = Object.fromEntries(currencyCodes.map((code) => [code, 0])) as Record<string, number>;
-        for (const total of report.currencyTotals) summary[total.currency] = total.confirmedMinorUnits + (report.includeProvisional ? total.provisionalMinorUnits : 0);
-        const transactionCount = Object.values(report.sourceCoverage).reduce((count, sourceCount) => count + sourceCount, 0);
-        return json({ ...report, summary, transactionCount });
-      }
-      if (url.pathname === '/api/recurring' && request.method === 'GET') return handleRecurringListRequest(env, url);
-      if (url.pathname === '/api/recurring/summary' && request.method === 'GET') return handleRecurringSummaryRequest(env, url);
-      if (url.pathname.startsWith('/api/recurring/') && url.pathname.endsWith('/classification') && request.method === 'PATCH') {
-        const id = recurringPathId(url.pathname.slice(0, -'/classification'.length));
-        return id ? handleRecurringClassification(request, env, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
-      }
-      if (url.pathname.startsWith('/api/recurring/') && request.method === 'GET') {
-        const id = recurringPathId(url.pathname);
-        return id ? handleRecurringDetailRequest(env, url, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
-      }
-      if (url.pathname === '/api/imports/commit' && request.method === 'POST') return handleImportCommit(request, env);
-      if (url.pathname === '/api/imports/review' && request.method === 'POST') return handleImportReview(request, env);
-      if (url.pathname === '/api/plaid/link-token' && request.method === 'POST') return await handleCreateLinkToken(request, env);
-      if (url.pathname === '/api/plaid/exchange' && request.method === 'POST') return await handlePlaidExchange(request, env);
-      if (url.pathname === '/api/plaid/sync' && request.method === 'POST') return await handlePlaidSyncRequest(request, env);
-      if (url.pathname === '/api/plaid/disconnect' && request.method === 'POST') return await handlePlaidDisconnect(request, env);
-      return json({ error: 'Not found' }, { status: 404 });
-    } catch (error) {
-      return errorResponse(error);
-    }
+    return handleAuthorizedApiRequest(request, env, url);
   },
 
   async scheduled(controller: { scheduledTime: number }, env: Env) {
@@ -1074,22 +1249,16 @@ export default {
       if (!isFxProviderError(error)) throw error;
       console.error('fx_snapshot_refresh_failed', error.name);
     }
+    if (env.LUNCHFLOW_API_KEY?.trim()) {
+      try {
+        await createLunchFlowService(env).requestSync('scheduled-sync');
+      } catch (error) {
+        console.error('lunchflow_schedule_failed', error instanceof Error ? error.name : 'unknown');
+      }
+    }
   },
 
   async queue(batch: { messages: Array<{ body: unknown; ack(): void; retry(): void }> }, env: Env) {
-    for (const message of batch.messages) {
-      try {
-        const body = message.body as { type?: unknown; itemId?: unknown; generation?: unknown };
-        if (body.type === 'plaid-sync' && typeof body.itemId === 'string') {
-          await syncPlaidItem(env, body.itemId);
-        } else if (body.type === 'plaid-recurring-sync' && typeof body.itemId === 'string' && typeof body.generation === 'number') {
-          await syncPlaidRecurring(env, body.itemId, body.generation);
-        }
-        message.ack();
-      } catch (error) {
-        console.error('queue_message_failed', error instanceof Error ? error.name : 'unknown');
-        message.retry();
-      }
-    }
+    for (const message of batch.messages) await handleQueueMessage(message, env);
   },
 };

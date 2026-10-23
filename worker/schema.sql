@@ -205,7 +205,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   category TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'refund', 'fee')),
   status TEXT NOT NULL CHECK (status IN ('confirmed', 'provisional', 'needs_review')),
-  source TEXT NOT NULL CHECK (source IN ('statement', 'plaid', 'alert', 'manual')),
+  source TEXT NOT NULL CHECK (source IN ('statement', 'plaid', 'alert', 'manual', 'lunchflow')),
   fingerprint TEXT NOT NULL,
   note TEXT,
   plaid_item_id TEXT,
@@ -275,6 +275,24 @@ CREATE TABLE IF NOT EXISTS plaid_accounts (
 CREATE INDEX IF NOT EXISTS plaid_accounts_item_idx ON plaid_accounts(item_id);
 CREATE INDEX IF NOT EXISTS plaid_accounts_account_idx ON plaid_accounts(account_id);
 
+CREATE TABLE IF NOT EXISTS lunchflow_accounts (
+  provider_account_id TEXT PRIMARY KEY,
+  account_id TEXT UNIQUE REFERENCES accounts(id),
+  ledger_id TEXT NOT NULL DEFAULT 'personal' REFERENCES ledgers(id),
+  name TEXT NOT NULL,
+  institution TEXT NOT NULL,
+  currency TEXT REFERENCES currencies(code),
+  kind TEXT CHECK (kind IN ('chequing', 'savings', 'credit')),
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  last_synced_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS lunchflow_accounts_ledger_idx ON lunchflow_accounts(ledger_id, enabled, provider_account_id);
+
 CREATE TABLE IF NOT EXISTS mobile_connections (
   id TEXT PRIMARY KEY,
   ledger_id TEXT NOT NULL DEFAULT 'personal' REFERENCES ledgers(id),
@@ -313,6 +331,20 @@ CREATE TABLE IF NOT EXISTS mobile_connection_operations (
 );
 
 CREATE INDEX IF NOT EXISTS mobile_connection_operations_connection_idx ON mobile_connection_operations(connection_id, created_at);
+
+CREATE TABLE IF NOT EXISTS lunchflow_operations (
+  id TEXT PRIMARY KEY,
+  ledger_id TEXT NOT NULL DEFAULT 'personal' REFERENCES ledgers(id),
+  owner_subject_hash TEXT NOT NULL,
+  operation_kind TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (ledger_id, owner_subject_hash, operation_kind, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS lunchflow_operations_owner_idx
+  ON lunchflow_operations(ledger_id, owner_subject_hash, created_at);
 
 CREATE UNIQUE INDEX IF NOT EXISTS transactions_plaid_item_current_id_idx
   ON transactions(plaid_item_id, provider_transaction_id)
@@ -508,11 +540,12 @@ CREATE TABLE IF NOT EXISTS device_source_scopes (
 CREATE TABLE IF NOT EXISTS transaction_source_records (
   id TEXT PRIMARY KEY,
   ledger_id TEXT NOT NULL DEFAULT 'personal' REFERENCES ledgers(id),
-  source_kind TEXT NOT NULL CHECK (source_kind IN ('plaid', 'statement', 'alert', 'manual', 'legacy')),
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('plaid', 'statement', 'alert', 'manual', 'legacy', 'lunchflow')),
   identity_key TEXT NOT NULL,
   transaction_id TEXT NOT NULL,
   account_id TEXT NOT NULL REFERENCES accounts(id),
   provider_item_id TEXT,
+  provider_account_id TEXT,
   provider_transaction_id TEXT,
   provider_pending_transaction_id TEXT,
   bank_source_id TEXT,
@@ -531,12 +564,14 @@ CREATE TABLE IF NOT EXISTS transaction_source_records (
     (source_kind = 'statement' AND ((bank_source_id IS NOT NULL AND bank_row_id IS NOT NULL) OR (file_sha256 IS NOT NULL AND row_index IS NOT NULL))) OR
     (source_kind = 'alert' AND event_id IS NOT NULL) OR
     (source_kind = 'manual' AND manual_id IS NOT NULL) OR
+    (source_kind = 'lunchflow' AND provider_account_id IS NOT NULL AND provider_transaction_id IS NOT NULL AND provider_item_id IS NULL) OR
     source_kind = 'legacy'
   )
 );
 
 CREATE INDEX IF NOT EXISTS transaction_source_records_transaction_idx ON transaction_source_records(transaction_id);
 CREATE INDEX IF NOT EXISTS transaction_source_records_provider_idx ON transaction_source_records(provider_item_id, provider_transaction_id);
+CREATE INDEX IF NOT EXISTS transaction_source_records_lunchflow_idx ON transaction_source_records(source_kind, provider_account_id, provider_transaction_id);
 CREATE INDEX IF NOT EXISTS transaction_source_records_account_idx ON transaction_source_records(account_id, source_kind);
 
 CREATE TABLE IF NOT EXISTS statement_reconciliation_candidates (

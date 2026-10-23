@@ -10,11 +10,16 @@ export type Account={providerAccountId:string;name:string;mask:string|null;subty
 export type AccountPage={accounts:Account[];nextCursor:string|null;limit:number};
 export type Connection={connectionId:string;institution:string|null;state:string;expiresAt:string|null;cleanupState:string|null;lastSyncedAt:string|null;lastError:string|null};
 export type LinkSnapshot={state:string;outcomeCode:string|null;operationId:string|null;canCancel:boolean;pendingConnectionId:string|null;connectionId:string|null;accounts:Account[]};
-export type AccountsData={page:AccountPage;connections:Connection[];link:LinkSnapshot};
+export type LunchFlowAccountKind='chequing'|'savings'|'credit';
+export type LunchFlowAccount={providerAccountId:string;name:string;institution:string;currencies:string[];selected:boolean;accountId:string|null;kind:LunchFlowAccountKind|null;currency:string|null;lastSyncedAt:string|null;lastError:string|null};
+export type LunchFlowAccounts={configured:boolean;accounts:LunchFlowAccount[]};
+export type LunchFlowSelection={providerAccountId:string;currency:string;kind:LunchFlowAccountKind};
+export type AccountsData={page:AccountPage;connections:Connection[];link:LinkSnapshot;lunchFlow?:LunchFlowAccounts};
 type Subscription={remove():void};
 export type DetailsPorts={
   recurring:{readDetail(id:string,cursor:string|null,limit:number):Promise<Detail>;startClassify(op:string,id:string,revision:number,classification:string):Promise<Operation>;onChanged(cb:()=>void):Subscription};
   review:{readAlerts(cursor:string|null,limit:number):Promise<ReviewPage>;startReview(op:string,value:Decision):Promise<Operation>;startAnnotate(op:string,value:Annotation):Promise<Operation>;onChanged(cb:()=>void):Subscription};
-  accounts:{getSnapshot():Promise<LinkSnapshot>;readAccounts(cursor:string|null,limit:number):Promise<AccountPage>;readConnections():Promise<Connection[]>;startConnect(op:string,reconnect:string|null):Promise<Operation>;cancelConnect(op:string):Promise<Operation>;startSelectAccounts(op:string,pending:string,ids:string[]):Promise<Operation>;startCancelPending(op:string,pending:string):Promise<Operation>;startSync(op:string):Promise<Operation>;startDisconnect(op:string,id:string):Promise<Operation>;onStateChanged(cb:(value:LinkSnapshot)=>void):Subscription};
+  accounts:{getSnapshot():Promise<LinkSnapshot>;readAccounts(cursor:string|null,limit:number):Promise<AccountPage>;readConnections():Promise<Connection[]>;readLunchFlowAccounts?():Promise<LunchFlowAccounts>;readLunchFlowStatus?():Promise<LunchFlowAccounts>;startConnect(op:string,reconnect:string|null):Promise<Operation>;cancelConnect(op:string):Promise<Operation>;startSelectAccounts(op:string,pending:string,ids:string[]):Promise<Operation>;startCancelPending(op:string,pending:string):Promise<Operation>;startSync(op:string):Promise<Operation>;startDisconnect(op:string,id:string):Promise<Operation>;startLunchFlowAccountSelection?(op:string,accounts:LunchFlowSelection[]):Promise<Operation>;startLunchFlowSync?(op:string):Promise<Operation>;onStateChanged(cb:(value:LinkSnapshot)=>void):Subscription};
+  refreshLedger?():Promise<unknown>;
   session:{readOperations(offset:number,limit:number):Promise<Operation[]>;queryOperation(id:string):Promise<Operation|null>};
 };

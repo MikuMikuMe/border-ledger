@@ -19,6 +19,7 @@ tags:
   - name: Review
   - name: Imports
   - name: Connections
+  - name: LunchFlow
   - name: Devices
 security: []
 paths:
@@ -194,6 +195,53 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AccountsPage' }
         default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/lunchflow/accounts:
+    get:
+      tags: [LunchFlow]
+      summary: Discover Lunch Flow provider accounts and current ledger selection
+      description: >-
+        Omit status for provider discovery and currency evidence. Use status=local
+        after an enqueue to read durable local mappings without another provider read.
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [local] }
+      responses:
+        '200': { $ref: '#/components/responses/LunchFlowAccounts' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/lunchflow/account-selection:
+    post:
+      tags: [LunchFlow]
+      summary: Save the complete explicit Lunch Flow account selection
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [accounts]
+              properties:
+                accounts: { type: array, maxItems: 25, items: { $ref: '#/components/schemas/LunchFlowSelection' } }
+      responses:
+        '200': { $ref: '#/components/responses/LunchFlowSelection' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/mobile/v1/lunchflow/sync:
+    post:
+      tags: [LunchFlow]
+      summary: Queue a Lunch Flow refresh for the currently selected accounts
+      security: [{ ownerBearer: [] }]
+      x-required-scope: connections:manage
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '202': { $ref: '#/components/responses/LunchFlowSync' }
+        default: { $ref: '#/components/responses/Error' }
   /api/mobile/v1/ledger/snapshot:
     get:
       tags: [Ledger]
@@ -220,7 +268,7 @@ paths:
         - { name: query, in: query, schema: { type: string, maxLength: 120 } }
         - { name: currency, in: query, schema: { $ref: '#/components/schemas/CurrencyCode' } }
         - { name: status, in: query, schema: { type: string, enum: [confirmed, provisional, needs_review] } }
-        - { name: source, in: query, schema: { type: string, enum: [statement, plaid, alert, manual] } }
+        - { name: source, in: query, schema: { type: string, enum: [statement, plaid, alert, manual, lunchflow] } }
         - { name: category, in: query, schema: { type: string, maxLength: 80 } }
       responses:
         '200': { $ref: '#/components/responses/TransactionsPage' }
@@ -980,6 +1028,38 @@ components:
         defaultCurrency: { $ref: '#/components/schemas/CurrencyCode' }
         allowedCurrencies: { type: array, minItems: 1, maxItems: 162, uniqueItems: true, items: { $ref: '#/components/schemas/CurrencyCode' }, description: Up to the complete shared ISO registry; the current registry contains 162 codes. }
         lastSyncedAt: { type: [string, 'null'], format: date-time }
+    LunchFlowAccount:
+      type: object
+      additionalProperties: false
+      required: [providerAccountId, name, institution, currencies, selected, accountId, kind, currency, lastSyncedAt, lastError]
+      properties:
+        providerAccountId: { type: string, minLength: 1, maxLength: 256 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        institution: { type: string, minLength: 1, maxLength: 160 }
+        currencies: { type: array, maxItems: 162, uniqueItems: true, items: { $ref: '#/components/schemas/CurrencyCode' } }
+        selected: { type: boolean }
+        accountId: { type: [string, 'null'], maxLength: 128 }
+        kind: { type: [string, 'null'], enum: [chequing, savings, credit, null] }
+        currency: { anyOf: [{ $ref: '#/components/schemas/CurrencyCode' }, { type: 'null' }] }
+        lastSyncedAt: { type: [string, 'null'], format: date-time }
+        lastError: { type: [string, 'null'], maxLength: 512 }
+        lastAttemptAt: { type: [string, 'null'], maxLength: 64, description: Durable local attempt timestamp used to distinguish repeated failures. }
+    LunchFlowAccounts:
+      type: object
+      additionalProperties: false
+      required: [configured, accounts]
+      properties:
+        configured: { type: boolean }
+        accounts: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/LunchFlowAccount' } }
+        archivedAccountCount: { type: integer, minimum: 0, description: Disabled historical mappings omitted from this chooser; ledger history is retained. }
+    LunchFlowSelection:
+      type: object
+      additionalProperties: false
+      required: [providerAccountId, currency, kind]
+      properties:
+        providerAccountId: { type: string, minLength: 1, maxLength: 256 }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        kind: { type: string, enum: [chequing, savings, credit] }
     Transaction:
       type: object
       additionalProperties: false
@@ -994,7 +1074,7 @@ components:
         category: { type: string, maxLength: 80 }
         kind: { type: string, enum: [expense, income, transfer, refund, fee] }
         status: { type: string, enum: [confirmed, provisional, needs_review] }
-        source: { type: string, enum: [statement, plaid, alert, manual] }
+        source: { type: string, enum: [statement, plaid, alert, manual, lunchflow] }
         note: { type: [string, 'null'], maxLength: 1000 }
         revision: { type: integer, minimum: 0 }
     ImportRow:
@@ -1359,6 +1439,33 @@ components:
             properties:
               items: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/Account' } }
               page: { $ref: '#/components/schemas/PageInfo' }
+    LunchFlowAccounts:
+      description: Owner-scoped Lunch Flow provider discovery and current explicit selection.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/LunchFlowAccounts' }
+    LunchFlowSelection:
+      description: Lunch Flow selection saved and, when applicable, queued for import.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [selected, queued]
+            properties:
+              selected: { type: integer, minimum: 0, maximum: 25 }
+              queued: { type: boolean }
+    LunchFlowSync:
+      description: Lunch Flow refresh accepted for queued processing.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [queued, accounts]
+            properties:
+              queued: { type: boolean }
+              accounts: { type: integer, minimum: 0, maximum: 25 }
     TransactionsPage:
       description: Bounded transaction page.
       content:
