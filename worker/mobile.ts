@@ -197,6 +197,11 @@ function requestId() {
   return crypto.randomUUID();
 }
 
+function typedServiceErrorResponse(error: unknown, id: string) {
+  if (!(error instanceof ConnectionServiceError) && !(error instanceof LunchFlowError)) return null;
+  return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable }, { status: error.status });
+}
+
 function errorResponse(error: unknown) {
   const id = requestId();
   if (error instanceof RangeError) return json({ code: 'invalid_request', message: error.message, requestId: id, retryable: false }, { status: 400 });
@@ -213,8 +218,8 @@ function errorResponse(error: unknown) {
   if (error instanceof MobileDeviceError) return json({ code: error.code, message: error.message, ...(error.currentRevision === undefined ? {} : { currentRevision: error.currentRevision }), requestId: id, retryable: false }, { status: error.status });
   if (error instanceof AlertBatchError) return json({ code: error.code, message: error.message, requestId: id, retryable: false }, { status: error.code === 'payload_too_large' ? 413 : 400 });
   if (error instanceof MobileImportError || error instanceof MobileExportError || error instanceof ImportStoreError) return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable ?? false }, { status: error.status });
-  if (error instanceof ConnectionServiceError) return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable }, { status: error.status });
-  if (error instanceof LunchFlowError) return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable }, { status: error.status });
+  const typedServiceResponse = typedServiceErrorResponse(error, id);
+  if (typedServiceResponse) return typedServiceResponse;
   if (error instanceof RecurringServiceError) return json({
     code: error.code,
     message: error.message,
