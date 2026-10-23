@@ -1,11 +1,12 @@
-import React,{useEffect,useMemo,useReducer,useState} from 'react';
+import React,{useEffect,useMemo,useReducer,useRef,useState} from 'react';
 import {AppState,View} from 'react-native';
 import NativeRecurring from '../native/specs/NativeRecurring';
 import NativeReview from '../native/specs/NativeReview';
 import NativeAccounts from '../native/specs/NativeAccounts';
+import NativeLedger from '../native/specs/NativeLedger';
 import NativeSession from '../native/specs/NativeSession';
 import {DetailsController} from '../features/details/DetailsController';
-import type {Alert,DetailsPorts} from '../features/details/contracts';
+import type {Alert,DetailsPorts,LunchFlowAccountKind,LunchFlowAccounts} from '../features/details/contracts';
 import {AccountsView,RecurringDetailView,ReviewView} from '../features/details/DetailsViews';
 import {Action} from '../features/finance/FinanceViews';
 const ports:DetailsPorts={
@@ -24,18 +25,29 @@ const ports:DetailsPorts={
   getSnapshot:NativeAccounts.getSnapshot,
   readAccounts:(cursor,limit)=>NativeAccounts.readAccounts({cursor,limit}),
   readConnections:NativeAccounts.readConnections,
+  readLunchFlowAccounts:async():Promise<LunchFlowAccounts>=>{
+   const value=await NativeAccounts.readLunchFlowAccounts();
+   return {...value,accounts:value.accounts.map(account=>({...account,kind:(['chequing','savings','credit'] as const).includes(account.kind as LunchFlowAccountKind)?account.kind as LunchFlowAccountKind:null}))};
+  },
+  readLunchFlowStatus:async():Promise<LunchFlowAccounts>=>{
+   const value=await NativeAccounts.readLunchFlowStatus();
+   return {...value,accounts:value.accounts.map(account=>({...account,kind:(['chequing','savings','credit'] as const).includes(account.kind as LunchFlowAccountKind)?account.kind as LunchFlowAccountKind:null}))};
+  },
   startConnect:(operationId,reconnect)=>NativeAccounts.startConnect({operationId,reconnectConnectionId:reconnect}),
   cancelConnect:operationId=>NativeAccounts.cancelConnect({operationId}),
   startSelectAccounts:(operationId,pendingConnectionId,accountIds)=>NativeAccounts.startSelectAccounts({operationId,pendingConnectionId,accountIds}),
   startCancelPending:(operationId,pendingConnectionId)=>NativeAccounts.startCancelPending({operationId,pendingConnectionId}),
   startSync:operationId=>NativeAccounts.startSync({operationId}),
   startDisconnect:(operationId,connectionId)=>NativeAccounts.startDisconnect({operationId,connectionId}),
+  startLunchFlowAccountSelection:(operationId,accounts)=>NativeAccounts.startLunchFlowAccountSelection({operationId,accounts}),
+  startLunchFlowSync:operationId=>NativeAccounts.startLunchFlowSync({operationId}),
   onStateChanged:NativeAccounts.onStateChanged,
  },
  session:{
   readOperations:(offset,limit)=>NativeSession.readOperations({offset,limit}),
   queryOperation:operationId=>NativeSession.queryOperation({operationId}),
  },
+ refreshLedger:()=>NativeLedger.refreshSnapshot(),
 };
 let sequence=0;
 const operationId=()=>`mobile_detail_${Date.now().toString(36)}_${(++sequence).toString(36)}_${Math.random().toString(36).slice(2,14)}`;
@@ -53,11 +65,13 @@ function ReviewPanel({dark,controller,selected,draft,setDraft,setSelected,finish
 }
 
 function AccountsPanel({dark,controller}:{dark:boolean;controller:Controller}) {
-  return <AccountsView dark={dark} state={controller.accounts.current()} mutation={controller.mutation.current()}
+  return <AccountsView dark={dark} state={controller.accounts.current()} mutation={controller.mutation.current()} lunchFlowBusy={controller.lunchFlowBusy}
     onRetry={()=>{void controller.loadAccounts();}} onLoadMore={()=>{void controller.loadAccounts(true);}}
     onConnect={reconnect=>{void controller.connect({operationId:operationId(),reconnect});}} onCancelConnect={()=>{void controller.cancelConnect();}}
     onSelect={ids=>{void controller.selectAccounts({operationId:operationId(),ids});}} onCancel={()=>{void controller.cancelPending({operationId:operationId()});}}
-    onSync={()=>{void controller.sync({operationId:operationId()});}} onDisconnect={id=>{void controller.disconnect({operationId:operationId(),connectionId:id,confirmed:true});}}/>;
+    onSync={()=>{void controller.sync({operationId:operationId()});}} onDisconnect={id=>{void controller.disconnect({operationId:operationId(),connectionId:id,confirmed:true});}}
+    onLunchFlowSelection={accounts=>{void controller.selectLunchFlow({operationId:operationId(),accounts});}}
+    onLunchFlowSync={()=>{void controller.syncLunchFlow({operationId:operationId()});}}/>;
 }
 
 function RecurringPanel({dark,controller,recurringId,onCloseRecurring}:{dark:boolean;controller:Controller;recurringId:string|null;onCloseRecurring?():void}) {
@@ -75,8 +89,11 @@ function DetailsDestination({dark,destination,controller,selected,draft,setDraft
 export function DetailsScreen({dark,destination,recurringId,onCloseRecurring}: {dark:boolean;destination:Destination;recurringId?:string|null;onCloseRecurring?():void}){
   const [,render]=useReducer(n=>n+1,0),controller=useMemo(()=>new DetailsController(ports,render),[]);
   const [selected,setSelected]=useState<Alert|null>(null),[draft,setDraft]=useState({category:'',note:''});
-  useEffect(()=>{void controller.start();const resume=AppState.addEventListener('change',state=>{if(state==='active')void controller.resume();});return()=>{resume.remove();controller.dispose();};},[controller]);
+  const currentDestination=useRef(destination);currentDestination.current=destination;
+  const refreshSharedLedger=()=>{void NativeLedger.refreshSnapshot().catch(()=>{});};
+  useEffect(()=>{void controller.start();const resume=AppState.addEventListener('change',state=>{if(state==='active'){void controller.resume();if(currentDestination.current==='accounts')refreshSharedLedger();}});return()=>{resume.remove();controller.dispose();};},[controller]);
   useEffect(()=>{setSelected(null);},[destination]);
+  useEffect(()=>{if(destination==='accounts')refreshSharedLedger();},[destination]);
   useEffect(()=>{if(recurringId)void controller.openRecurring(recurringId);else controller.closeRecurring();},[controller,recurringId]);
   const finishReview=async(action:()=>Promise<void>)=>{await action();if(controller.mutation.current().status==='completed')setSelected(null);};
   const mutation=controller.mutation.current();

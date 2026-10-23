@@ -44,12 +44,14 @@ import type { Account, ReportWindow, Transaction } from './domain/types';
 import { getCurrencyMeta, supportedCurrencyCodes, type CurrencyCode } from './domain/currencies';
 import RecurringView from './components/RecurringView';
 import MobileAuthorizationPage from './MobileAuthorizationPage';
+import { LunchFlowSection } from './lunchflow';
 
 type View = 'overview' | 'recurring' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
 type ChartRange = 'daily' | 'weekly' | 'monthly';
 type AppRoute = 'landing' | 'workspace' | 'mobile-authorization';
-type AppAccount = Omit<Account, 'currency'> & { currency: CurrencyCode };
+type AccountProvider = 'plaid' | 'lunchflow' | null;
+type AppAccount = Omit<Account, 'currency' | 'provider'> & { currency: CurrencyCode; provider: AccountProvider };
 type CurrencyTotals = Record<string, number>;
 interface ChartEntry {
   day: string;
@@ -263,19 +265,38 @@ function syncTimestampLabel(value: string | null) {
   return new Intl.DateTimeFormat('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date);
 }
 
+function mapAccountKind(value: unknown): Account['kind'] | null {
+  return value === 'savings' || value === 'credit' || value === 'chequing' ? value : null;
+}
+
+function mapAccountProvider(value: unknown): AccountProvider {
+  return value === 'plaid' || value === 'lunchflow' ? value : null;
+}
+
+function accountIdentity(value: Record<string, unknown>) {
+  if (typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.institution !== 'string') return null;
+  return { id: value.id, name: value.name, institution: value.institution };
+}
+
+function mapAccountStatus(value: unknown): Account['status'] {
+  if (value === 'connected') return 'connected';
+  if (value === 'needs_attention') return 'needs_attention';
+  return 'import_only';
+}
+
 function mapApiAccount(value: Record<string, unknown>): AppAccount | null {
   const currency = typeof value.currency === 'string' && getCurrencyMeta(value.currency) ? value.currency : null;
-  const kind = value.kind === 'savings' || value.kind === 'credit' ? value.kind : value.kind === 'chequing' ? value.kind : null;
-  if (typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.institution !== 'string' || !currency || !kind) return null;
+  const kind = mapAccountKind(value.kind);
+  const identity = accountIdentity(value);
+  if (!identity || !currency || !kind) return null;
   return {
-    id: value.id,
-    name: value.name,
-    institution: value.institution,
+    ...identity,
     currency,
     kind,
-    status: value.status === 'connected' ? 'connected' : value.status === 'needs_attention' ? 'needs_attention' : 'import_only',
+    status: mapAccountStatus(value.status),
     lastSyncedAt: typeof value.last_synced_at === 'string' ? value.last_synced_at : null,
     plaidItemId: typeof value.plaid_item_id === 'string' ? value.plaid_item_id : null,
+    provider: mapAccountProvider(value.provider),
   };
 }
 
@@ -293,11 +314,23 @@ function mapApiPreferences(value: unknown): ReportingPreferences | null {
   return { reportingTimezone, weekStart, preferredCurrency, revision: Number(record.revision) };
 }
 
+function mapApiTransactionSource(value: unknown): Transaction['source'] | null {
+  const sourceValue = typeof value === 'string' ? value : '';
+  return ['statement', 'plaid', 'alert', 'manual', 'lunchflow'].includes(sourceValue) ? sourceValue as Transaction['source'] : null;
+}
+
+function transactionSourceLabel(source: Transaction['source']) {
+  if (source === 'plaid') return 'Plaid';
+  if (source === 'alert') return 'BOC alert';
+  if (String(source) === 'lunchflow') return 'Lunch Flow';
+  return 'Statement';
+}
+
 function mapApiTransaction(value: Record<string, unknown>): Transaction | null {
   const currency = typeof value.currency === 'string' && getCurrencyMeta(value.currency) ? value.currency : null;
   const kind = ['expense', 'income', 'transfer', 'refund', 'fee'].includes(value.kind as string) ? value.kind as Transaction['kind'] : null;
   const status = ['confirmed', 'provisional', 'needs_review'].includes(value.status as string) ? value.status as Transaction['status'] : null;
-  const source = ['statement', 'plaid', 'alert', 'manual'].includes(value.source as string) ? value.source as Transaction['source'] : null;
+  const source = mapApiTransactionSource(value.source);
   if (typeof value.id !== 'string' || typeof value.account_id !== 'string' || typeof value.date !== 'string' || typeof value.merchant !== 'string' || typeof value.amount_minor !== 'number' || !Number.isInteger(value.amount_minor) || !currency || !kind || !status || !source || typeof value.category !== 'string' || typeof value.fingerprint !== 'string') return null;
   return {
     id: value.id,
@@ -953,7 +986,7 @@ function WorkspaceApp() {
               onClearNotice={() => setImportNotice(null)}
             />
           ) : null}
-          {activeView === 'accounts' ? <AccountsView accounts={accounts} connectionBusy={plaidBusy} connectionNotice={plaidNotice} connectionNoticeError={plaidNoticeError} pendingConnection={pendingPlaidConnection} reportingTimezone={reportingTimezone} weekStartsOn={weekStartsOn} preferredCurrency={preferredCurrency} preferencesBusy={preferencesBusy} onReportingPreferencesChange={(next) => { void updateReportingPreferences(next); }} onConnect={connectPlaid} onConfirmConnection={confirmPlaidConnection} onCancelConnection={cancelPlaidConnection} onSync={syncPlaid} onDisconnect={disconnectPlaid} onNavigate={setActiveView} onNotice={setActionNotice} /> : null}
+          {activeView === 'accounts' ? <AccountsView accounts={accounts} connectionBusy={plaidBusy} connectionNotice={plaidNotice} connectionNoticeError={plaidNoticeError} pendingConnection={pendingPlaidConnection} reportingTimezone={reportingTimezone} weekStartsOn={weekStartsOn} preferredCurrency={preferredCurrency} preferencesBusy={preferencesBusy} onReportingPreferencesChange={(next) => { void updateReportingPreferences(next); }} onConnect={connectPlaid} onConfirmConnection={confirmPlaidConnection} onCancelConnection={cancelPlaidConnection} onSync={syncPlaid} onDisconnect={disconnectPlaid} onNavigate={setActiveView} onNotice={setActionNotice} onWorkspaceRefresh={refreshWorkspace} /> : null}
         </div>
       </main>
     </div>
@@ -1347,13 +1380,13 @@ function TransactionsView({ transactions, onExport }: { transactions: Transactio
 
   return <>
     <PageIntro action={<button type="button" className="outline-button" onClick={onExport}><FileCheck2 size={16} /> Export ledger</button>}><p className="eyebrow">THE FULL LEDGER</p><h1>Transactions</h1><p className="intro-copy">Search, sort, and annotate every record without losing its source.</p></PageIntro>
-    <section className="panel filter-panel"><div className="filter-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search merchant, category, or note" aria-label="Search transactions" />{query ? <button type="button" className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button> : null}</div><div className="filter-selects"><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value as CurrencyCode | 'all')}><option value="all">All currencies</option>{currencies.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>State</span><select value={status} onChange={(event) => setStatus(event.target.value as Transaction['status'] | 'all')}><option value="all">All states</option><option value="confirmed">Confirmed</option><option value="provisional">Provisional</option><option value="needs_review">Needs review</option></select></label><button type="button" className="icon-button filter-button" onClick={() => setMoreFiltersOpen((open) => !open)} aria-label="More filters" aria-expanded={moreFiltersOpen} aria-controls="transaction-more-filters"><SlidersHorizontal size={17} /></button></div>{moreFiltersOpen ? <div id="transaction-more-filters" className="more-filters" role="region" aria-label="Additional transaction filters"><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as Transaction['source'] | 'all')} aria-label="Source"><option value="all">All sources</option><option value="plaid">Plaid</option><option value="statement">Statement</option><option value="alert">BOC alert</option><option value="manual">Manual</option></select></label></div> : null}</section>
+    <section className="panel filter-panel"><div className="filter-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search merchant, category, or note" aria-label="Search transactions" />{query ? <button type="button" className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button> : null}</div><div className="filter-selects"><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value as CurrencyCode | 'all')}><option value="all">All currencies</option>{currencies.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>State</span><select value={status} onChange={(event) => setStatus(event.target.value as Transaction['status'] | 'all')}><option value="all">All states</option><option value="confirmed">Confirmed</option><option value="provisional">Provisional</option><option value="needs_review">Needs review</option></select></label><button type="button" className="icon-button filter-button" onClick={() => setMoreFiltersOpen((open) => !open)} aria-label="More filters" aria-expanded={moreFiltersOpen} aria-controls="transaction-more-filters"><SlidersHorizontal size={17} /></button></div>{moreFiltersOpen ? <div id="transaction-more-filters" className="more-filters" role="region" aria-label="Additional transaction filters"><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as Transaction['source'] | 'all')} aria-label="Source"><option value="all">All sources</option><option value="plaid">Plaid</option><option value="statement">Statement</option><option value="alert">BOC alert</option><option value="manual">Manual</option><option value="lunchflow">Lunch Flow</option></select></label></div> : null}</section>
     <section className="panel table-panel"><div className="table-toolbar"><span>{filtered.length} records</span><span className="table-toolbar-note"><BadgeCheck size={14} /> Confirmed and provisional states are kept distinct</span></div><TransactionTable transactions={filtered} /></section>
   </>;
 }
 
 function TransactionTable({ transactions, compact = false }: { transactions: Transaction[]; compact?: boolean }) {
-  return <div className={`transaction-table-wrap ${compact ? 'is-compact' : ''}`}><table className="transaction-table"><thead><tr><th scope="col">Date</th><th scope="col">Merchant</th><th scope="col">Category</th><th scope="col">Source</th><th scope="col">State</th><th scope="col" className="amount-cell">Amount</th></tr></thead><tbody>{transactions.map((transaction) => <tr key={transaction.id}><td className="date-cell">{formatDate(transaction.date)}</td><td><strong className="merchant-name">{transaction.merchant}</strong>{transaction.note ? <small className="note-line">{transaction.note}</small> : null}</td><td><span className={`category-mark ${transaction.currency.toLowerCase()}`} />{transaction.category}</td><td><span className="source-name">{transaction.source === 'plaid' ? 'Plaid' : transaction.source === 'alert' ? 'BOC alert' : 'Statement'}</span></td><td><StateBadge status={transaction.status} /></td><td className={`amount-cell ${transaction.kind === 'refund' || transaction.kind === 'income' ? 'is-credit' : ''}`}>{transaction.kind === 'income' || transaction.kind === 'refund' ? '+' : transaction.kind === 'transfer' ? '↔ ' : '− '}{formatMoney(Math.abs(transaction.amountMinor), transaction.currency, { signDisplay: 'never' })}</td></tr>)}</tbody></table>{transactions.length === 0 ? <div className="empty-state"><Filter size={22} /><strong>No records match that filter.</strong><span>Try a wider search or clear one of the filters.</span></div> : null}</div>;
+  return <div className={`transaction-table-wrap ${compact ? 'is-compact' : ''}`}><table className="transaction-table"><thead><tr><th scope="col">Date</th><th scope="col">Merchant</th><th scope="col">Category</th><th scope="col">Source</th><th scope="col">State</th><th scope="col" className="amount-cell">Amount</th></tr></thead><tbody>{transactions.map((transaction) => <tr key={transaction.id}><td className="date-cell">{formatDate(transaction.date)}</td><td><strong className="merchant-name">{transaction.merchant}</strong>{transaction.note ? <small className="note-line">{transaction.note}</small> : null}</td><td><span className={`category-mark ${transaction.currency.toLowerCase()}`} />{transaction.category}</td><td><span className="source-name">{transactionSourceLabel(transaction.source)}</span></td><td><StateBadge status={transaction.status} /></td><td className={`amount-cell ${transaction.kind === 'refund' || transaction.kind === 'income' ? 'is-credit' : ''}`}>{transaction.kind === 'income' || transaction.kind === 'refund' ? '+' : transaction.kind === 'transfer' ? '↔ ' : '− '}{formatMoney(Math.abs(transaction.amountMinor), transaction.currency, { signDisplay: 'never' })}</td></tr>)}</tbody></table>{transactions.length === 0 ? <div className="empty-state"><Filter size={22} /><strong>No records match that filter.</strong><span>Try a wider search or clear one of the filters.</span></div> : null}</div>;
 }
 
 function StateBadge({ status }: { status: Transaction['status'] }) {
@@ -1467,6 +1500,7 @@ function AccountsView({
   onDisconnect,
   onNavigate,
   onNotice,
+  onWorkspaceRefresh,
 }: {
   accounts: AppAccount[];
   connectionBusy: boolean;
@@ -1485,26 +1519,57 @@ function AccountsView({
   onDisconnect: (itemId: string, institution: string) => void;
   onNavigate: (view: View) => void;
   onNotice: (notice: string) => void;
+  onWorkspaceRefresh: () => Promise<void>;
 }) {
   const [policyOpen, setPolicyOpen] = useState(false);
 
   return <>
-    <PageIntro action={<div className="page-intro-actions"><button type="button" className="outline-button" onClick={onSync} disabled={connectionBusy}><RefreshCw size={16} className={connectionBusy ? 'is-spinning' : undefined} /> Refresh bank data</button><button type="button" className="quiet-button" onClick={() => { onNotice('Reporting rules are below.'); document.getElementById('reporting-settings')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); }}><Settings2 size={16} /> Reporting rules</button></div>}><p className="eyebrow">THE SOURCE MAP</p><h1>Accounts &amp; settings</h1><p className="intro-copy">Know which records are automatic, which are imported, and where a fresh connection is still needed.</p></PageIntro>
+    <PageIntro action={<div className="page-intro-actions"><button type="button" className="outline-button" onClick={onSync} disabled={connectionBusy}><RefreshCw size={16} className={connectionBusy ? 'is-spinning' : undefined} /> Refresh Plaid bank data</button><button type="button" className="quiet-button" onClick={() => { onNotice('Reporting rules are below.'); document.getElementById('reporting-settings')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); }}><Settings2 size={16} /> Reporting rules</button></div>}><p className="eyebrow">THE SOURCE MAP</p><h1>Accounts &amp; settings</h1><p className="intro-copy">Know which records are automatic, which are imported, and where a fresh connection is still needed.</p></PageIntro>
     {connectionNotice ? <div className={`connection-notice ${connectionNoticeError ? 'is-error' : ''}`} role="status"><BadgeCheck size={17} /><span>{connectionNotice}</span><span className="connection-notice-mark" aria-hidden="true"><CircleHelp size={16} /></span></div> : null}
     {pendingConnection ? <PlaidAccountSelectionDialog connection={pendingConnection} busy={connectionBusy} onConfirm={onConfirmConnection} onCancel={onCancelConnection} /> : null}
     <section className="account-grid">{accounts.map((account) => <AccountCard key={account.id} account={account} connectionBusy={connectionBusy} onSync={onSync} onDisconnect={onDisconnect} onNavigate={onNavigate} />)}<div className="panel add-account-card"><div className="add-account-icon"><Link2 size={19} /></div><h2>Connect another source</h2><p>Connect RBC through Plaid or keep a statement-only account. Credentials stay outside the browser.</p><button className="outline-button" onClick={onConnect} disabled={connectionBusy}><Landmark size={16} />{connectionBusy ? 'Opening secure link…' : 'Start bank connection'} <ArrowUpRight size={15} /></button><small className="connection-helper">Plaid environment is controlled by the Worker; account access is explicit.</small></div></section>
+    <LunchFlowSection onWorkspaceRefresh={onWorkspaceRefresh} />
     <section className="settings-layout"><div id="reporting-settings" className="panel settings-panel" tabIndex={-1}><div className="section-heading"><div><p className="eyebrow">REPORTING SETTINGS</p><h2>How totals should read</h2></div><SlidersHorizontal size={18} className="section-icon" /></div><div className="settings-row"><div><strong>Total spending currency</strong><span>Choose a registered target for converted totals; original source currencies and amounts remain visible below.</span></div><select value={preferredCurrency ?? ''} disabled={preferencesBusy} onChange={(event) => onReportingPreferencesChange({ reportingTimezone, weekStartsOn, preferredCurrency: event.target.value ? event.target.value as CurrencyCode : null })} aria-label="Preferred reporting currency"><option value="">Source currencies (no conversion)</option>{supportedCurrencyCodes.map((code) => <option key={code} value={code}>{code} — reporting target</option>)}</select></div><div className="settings-row"><div><strong>Reporting timezone</strong><span>Dates are preserved from the source; this zone scopes the reporting window.</span></div><select value={reportingTimezone} disabled={preferencesBusy} onChange={(event) => onReportingPreferencesChange({ reportingTimezone: event.target.value as ReportingTimezone, weekStartsOn, preferredCurrency })} aria-label="Reporting timezone"><option value="America/Toronto">America/Toronto</option><option value="Asia/Shanghai">Asia/Shanghai</option></select></div><div className="settings-row"><div><strong>Week starts on</strong><span>Used by the “This week” window.</span></div><select value={weekStartsOn} disabled={preferencesBusy} onChange={(event) => onReportingPreferencesChange({ reportingTimezone, weekStartsOn: event.target.value.toLowerCase() as WeekStartsOn, preferredCurrency })} aria-label="Week start"><option value="monday">Monday</option><option value="sunday">Sunday</option></select></div></div><div className="panel privacy-panel"><div className="privacy-seal"><ShieldCheck size={22} /></div><p className="eyebrow">PRIVATE BY DEFAULT</p><h2>The ledger keeps its boundaries.</h2><ul><li><Check size={14} />Bank passwords never touch this app.</li><li><Check size={14} />Provisional alerts never hide in confirmed totals.</li><li><Check size={14} />Exports and backups are explicit actions.</li></ul><button type="button" className="text-button" onClick={() => setPolicyOpen((open) => !open)} aria-expanded={policyOpen} aria-controls="data-policy">{policyOpen ? 'Hide the data policy' : 'Read the data policy'} <ArrowUpRight size={14} /></button>{policyOpen ? <div id="data-policy" className="policy-details" role="region" aria-label="Data policy"><strong>This browser never receives bank passwords.</strong><span>Statements are parsed locally before review, while saved connections stay behind the protected Worker boundary.</span></div> : null}</div></section>
   </>;
 }
 
 function AccountCard({ account, connectionBusy, onSync, onDisconnect, onNavigate }: { account: AppAccount; connectionBusy: boolean; onSync: () => void; onDisconnect: (itemId: string, institution: string) => void; onNavigate: (view: View) => void }) {
   const isConnected = account.status === 'connected';
+  const isLunchFlow = account.provider === 'lunchflow';
+  const isPlaid = account.provider === 'plaid' || (account.provider === null && Boolean(account.plaidItemId));
+  const providerLabel = isLunchFlow ? 'Lunch Flow' : isPlaid ? 'Plaid' : 'Ledger';
   const [optionsOpen, setOptionsOpen] = useState(false);
   const optionsId = useId();
   const optionsPanelId = `${optionsId}-panel`;
   const optionsTitleId = `${optionsId}-title`;
 
-  return <div className={`panel account-card ${account.currency.toLowerCase()}`}><div className="account-card-top"><div className="institution-mark">{account.institution === 'RBC Royal Bank' ? 'RBC' : 'BOC'}</div><StateBadge status={isConnected ? 'confirmed' : 'provisional'} /></div><p className="account-institution">{account.institution}</p><h2>{account.name}</h2><div className="account-currency"><span>{account.currency}</span><span>{account.kind}</span></div><div className="account-card-foot"><span>{isConnected ? <><span className="live-dot" /> Last synced {syncTimestampLabel(account.lastSyncedAt)}</> : <><CircleAlert size={14} /> Import only · connection needed</>}</span><button type="button" className={`icon-button ${optionsOpen ? 'is-active' : ''}`} aria-label={`${optionsOpen ? 'Close' : 'Open'} ${account.name} options`} aria-expanded={optionsOpen} aria-controls={optionsPanelId} onClick={() => setOptionsOpen((open) => !open)}><MoreHorizontal size={17} /></button></div>{optionsOpen ? <section id={optionsPanelId} className="account-options" role="region" aria-labelledby={optionsTitleId}><div className="account-options-heading"><div><p className="eyebrow">ACCOUNT OPTIONS</p><h3 id={optionsTitleId}>Account options</h3></div><button type="button" className="icon-button" aria-label="Close account options" onClick={() => setOptionsOpen(false)}><X size={16} /></button></div><dl className="account-options-details"><div><dt>Institution</dt><dd>{account.institution}</dd></div><div><dt>Currency</dt><dd>{account.currency} · {account.kind}</dd></div><div><dt>Status</dt><dd>{isConnected ? 'Connected via Plaid' : 'Import only'}</dd></div></dl><p className="account-options-copy">{isConnected ? 'A fresh bank sync can be queued without leaving this page.' : 'Add a statement from the import desk to keep this source current.'}</p>{isConnected ? <><button type="button" className="outline-button" onClick={onSync} disabled={connectionBusy}><RefreshCw size={15} className={connectionBusy ? 'is-spinning' : undefined} />{connectionBusy ? 'Refreshing…' : 'Refresh bank data'}</button>{account.plaidItemId ? <button type="button" className="quiet-button disconnect-button" onClick={() => onDisconnect(account.plaidItemId!, account.institution)} disabled={connectionBusy}>Disconnect Plaid connection</button> : null}</> : <button type="button" className="outline-button" onClick={() => onNavigate('imports')}><FileUp size={15} />Open import &amp; review <ArrowUpRight size={15} /></button>}</section> : null}</div>;
+  return (
+    <div className={`panel account-card ${account.currency.toLowerCase()}`}>
+      <div className="account-card-top"><div className="institution-mark">{isLunchFlow ? 'LF' : account.institution === 'RBC Royal Bank' ? 'RBC' : 'BOC'}</div><StateBadge status={isConnected ? 'confirmed' : 'provisional'} /></div>
+      <p className="account-institution">{account.institution} · {providerLabel}</p>
+      <h2>{account.name}</h2>
+      <div className="account-currency"><span>{account.currency}</span><span>{account.kind}</span></div>
+      <div className="account-card-foot"><span>{isConnected ? <><span className="live-dot" /> Last synced {syncTimestampLabel(account.lastSyncedAt)}</> : <><CircleAlert size={14} /> Import only · connection needed</>}</span><button type="button" className={`icon-button ${optionsOpen ? 'is-active' : ''}`} aria-label={`${optionsOpen ? 'Close' : 'Open'} ${account.name} options`} aria-expanded={optionsOpen} aria-controls={optionsPanelId} onClick={() => setOptionsOpen((open) => !open)}><MoreHorizontal size={17} /></button></div>
+      {optionsOpen ? <AccountOptions account={account} connectionBusy={connectionBusy} isConnected={isConnected} isLunchFlow={isLunchFlow} isPlaid={isPlaid} providerLabel={providerLabel} optionsPanelId={optionsPanelId} optionsTitleId={optionsTitleId} onClose={() => setOptionsOpen(false)} onSync={onSync} onDisconnect={onDisconnect} onNavigate={onNavigate} /> : null}
+    </div>
+  );
+}
+
+function accountOptionsCopy(isLunchFlow: boolean, isPlaid: boolean, isConnected: boolean) {
+  if (isLunchFlow) return 'Refresh this source from the Lunch Flow section below. Existing ledger history stays here.';
+  if (isPlaid && isConnected) return 'A fresh Plaid bank sync can be queued without leaving this page.';
+  return 'Add a statement from the import desk to keep this source current.';
+}
+
+function AccountOptionsActions({ account, connectionBusy, isConnected, isLunchFlow, isPlaid, onSync, onDisconnect, onNavigate }: { account: AppAccount; connectionBusy: boolean; isConnected: boolean; isLunchFlow: boolean; isPlaid: boolean; onSync: () => void; onDisconnect: (itemId: string, institution: string) => void; onNavigate: (view: View) => void }) {
+  if (isConnected && isPlaid) return <><button type="button" className="outline-button" onClick={onSync} disabled={connectionBusy}><RefreshCw size={15} className={connectionBusy ? 'is-spinning' : undefined} />{connectionBusy ? 'Refreshing Plaid…' : 'Refresh Plaid bank data'}</button>{account.plaidItemId ? <button type="button" className="quiet-button disconnect-button" onClick={() => onDisconnect(account.plaidItemId!, account.institution)} disabled={connectionBusy}>Disconnect Plaid connection</button> : null}</>;
+  if (isLunchFlow) return <span className="account-options-copy">Lunch Flow controls are available in its source panel.</span>;
+  if (!isConnected) return <button type="button" className="outline-button" onClick={() => onNavigate('imports')}><FileUp size={15} />Open import &amp; review <ArrowUpRight size={15} /></button>;
+  return null;
+}
+
+function AccountOptions({ account, connectionBusy, isConnected, isLunchFlow, isPlaid, providerLabel, optionsPanelId, optionsTitleId, onClose, onSync, onDisconnect, onNavigate }: { account: AppAccount; connectionBusy: boolean; isConnected: boolean; isLunchFlow: boolean; isPlaid: boolean; providerLabel: string; optionsPanelId: string; optionsTitleId: string; onClose: () => void; onSync: () => void; onDisconnect: (itemId: string, institution: string) => void; onNavigate: (view: View) => void }) {
+  return <section id={optionsPanelId} className="account-options" role="region" aria-labelledby={optionsTitleId}><div className="account-options-heading"><div><p className="eyebrow">ACCOUNT OPTIONS</p><h3 id={optionsTitleId}>Account options</h3></div><button type="button" className="icon-button" aria-label="Close account options" onClick={onClose}><X size={16} /></button></div><dl className="account-options-details"><div><dt>Institution</dt><dd>{account.institution}</dd></div><div><dt>Source</dt><dd>{providerLabel}</dd></div><div><dt>Currency</dt><dd>{account.currency} · {account.kind}</dd></div><div><dt>Status</dt><dd>{isConnected ? `Connected via ${providerLabel}` : 'Import only'}</dd></div></dl><p className="account-options-copy">{accountOptionsCopy(isLunchFlow, isPlaid, isConnected)}</p><AccountOptionsActions account={account} connectionBusy={connectionBusy} isConnected={isConnected} isLunchFlow={isLunchFlow} isPlaid={isPlaid} onSync={onSync} onDisconnect={onDisconnect} onNavigate={onNavigate} /></section>;
 }
 
 export default App;

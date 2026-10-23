@@ -12,15 +12,24 @@ export type Account = {providerAccountId: string; name: string; mask: string | n
 export type AccountPage = {accounts: Account[]; nextCursor: string | null; limit: number};
 export type Connection = {connectionId: string; institution: string | null; state: string; expiresAt: string | null; cleanupState: string | null; lastSyncedAt: string | null; lastError: string | null};
 export type LinkSnapshot = {state: string; outcomeCode: string | null; operationId: string | null; canCancel: boolean; pendingConnectionId: string | null; connectionId: string | null; accounts: Account[]};
+export type LunchFlowAccount = {providerAccountId: string; name: string; institution: string; currencies: string[]; selected: boolean; accountId: string | null; kind: string | null; currency: string | null; lastSyncedAt: string | null; lastError: string | null};
+export type LunchFlowAccounts = {configured: boolean; accounts: LunchFlowAccount[]};
+export type LunchFlowSelection = {providerAccountId: string; currency: string; kind: string};
+export type LunchFlowAccountSelectionRequest = {operationId: string; accounts: LunchFlowSelection[]};
+export type LunchFlowSyncRequest = {operationId: string};
 export interface Spec extends TurboModule {
   getSnapshot(): Promise<LinkSnapshot>;
   readAccounts(query: AccountPageQuery): Promise<AccountPage>;
   readConnections(): Promise<Connection[]>;
+  readLunchFlowAccounts(): Promise<LunchFlowAccounts>;
+  readLunchFlowStatus(): Promise<LunchFlowAccounts>;
   startConnect(request: ConnectRequest): Promise<Operation>;
   cancelConnect(request: CancelConnectRequest): Promise<Operation>;
   startSelectAccounts(request: SelectAccountsRequest): Promise<Operation>;
   startCancelPending(request: CancelPendingRequest): Promise<Operation>;
   startSync(request: SyncRequest): Promise<Operation>;
+  startLunchFlowAccountSelection(request: LunchFlowAccountSelectionRequest): Promise<Operation>;
+  startLunchFlowSync(request: LunchFlowSyncRequest): Promise<Operation>;
   startDisconnect(request: DisconnectRequest): Promise<Operation>;
   readonly onStateChanged: CodegenTypes.EventEmitter<LinkSnapshot>;
 }

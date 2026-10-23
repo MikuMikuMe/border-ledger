@@ -10,7 +10,7 @@ const MAX_CATEGORY_LENGTH = 80;
 const MAX_ID_LENGTH = 128;
 
 const VALID_STATUSES = new Set(['confirmed', 'provisional', 'needs_review']);
-const VALID_SOURCES = new Set(['statement', 'plaid', 'alert', 'manual']);
+const VALID_SOURCES = new Set(['statement', 'plaid', 'alert', 'manual', 'lunchflow']);
 
 interface TransactionCursor {
   date: string;

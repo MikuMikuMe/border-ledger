@@ -5,6 +5,7 @@ import com.lofuyu.borderledger.auth.ApiEnvironment
 import com.lofuyu.borderledger.auth.MobileRequest
 import com.lofuyu.borderledger.auth.OwnerAuthInterceptor
 import com.lofuyu.borderledger.auth.OwnerCredentialProvider
+import com.lofuyu.borderledger.parser.CurrencyRegistry
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -25,6 +26,65 @@ data class BankAccount(
     val currency: String,
     val kind: String,
 )
+
+private val LUNCH_FLOW_KINDS = setOf("chequing", "savings", "credit")
+
+data class LunchFlowAccount(
+    val providerAccountId: String,
+    val name: String,
+    val institution: String,
+    val currencies: List<String>,
+    val selected: Boolean,
+    val accountId: String?,
+    val kind: String?,
+    val currency: String?,
+    val lastSyncedAt: String?,
+    val lastError: String?,
+) {
+    init {
+        require(providerAccountId.isNotBlank() && providerAccountId.length <= 256)
+        require(name.isNotBlank() && name.length <= 160)
+        require(institution.isNotBlank() && institution.length <= 160)
+        require(currencies.distinct().size == currencies.size && currencies.size <= 162)
+        require(currencies.all { CurrencyRegistry().metadata(it) != null })
+        require(kind == null || kind in LUNCH_FLOW_KINDS)
+        require(currency == null || CurrencyRegistry().metadata(currency) != null)
+    }
+}
+
+data class LunchFlowAccounts(
+    val configured: Boolean,
+    val accounts: List<LunchFlowAccount>,
+)
+
+data class LunchFlowSelection(
+    val providerAccountId: String,
+    val currency: String,
+    val kind: String,
+) {
+    init {
+        require(providerAccountId.isNotBlank() && providerAccountId.length <= 256)
+        require(CurrencyRegistry().metadata(currency) != null)
+        require(kind in LUNCH_FLOW_KINDS)
+    }
+}
+
+data class LunchFlowSelectionRequest(
+    val accounts: List<LunchFlowSelection>,
+    val idempotencyKey: IdempotencyKey,
+) {
+    init { require(accounts.size <= 25 && accounts.distinctBy { it.providerAccountId }.size == accounts.size) }
+}
+
+data class LunchFlowSelectionReceipt(val selected: Int, val queued: Boolean) {
+    init { require(selected >= 0) }
+}
+
+data class LunchFlowSyncRequest(val idempotencyKey: IdempotencyKey)
+
+data class LunchFlowSyncReceipt(val queued: Boolean, val accounts: Int) {
+    init { require(accounts >= 0) }
+}
 
 data class ConnectionOperation(
     val operationId: String,
@@ -110,6 +170,10 @@ interface AccountConnectionGateway {
     suspend fun disconnect(request: DisconnectRequest)
     suspend fun listAccounts(request: AccountPageRequest): AccountPage
     suspend fun listConnections(): List<ConnectionStatus>
+    suspend fun readLunchFlowAccounts(): LunchFlowAccounts = throw TransportFailure.Unavailable
+    suspend fun readLunchFlowStatus(): LunchFlowAccounts = throw TransportFailure.Unavailable
+    suspend fun selectLunchFlowAccounts(request: LunchFlowSelectionRequest): LunchFlowSelectionReceipt = throw TransportFailure.Unavailable
+    suspend fun syncLunchFlow(request: LunchFlowSyncRequest): LunchFlowSyncReceipt = throw TransportFailure.Unavailable
 }
 
 class AccountRepository(private val gateway: AccountConnectionGateway) {
@@ -121,6 +185,10 @@ class AccountRepository(private val gateway: AccountConnectionGateway) {
     suspend fun disconnect(request: DisconnectRequest) = gateway.disconnect(request)
     suspend fun listAccounts(request: AccountPageRequest = AccountPageRequest()) = gateway.listAccounts(request)
     suspend fun listConnections() = gateway.listConnections()
+    suspend fun readLunchFlowAccounts() = gateway.readLunchFlowAccounts()
+    suspend fun readLunchFlowStatus() = gateway.readLunchFlowStatus()
+    suspend fun selectLunchFlowAccounts(request: LunchFlowSelectionRequest) = gateway.selectLunchFlowAccounts(request)
+    suspend fun syncLunchFlow(request: LunchFlowSyncRequest) = gateway.syncLunchFlow(request)
 }
 
 class HttpWorkerAccountConnectionGateway(
@@ -180,6 +248,32 @@ class HttpWorkerAccountConnectionGateway(
 
     override suspend fun listConnections(): List<ConnectionStatus> = decoder.connectionStatuses(
         json(MobileRequest("GET", "$origin/api/mobile/v1/connections")).optJSONArray("connections"),
+    )
+
+    override suspend fun readLunchFlowAccounts(): LunchFlowAccounts = decoder.lunchFlowAccounts(
+        json(MobileRequest("GET", "$origin/api/mobile/v1/lunchflow/accounts")),
+    )
+
+    override suspend fun readLunchFlowStatus(): LunchFlowAccounts = decoder.lunchFlowAccounts(
+        json(MobileRequest("GET", "$origin/api/mobile/v1/lunchflow/accounts?status=local")),
+    )
+
+    override suspend fun selectLunchFlowAccounts(request: LunchFlowSelectionRequest): LunchFlowSelectionReceipt {
+        val body = JSONObject().put("accounts", JSONArray().apply {
+            request.accounts.forEach { account ->
+                put(JSONObject().put("providerAccountId", account.providerAccountId).put("currency", account.currency).put("kind", account.kind))
+            }
+        }).toString().toByteArray(StandardCharsets.UTF_8)
+        return decoder.lunchFlowSelectionReceipt(json(MobileRequest(
+            "POST",
+            "$origin/api/mobile/v1/lunchflow/account-selection",
+            mapOf("Content-Type" to "application/json; charset=utf-8", "Idempotency-Key" to request.idempotencyKey.value),
+            body,
+        )))
+    }
+
+    override suspend fun syncLunchFlow(request: LunchFlowSyncRequest): LunchFlowSyncReceipt = decoder.lunchFlowSyncReceipt(
+        json(MobileRequest("POST", "$origin/api/mobile/v1/lunchflow/sync", mapOf("Idempotency-Key" to request.idempotencyKey.value))),
     )
 
     private suspend fun json(request: MobileRequest): JSONObject = JSONObject(request(request).toString(StandardCharsets.UTF_8))
@@ -267,7 +361,7 @@ internal class UrlConnectionAccountHttpTransport : AccountHttpTransport {
     }
 }
 
-private class AccountJsonDecoder {
+internal class AccountJsonDecoder {
     fun connectionOperation(value: JSONObject): ConnectionOperation = ConnectionOperation(
         operationId = value.getString("operationId"),
         state = value.getString("state"),
@@ -303,6 +397,26 @@ private class AccountJsonDecoder {
         }
     } ?: emptyList()
 
+    fun lunchFlowAccounts(value: JSONObject): LunchFlowAccounts = LunchFlowAccounts(
+        configured = value.getBoolean("configured"),
+        accounts = value.getJSONArray("accounts").let { array ->
+            require(array.length() <= 100)
+            buildList(array.length()) {
+                for (index in 0 until array.length()) addLunchFlowAccount(array.getJSONObject(index))
+            }
+        },
+    )
+
+    fun lunchFlowSelectionReceipt(value: JSONObject) = LunchFlowSelectionReceipt(
+        selected = value.getInt("selected"),
+        queued = value.getBoolean("queued"),
+    )
+
+    fun lunchFlowSyncReceipt(value: JSONObject) = LunchFlowSyncReceipt(
+        queued = value.getBoolean("queued"),
+        accounts = value.getInt("accounts"),
+    )
+
     private fun MutableList<BankAccount>.addBankAccount(value: JSONObject) {
         add(BankAccount(
             providerAccountId = value.optString("providerAccountId", value.optString("id")),
@@ -325,4 +439,28 @@ private class AccountJsonDecoder {
             lastError = value.optString("lastError").takeIf { it.isNotBlank() },
         ))
     }
+
+    private fun MutableList<LunchFlowAccount>.addLunchFlowAccount(value: JSONObject) {
+        val currencies = value.getJSONArray("currencies").let { array ->
+            require(array.length() <= 162)
+            (0 until array.length()).map { index -> array.getString(index) }
+        }
+        add(LunchFlowAccount(
+            providerAccountId = value.getString("providerAccountId"),
+            name = value.getString("name"),
+            institution = value.getString("institution"),
+            currencies = currencies,
+            selected = value.getBoolean("selected"),
+            accountId = nullableString(value, "accountId"),
+            kind = nullableString(value, "kind"),
+            currency = nullableString(value, "currency"),
+            lastSyncedAt = nullableString(value, "lastSyncedAt"),
+            lastError = nullableString(value, "lastError"),
+        ))
+    }
+
+    private fun nullableString(value: JSONObject, key: String): String? = value.opt(key)
+        ?.takeUnless { it == JSONObject.NULL }
+        ?.toString()
+        ?.takeIf { it.isNotBlank() }
 }

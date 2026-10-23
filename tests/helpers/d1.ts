@@ -15,6 +15,8 @@ export const task15CurrencyMigrationNames = [...task15MigrationNames, '0015-curr
 export const task16MigrationNames = [...task15MigrationNames, '0015-currency-registry.sql', '0016-recurring-currency-registry.sql'] as const;
 export const task17MigrationNames = [...task16MigrationNames, '0017-import-duplicate-decisions.sql'] as const;
 export const task18MigrationNames = [...task17MigrationNames, '0018-fx-snapshots.sql'] as const;
+export const task19MigrationNames = [...task18MigrationNames, '0019-owner-installation-binding.sql'] as const;
+export const task20MigrationNames = [...task19MigrationNames, '0020-lunchflow.sql'] as const;
 
 function migrationStatements(sql: string) {
   return sql

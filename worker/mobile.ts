@@ -48,6 +48,9 @@ import {
 import { createLedgerExportResponse, MobileExportError } from './mobile-export';
 import { ImportStoreError } from './import-store';
 import { ConnectionServiceError, createConnectionService } from './connection-service';
+import { LunchFlowError } from './lunchflow';
+import { createLunchFlowService } from './lunchflow-service';
+import { parseLunchFlowMobileSelectionAccounts } from './lunchflow-routing';
 import {
   annotateMobileTransaction,
   applyMobileAlertReview,
@@ -81,6 +84,8 @@ export interface MobileRouteEnv {
   PLAID_WEBHOOK_URL?: string;
   PLAID_ANDROID_PACKAGE_NAME?: string;
   PLAID_ANDROID_REDIRECT_URI?: string;
+  LUNCHFLOW_API_KEY?: string;
+  LUNCHFLOW_API_BASE_URL?: string;
   SYNC_QUEUE?: { send(message: unknown): Promise<void> };
 }
 
@@ -209,6 +214,7 @@ function errorResponse(error: unknown) {
   if (error instanceof AlertBatchError) return json({ code: error.code, message: error.message, requestId: id, retryable: false }, { status: error.code === 'payload_too_large' ? 413 : 400 });
   if (error instanceof MobileImportError || error instanceof MobileExportError || error instanceof ImportStoreError) return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable ?? false }, { status: error.status });
   if (error instanceof ConnectionServiceError) return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable }, { status: error.status });
+  if (error instanceof LunchFlowError) return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable }, { status: error.status });
   if (error instanceof RecurringServiceError) return json({
     code: error.code,
     message: error.message,
@@ -267,6 +273,45 @@ function routeRows(body: Record<string, unknown>) {
 function sourceScopes(body: Record<string, unknown>) {
   if (!Array.isArray(body.sourceScopes)) throw new MobileAuthError('invalid_request', 'Source scopes are required.', 400);
   return body.sourceScopes as Array<{ sourceProfileId: string; accountId: string; currency: string; hintKind?: string; hintValue?: string }>;
+}
+
+function lunchFlowSelectionBody(value: unknown) {
+  const body = bodyRecord(value);
+  const accounts = parseLunchFlowMobileSelectionAccounts(body.accounts);
+  if (!accounts) throw new MobileAuthError('invalid_request', 'The Lunch Flow account selection is not valid.', 400);
+  return accounts;
+}
+
+async function lunchFlowAccountsResponse(service: ReturnType<typeof createLunchFlowService>, url: URL) {
+  const result = url.searchParams.get('status') === 'local' ? await service.readStatus() : await service.readAccounts();
+  return json(result, { status: 200, headers: { 'cache-control': 'no-store' } });
+}
+
+async function handleLunchFlowMobileRequest(request: Request, env: MobileRouteEnv, config: MobileAuthConfig): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith('/api/mobile/v1/lunchflow/')) return null;
+  const service = createLunchFlowService(env);
+  if (request.method === 'GET' && url.pathname === '/api/mobile/v1/lunchflow/accounts') {
+    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    return lunchFlowAccountsResponse(service, url);
+  }
+  if (request.method === 'POST' && url.pathname === '/api/mobile/v1/lunchflow/account-selection') {
+    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    const body = lunchFlowSelectionBody(await readJsonBody<unknown>(request, 32 * 1024));
+    return json(await service.selectAccounts({
+      accounts: body,
+      ownerSubjectHash: owner.subjectHash,
+      idempotencyKey: requiredIdempotencyKey(request),
+    }), { status: 200 });
+  }
+  if (request.method === 'POST' && url.pathname === '/api/mobile/v1/lunchflow/sync') {
+    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
+    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    return json(await service.requestSync(owner.subjectHash, requiredIdempotencyKey(request)), { status: 202 });
+  }
+  return null;
 }
 
 function isAccessApprovalPath(pathname: string) {
@@ -521,6 +566,8 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
       return json(await readOwnerLedgerSnapshot(env.DB), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
+    const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
+    if (lunchFlowResponse) return lunchFlowResponse;
     const connectionService = createConnectionService(env);
     if (request.method === 'POST' && url.pathname === '/api/mobile/v1/connections/link-tokens') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');

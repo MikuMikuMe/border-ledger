@@ -10,10 +10,34 @@ import com.lofuyu.borderledger.accounts.AccountCursor
 import com.lofuyu.borderledger.accounts.ConnectionId
 import com.lofuyu.borderledger.accounts.DisconnectRequest
 import com.lofuyu.borderledger.accounts.IdempotencyKey
+import com.lofuyu.borderledger.accounts.LunchFlowSelection
+import com.lofuyu.borderledger.accounts.LunchFlowSelectionRequest
+import com.lofuyu.borderledger.accounts.LunchFlowSyncRequest
+import com.lofuyu.borderledger.accounts.LunchFlowSelectionReceipt
+import com.lofuyu.borderledger.accounts.LunchFlowSyncReceipt
 import com.lofuyu.borderledger.accounts.PendingCancellationRequest
 import com.lofuyu.borderledger.accounts.ProviderAccountId
 import com.lofuyu.borderledger.accounts.SyncRequest
 import org.json.JSONObject
+
+private fun lunchFlowSelections(value: ReadableMap): List<LunchFlowSelection> {
+    val values = requireNotNull(value.getArray("accounts"))
+    require(values.size() <= 25)
+    return (0 until values.size()).map { index ->
+        val account = requireNotNull(values.getMap(index))
+        LunchFlowSelection(
+            providerAccountId = requireNotNull(account.text("providerAccountId")),
+            currency = requireNotNull(account.text("currency")),
+            kind = requireNotNull(account.text("kind")),
+        )
+    }
+}
+
+private fun lunchFlowSelectionResultId(receipt: LunchFlowSelectionReceipt) =
+    "selected:${receipt.selected}:queued:${receipt.queued}"
+
+private fun lunchFlowSyncResultId(receipt: LunchFlowSyncReceipt) =
+    "accounts:${receipt.accounts}:queued:${receipt.queued}"
 
 class AccountsModule(context: ReactApplicationContext, private val r: NativeServiceRuntime): NativeAccountsSpec(context) {
     private val s=BridgeSupport(r)
@@ -26,6 +50,12 @@ class AccountsModule(context: ReactApplicationContext, private val r: NativeServ
         BridgePayloads.accountPage(r.container.accountRepository.listAccounts(AccountPageRequest(v.text("cursor")?.let(::AccountCursor), limit)))
     }
     override fun readConnections(p: Promise)=s.call(p) { r.container.accountRepository.listConnections().map(BridgePayloads::connection) }
+    override fun readLunchFlowAccounts(p: Promise)=s.call(p) {
+        BridgePayloads.lunchFlowAccounts(r.container.accountRepository.readLunchFlowAccounts())
+    }
+    override fun readLunchFlowStatus(p: Promise)=s.call(p) {
+        BridgePayloads.lunchFlowAccounts(r.container.accountRepository.readLunchFlowStatus())
+    }
     override fun startConnect(v: ReadableMap, p: Promise)=s.call(p) {
         val op = requireNotNull(v.text("operationId"))
         r.external.start(ExternalStartRequest(op,"plaid",JSONObject().put("reconnectConnectionId",v.text("reconnectConnectionId") ?: JSONObject.NULL)))
@@ -54,6 +84,21 @@ class AccountsModule(context: ReactApplicationContext, private val r: NativeServ
     override fun startSync(v: ReadableMap, p: Promise)=s.call(p) {
         val op = requireNotNull(v.text("operationId"))
         r.write(WriteRequest(op,"bank_sync","") { r.container.accountRepository.sync(SyncRequest(IdempotencyKey(op))).operationId })
+    }
+    override fun startLunchFlowAccountSelection(v: ReadableMap, p: Promise)=s.call(p) {
+        val op = requireNotNull(v.text("operationId"))
+        val selections = lunchFlowSelections(v)
+        r.write(WriteRequest(op, "lunchflow_account_selection", selections.toString()) {
+            lunchFlowSelectionResultId(r.container.accountRepository.selectLunchFlowAccounts(
+                LunchFlowSelectionRequest(selections, IdempotencyKey(op)),
+            ))
+        })
+    }
+    override fun startLunchFlowSync(v: ReadableMap, p: Promise)=s.call(p) {
+        val op = requireNotNull(v.text("operationId"))
+        r.write(WriteRequest(op, "lunchflow_sync", "") {
+            lunchFlowSyncResultId(r.container.accountRepository.syncLunchFlow(LunchFlowSyncRequest(IdempotencyKey(op))))
+        })
     }
     override fun startDisconnect(v: ReadableMap, p: Promise)=s.call(p) {
         val op = requireNotNull(v.text("operationId"))
