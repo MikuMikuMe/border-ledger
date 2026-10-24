@@ -42,9 +42,11 @@ function BottomBar({selected, dark, onSelect}: {selected: Page; dark: boolean; o
   return <View accessibilityRole="tablist" style={[styles.bar, themeStyles[Number(dark)].rule]}>
     {primary.map(page => <BottomItem key={page} page={page} active={active === page} dark={dark} onSelect={onSelect}/>)}
   </View>;
-}type Props = {
+}
+type Props = {
   dark: boolean;
   initialDestination: ShellDestination;
+  isFocused?: boolean;
   onAbout(): void;
   onSignOut(): Promise<void>;
   renderPage(page: Page, onOpen: (page: Page) => void): React.ReactNode;
@@ -60,31 +62,33 @@ function MorePage({dark, onOpen, onAbout, onSignOut, busy, status}: {dark: boole
     {status ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.signOut, themeStyles[Number(dark)].error]}>{status}</Text> : null}
   </>;
 }
-function useShellPath(initialDestination: ShellDestination) {
+function useShellPath(initialDestination: ShellDestination, isFocused: boolean) {
   const [path, setPath] = useState<Page[]>(() => initialPath(initialDestination));
   const selected = path[path.length - 1];
   useEffect(() => setPath(initialPath(initialDestination)), [initialDestination]);
   useEffect(() => {
+    if (!isFocused) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (path.length === 1 && selected === 'overview') return false;
       setPath(backPath(path));
       return true;
     });
     return () => subscription.remove();
-  }, [path, selected]);
+  }, [isFocused, path, selected]);
   return {path, setPath, selected};
 }
 function SettingsLinks({dark, onOpen}: {dark: boolean; onOpen(page: Page): void}) {
   return <><Text accessibilityRole="header" style={[styles.section, themeStyles[Number(dark)].muted]}>Capture and access</Text>{settingsLinks.map(page => <NavigationRow key={page} page={page} dark={dark} onOpen={onOpen}/>)}</>;
 }
-export function ShellNavigation({dark, initialDestination, onAbout, onSignOut, renderPage}: Props) {
-  const {path, setPath, selected} = useShellPath(initialDestination);
+export function ShellNavigation({dark, initialDestination, isFocused = true, onAbout, onSignOut, renderPage}: Props) {
+  const {path, setPath, selected} = useShellPath(initialDestination, isFocused);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const canGoBack = path.length > 1;
   useEffect(() => { scroll.current?.scrollTo({y: 0, animated: false}); }, [selected]);
-  const open = (page: Page) => setPath(previous => [...previous, page]);  const signOut = async () => {
+  const open = (page: Page) => setPath(previous => [...previous, page]);
+  const signOut = async () => {
     if (busy) return;
     setBusy(true); setStatus('');
     try { await onSignOut(); } catch { setStatus('Sign-out could not finish. Please try again.'); }

@@ -1,4 +1,5 @@
 import React, {useEffect, useState} from 'react';
+import {useIsFocused} from '@react-navigation/native';
 import type {ShellDestination} from '@/features/auth/authModel';
 import {FinanceScreen} from './FinanceScreen';
 import {DetailsScreen} from './DetailsScreen';
@@ -19,5 +20,6 @@ function DestinationPanel({dark, selected, onOpen}: {dark: boolean; selected: Pa
   return <ToolsScreen dark={dark} destination={selected} onCapture={() => onOpen('capture')}/>;
 }
 export function AppShellScreen(props: Props) {
-  return <ShellNavigation {...props} renderPage={(page, onOpen) => <DestinationPanel dark={props.dark} selected={page} onOpen={onOpen}/>}/>;
+  const isFocused = useIsFocused();
+  return <ShellNavigation {...props} isFocused={isFocused} renderPage={(page, onOpen) => <DestinationPanel dark={props.dark} selected={page} onOpen={onOpen}/>}/>;
 }
