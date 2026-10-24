@@ -1,3 +1,4 @@
+import type { LedgerContext } from './tenant-context';
 import type { D1Database, LedgerId } from './db-types';
 
 function text(value: string, field: string, max = 512) {
@@ -13,7 +14,6 @@ function timestamp(value: string, field: string) {
 
 export interface OwnerAuthRequestInput {
   id: string;
-  ledgerId?: LedgerId;
   deviceId?: string | null;
   stateHash: string;
   pkceChallengeHash: string;
@@ -46,12 +46,12 @@ export interface SecureOwnerAuthRequestInput extends OwnerAuthRequestInput {
   environmentHash: string;
 }
 
-export async function createSecureOwnerAuthRequest(db: D1Database, input: SecureOwnerAuthRequestInput) {
+export async function createSecureOwnerAuthRequest(db: D1Database, context: LedgerContext, input: SecureOwnerAuthRequestInput) {
   await db.prepare(`INSERT INTO mobile_auth_requests
     (id, ledger_id, device_id, state_hash, pkce_challenge_hash, request_digest, expires_at, callback_origin, callback_path, environment_hash)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
     text(input.id, 'auth request id'),
-    input.ledgerId ?? 'personal',
+    context.ledgerId,
     input.deviceId ? text(input.deviceId, 'auth device id') : null,
     text(input.stateHash, 'state hash'),
     text(input.pkceChallengeHash, 'PKCE challenge hash'),
@@ -63,14 +63,14 @@ export async function createSecureOwnerAuthRequest(db: D1Database, input: Secure
   ).run();
 }
 
-export async function readOwnerAuthRequest(db: D1Database, requestId: string) {
+export async function readOwnerAuthRequest(db: D1Database, context: LedgerContext, requestId: string) {
   return db.prepare(`SELECT id, ledger_id, device_id, state_hash, pkce_challenge_hash, request_digest,
       expires_at, consumed_at, revoked_at, code_hash, code_expires_at, callback_origin, callback_path,
       environment_hash, approved_subject_hash, approved_at
-    FROM mobile_auth_requests WHERE id = ?`).bind(text(requestId, 'auth request id')).first<OwnerAuthRequestRow>();
+    FROM mobile_auth_requests WHERE ledger_id = ? AND id = ?`).bind(context.ledgerId, text(requestId, 'auth request id')).first<OwnerAuthRequestRow>();
 }
 
-export async function approveOwnerAuthRequest(db: D1Database, input: {
+export async function approveOwnerAuthRequest(db: D1Database, context: LedgerContext, input: {
   requestId: string;
   codeHash: string;
   codeExpiresAt: string;
@@ -78,22 +78,22 @@ export async function approveOwnerAuthRequest(db: D1Database, input: {
   approvedAt: string;
 }) {
   return db.prepare(`UPDATE mobile_auth_requests SET code_hash = ?, code_expires_at = ?, approved_subject_hash = ?, approved_at = ?
-    WHERE id = ? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).bind(
+    WHERE ledger_id = ? AND id = ? AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).bind(
     text(input.codeHash, 'code hash'),
     timestamp(input.codeExpiresAt, 'code expiry'),
     text(input.approvedSubjectHash, 'approved subject hash'),
     timestamp(input.approvedAt, 'approval time'),
-    text(input.requestId, 'auth request id'),
+    context.ledgerId, text(input.requestId, 'auth request id'),
     timestamp(input.approvedAt, 'approval comparison time'),
   ).run();
 }
 
-export async function createOwnerAuthRequest(db: D1Database, input: OwnerAuthRequestInput) {
+export async function createOwnerAuthRequest(db: D1Database, context: LedgerContext, input: OwnerAuthRequestInput) {
   await db.prepare(`INSERT INTO mobile_auth_requests
     (id, ledger_id, device_id, state_hash, pkce_challenge_hash, request_digest, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(
     text(input.id, 'auth request id'),
-    input.ledgerId ?? 'personal',
+    context.ledgerId,
     input.deviceId ? text(input.deviceId, 'auth device id') : null,
     text(input.stateHash, 'state hash'),
     text(input.pkceChallengeHash, 'PKCE challenge hash'),
@@ -104,7 +104,6 @@ export async function createOwnerAuthRequest(db: D1Database, input: OwnerAuthReq
 
 export interface OwnerSessionFamilyInput {
   id: string;
-  ledgerId?: LedgerId;
   subjectHash: string;
   accessGeneration?: number;
   refreshGeneration?: number;
@@ -114,7 +113,7 @@ export interface OwnerSessionFamilyInput {
   refreshTokenHash: string;
 }
 
-export async function createOwnerSessionFamily(db: D1Database, input: OwnerSessionFamilyInput) {
+export async function createOwnerSessionFamily(db: D1Database, context: LedgerContext, input: OwnerSessionFamilyInput) {
   const accessGeneration = input.accessGeneration ?? 1;
   const refreshGeneration = input.refreshGeneration ?? 1;
   if (!Number.isInteger(accessGeneration) || accessGeneration < 1 || !Number.isInteger(refreshGeneration) || refreshGeneration < 1) throw new RangeError('Session generations must be positive.');
@@ -126,7 +125,7 @@ export async function createOwnerSessionFamily(db: D1Database, input: OwnerSessi
       (id, ledger_id, subject_hash, access_generation, refresh_generation, access_expires_at, refresh_expires_at, stay_signed_in_until)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       familyId,
-      input.ledgerId ?? 'personal',
+      context.ledgerId,
       text(input.subjectHash, 'subject hash'),
       accessGeneration,
       refreshGeneration,
@@ -135,9 +134,9 @@ export async function createOwnerSessionFamily(db: D1Database, input: OwnerSessi
       input.staySignedInUntil ? timestamp(input.staySignedInUntil, 'stay signed-in expiry') : null,
     ),
     db.prepare(`INSERT INTO owner_refresh_generations
-      (family_id, generation, token_hash, issued_at, expires_at)
-      VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)`).bind(
-      familyId,
+      (ledger_id, family_id, generation, token_hash, issued_at, expires_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`).bind(
+      context.ledgerId, familyId,
       refreshGeneration,
       text(input.refreshTokenHash, 'refresh token hash'),
       refreshExpiresAt,
@@ -147,7 +146,6 @@ export async function createOwnerSessionFamily(db: D1Database, input: OwnerSessi
 
 export interface ReplayRecordInput {
   id: string;
-  ledgerId?: LedgerId;
   requestKind: string;
   requestDigest: string;
   responseCiphertext: string;
@@ -156,13 +154,13 @@ export interface ReplayRecordInput {
   ttlSeconds: number;
 }
 
-export async function putReplayRecord(db: D1Database, input: ReplayRecordInput) {
+export async function putReplayRecord(db: D1Database, context: LedgerContext, input: ReplayRecordInput) {
   if (input.ttlSeconds !== 60) throw new RangeError('Replay records must use the 60 second TTL.');
   await db.prepare(`INSERT INTO owner_replay_records
     (id, ledger_id, request_kind, request_digest, response_ciphertext, response_iv, ttl_seconds, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(
     text(input.id, 'replay id'),
-    input.ledgerId ?? 'personal',
+    context.ledgerId,
     text(input.requestKind, 'replay request kind', 128),
     text(input.requestDigest, 'replay request digest'),
     text(input.responseCiphertext, 'replay ciphertext', 64 * 1024),
@@ -172,21 +170,21 @@ export async function putReplayRecord(db: D1Database, input: ReplayRecordInput) 
   ).run();
 }
 
-export async function readReplayRecord(db: D1Database, input: { ledgerId?: LedgerId; requestKind: string; requestDigest: string; now: string }) {
+export async function readReplayRecord(db: D1Database, context: LedgerContext, input: { requestKind: string; requestDigest: string; now: string }) {
   return db.prepare(`SELECT id, ledger_id, request_kind, request_digest, response_ciphertext, response_iv, ttl_seconds, expires_at
     FROM owner_replay_records WHERE ledger_id = ? AND request_kind = ? AND request_digest = ? AND expires_at > ?`).bind(
-    input.ledgerId ?? 'personal',
+    context.ledgerId,
     text(input.requestKind, 'replay request kind', 128),
     text(input.requestDigest, 'replay request digest'),
     timestamp(input.now, 'replay lookup time'),
   ).first<ReplayRecordInput & { ledger_id: LedgerId }>();
 }
 
-export async function cleanupExpiredReplayRecords(db: D1Database, now: string) {
-  await db.prepare('DELETE FROM owner_replay_records WHERE expires_at <= ?').bind(timestamp(now, 'replay cleanup time')).run();
+export async function cleanupExpiredReplayRecords(db: D1Database, context: LedgerContext, now: string) {
+  await db.prepare('DELETE FROM owner_replay_records WHERE ledger_id = ? AND expires_at <= ?').bind(context.ledgerId, timestamp(now, 'replay cleanup time')).run();
 }
 
-export async function revokeOwnerSessionFamily(db: D1Database, familyId: string, revokedAt: string) {
+export async function revokeOwnerSessionFamily(db: D1Database, context: LedgerContext, familyId: string, revokedAt: string) {
   await db.prepare(`UPDATE owner_session_families SET revoked_at = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND revoked_at IS NULL`).bind(timestamp(revokedAt, 'session revocation time'), text(familyId, 'session family id')).run();
+    WHERE ledger_id = ? AND id = ? AND revoked_at IS NULL`).bind(timestamp(revokedAt, 'session revocation time'), context.ledgerId, text(familyId, 'session family id')).run();
 }

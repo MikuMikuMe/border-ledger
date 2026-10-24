@@ -15,7 +15,7 @@ import worker from '../worker/index';
 const fixtures: Array<{ close(): void }> = [];
 const owner: OwnerContext = {
   credentialType: 'owner',
-  ledgerId: 'personal',
+  ledgerId: 'personal', userId: 'owner',
   familyId: 'task14-owner-family',
   subjectHash: 'task14-owner-subject',
   deviceId: 'task14-device',

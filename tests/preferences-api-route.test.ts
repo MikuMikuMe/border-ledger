@@ -1,6 +1,7 @@
+import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it } from 'vitest';
 import worker from '../worker/index';
-import { applyMigrations, createD1Fixture, task3MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task22MigrationNames } from './helpers/d1';
 
 const ORIGIN = 'https://pf.example.com';
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -9,7 +10,7 @@ function env(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
-    LEDGER_API_KEY: 'legacy-key',
+    ...VERIFIED_WEB_ENV,
     LEDGER_APP_ORIGIN: ORIGIN,
   };
 }
@@ -18,7 +19,7 @@ function request(path: string, init: RequestInit = {}) {
   return new Request(`${ORIGIN}${path}`, {
     ...init,
     headers: {
-      authorization: 'Bearer legacy-key',
+      ...VERIFIED_WEB_HEADERS,
       origin: ORIGIN,
       'content-type': 'application/json',
       ...(init.headers ?? {}),
@@ -28,7 +29,8 @@ function request(path: string, init: RequestInit = {}) {
 
 async function fixture() {
   const value = await createD1Fixture();
-  await applyMigrations(value.db, task3MigrationNames);
+  await applyMigrations(value.db, task22MigrationNames);
+  await provisionWebOwner(value.db);
   fixtures.push(value);
   return value;
 }

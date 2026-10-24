@@ -1,5 +1,5 @@
 import { afterEach } from 'vitest';
-import { applyMigrations, createD1Fixture, task18MigrationNames } from './d1';
+import { applyMigrations, createD1Fixture, task18MigrationNames, task22MigrationNames } from './d1';
 import { hashSecret } from '../../worker/mobile-auth';
 import type { BankAlertEventInput } from '../../src/domain/bank-alerts';
 
@@ -14,9 +14,11 @@ afterEach(async () => {
   while (fixtures.length > 0) await fixtures.pop()?.dispose();
 });
 
-export async function createAlertFixture(options: { secondAccount?: boolean; migrationNames?: readonly string[] } = {}) {
+export async function createAlertFixture(options: { secondAccount?: boolean; migrationNames?: readonly string[]; historicalSchema?: boolean } = {}) {
   const fixture = await createD1Fixture();
-  await applyMigrations(fixture.db, options.migrationNames ?? task18MigrationNames);
+  const requested = options.migrationNames ?? task18MigrationNames;
+  await applyMigrations(fixture.db, requested);
+  if (!options.historicalSchema) await applyMigrations(fixture.db, task22MigrationNames);
   await fixture.db.batch([
     fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind('account-boc', 'Synthetic BOC card', 'BOC', 'CAD', 'multi', 'credit', 'connected'),

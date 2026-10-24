@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyMigrations, createD1Fixture, task3MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task3MigrationNames, task22MigrationNames } from './helpers/d1';
 import { appendAnnotationRevision } from '../worker/annotation-store';
 import { createImportPreview, publishImport, stageImportChunk, cleanupExpiredImportStaging } from '../worker/import-store';
 import { createOwnerAuthRequest, createOwnerSessionFamily, putReplayRecord, cleanupExpiredReplayRecords } from '../worker/owner-session-store';
@@ -29,21 +29,22 @@ async function setup() {
 describe('Task 3 native-parity stores', () => {
   it('keeps owner auth generations separate from bounded encrypted replay records', async () => {
     const fixture = await setup();
-    await createOwnerAuthRequest(fixture.db, {
+    await applyMigrations(fixture.db, task22MigrationNames);
+    await createOwnerAuthRequest(fixture.db, { userId: 'owner', ledgerId: 'personal' }, {
       id: 'auth-request-1',
       stateHash: 'hash-state',
       pkceChallengeHash: 'hash-pkce',
       requestDigest: 'digest-request',
       expiresAt: '2026-10-13T00:10:00.000Z',
     });
-    await createOwnerSessionFamily(fixture.db, {
+    await createOwnerSessionFamily(fixture.db, { userId: 'owner', ledgerId: 'personal' }, {
       id: 'family-1',
       subjectHash: 'hash-subject',
       accessExpiresAt: '2026-10-13T00:15:00.000Z',
       refreshExpiresAt: '2026-10-14T00:00:00.000Z',
       refreshTokenHash: 'hash-refresh-1',
     });
-    await putReplayRecord(fixture.db, {
+    await putReplayRecord(fixture.db, { userId: 'owner', ledgerId: 'personal' }, {
       id: 'replay-1',
       requestKind: 'owner-exchange',
       requestDigest: 'digest-request',
@@ -52,7 +53,7 @@ describe('Task 3 native-parity stores', () => {
       expiresAt: '2026-10-13T00:01:00.000Z',
       ttlSeconds: 60,
     });
-    await expect(putReplayRecord(fixture.db, {
+    await expect(putReplayRecord(fixture.db, { userId: 'owner', ledgerId: 'personal' }, {
       id: 'replay-too-long',
       requestKind: 'owner-refresh',
       requestDigest: 'digest-refresh',
@@ -68,7 +69,7 @@ describe('Task 3 native-parity stores', () => {
       (SELECT COUNT(*) FROM owner_refresh_generations) AS generations,
       (SELECT COUNT(*) FROM owner_replay_records) AS replays`).all();
     expect(records.results).toEqual([{ auth_requests: 1, families: 1, generations: 1, replays: 1 }]);
-    await cleanupExpiredReplayRecords(fixture.db, '2026-10-13T00:01:00.000Z');
+    await cleanupExpiredReplayRecords(fixture.db, { userId: 'owner', ledgerId: 'personal' }, '2026-10-13T00:01:00.000Z');
     await expect(fixture.db.prepare('SELECT id FROM owner_session_families').all()).resolves.toMatchObject({ results: [{ id: 'family-1' }] });
     await expect(fixture.db.prepare('SELECT id FROM owner_replay_records').all()).resolves.toMatchObject({ results: [] });
   });

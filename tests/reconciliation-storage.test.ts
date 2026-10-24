@@ -56,12 +56,9 @@ describe('durable statement reconciliation', () => {
   }, 15_000);
 
   it('archives duplicate confirmation evidence before installing the 0009 unique indexes', async () => {
-    const fixture = await createAlertFixture({ migrationNames: task10PreUniquenessWithFx });
+    const fixture = await createAlertFixture({ migrationNames: task10PreUniquenessWithFx, historicalSchema: true });
     await applyMigrations(fixture.db, task10PreUniquenessMigrationNames);
-    await postAlerts(fixture.db, [
-      event({ eventId: '00000000-0000-4000-8000-000000000041', observationId: 'observation-41' }),
-      event({ eventId: '00000000-0000-4000-8000-000000000042', observationId: 'observation-42' }),
-    ]);
+    await seedHistoricalAlertInputs(fixture.db);
     await fixture.db.batch([
       fixture.db.prepare(`INSERT INTO transactions (id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint)
         VALUES ('migration-target-1', 'account-boc', '2026-10-13', 'Synthetic merchant', -1234, 'CAD', 'Groceries', 'expense', 'confirmed', 'statement', 'migration-target-1')`),
@@ -476,3 +473,18 @@ describe('durable statement reconciliation', () => {
     });
   });
 });
+
+// Migration 0009 is tested against its historical schema, without invoking current auth APIs.
+async function seedHistoricalAlertInputs(db: import('../worker/db-types').D1Database) {
+  for (const suffix of ['41', '42']) {
+    const id = '00000000-0000-4000-8000-0000000000' + suffix;
+    await db.batch([
+      db.prepare(`INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint)
+        VALUES (?,'account-boc','2026-10-13','Synthetic merchant',-1234,'CAD','Other','expense','provisional','alert',?)`).bind(id,id),
+      db.prepare(`INSERT INTO alert_events(id,event_id,observation_id,source_profile_id,parser_version,captured_at,event_time_basis,event_type,direction,account_id,payload_digest)
+        VALUES (?,?,?,'source-boc','test','2026-10-13T00:00:00Z','notification_posted','purchase_notice','outflow','account-boc',?)`).bind(id,id,'observation-'+suffix,'digest-'+suffix),
+      db.prepare(`INSERT INTO alert_projections(id,event_id,transaction_id,state,counted_currency,counted_amount_minor)
+        VALUES (?,?,?,'provisional','CAD',-1234)`).bind(id,id,id),
+    ]);
+  }
+}

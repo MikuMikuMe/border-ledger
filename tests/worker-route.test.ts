@@ -1,3 +1,4 @@
+import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS } from './helpers/web-identity';
 import { describe, expect, it, vi } from 'vitest';
 import worker from '../worker/index';
 import { encryptAccessToken } from '../worker/plaid';
@@ -12,11 +13,11 @@ describe('Worker route boundaries', () => {
   it('does not let the raw Worker hostname use the API key as an alternate API origin', async () => {
     const prepare = vi.fn(() => ({ bind: () => ({ all: async () => ({ results: [] }) }) }));
     const response = await worker.fetch(new Request('https://border-ledger.workers.dev/api/accounts', {
-      headers: { authorization: 'Bearer test-key' },
+      headers: { ...VERIFIED_WEB_HEADERS },
     }), {
       DB: { prepare, batch: vi.fn() },
       ASSETS: { fetch: vi.fn() },
-      LEDGER_API_KEY: 'test-key',
+      ...VERIFIED_WEB_ENV,
       LEDGER_APP_ORIGIN: 'https://pf.example.com',
     } as never);
 
@@ -37,6 +38,10 @@ describe('Worker route boundaries', () => {
             statement.values = values;
             statements.push({ sql, values });
             return statement;
+          },
+          async first<T>() {
+            if (sql.includes('FROM user_identities')) return { userId: 'owner', ledgerId: 'personal' } as T;
+            return null;
           },
           async all<T>() {
             if (sql.includes('FROM plaid_items')) return { results: [{ item_id: 'item-1', access_token_ciphertext: sealed.ciphertext, access_token_iv: sealed.iv, institution_name: 'RBC Royal Bank' }] as T[] };
@@ -60,12 +65,12 @@ describe('Worker route boundaries', () => {
 
     const response = await worker.fetch(new Request('https://pf.example.com/api/plaid/disconnect', {
       method: 'POST',
-      headers: { authorization: 'Bearer test-key', origin: 'https://pf.example.com', 'content-type': 'application/json' },
+      headers: { ...VERIFIED_WEB_HEADERS, origin: 'https://pf.example.com', 'content-type': 'application/json' },
       body: JSON.stringify({ itemId: 'item-1' }),
     }), {
       DB: db,
       ASSETS: { fetch: vi.fn() },
-      LEDGER_API_KEY: 'test-key',
+      ...VERIFIED_WEB_ENV,
       LEDGER_APP_ORIGIN: 'https://pf.example.com',
       PLAID_CLIENT_ID: 'client-id',
       PLAID_SECRET: 'secret',

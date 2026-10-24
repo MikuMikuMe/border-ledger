@@ -61,6 +61,7 @@ function config(clock: ReturnType<typeof makeClock>): MobileAuthConfig {
 }
 
 async function seedLedger(db: import('../worker/db-types').D1Database) {
+  await db.prepare("INSERT INTO user_identities(issuer,subject,user_id) VALUES ('https://team.cloudflareaccess.com', ?, 'owner')").bind(OWNER_SUBJECT).run();
   await db.batch([
     db.prepare('INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind('account-boc', 'Synthetic BOC credit', 'BOC', 'CAD', 'multi', 'credit', 'connected'),
@@ -165,7 +166,7 @@ export async function runTask4Cases() {
     }, cfg);
     assert.deepEqual(duplicateApproval, ownerFlow.approval);
 
-    const storedRequest = await fixture.db.prepare('SELECT state_hash, pkce_challenge_hash, code_hash, approved_subject_hash, callback_origin, callback_path FROM mobile_auth_requests WHERE id = ?')
+    const storedRequest = await fixture.db.prepare('SELECT state_hash, pkce_challenge_hash, code_hash, approved_subject_hash, callback_origin, callback_path FROM hosted_auth_requests WHERE id = ?')
       .bind(ownerFlow.start.requestId).all<Record<string, string>>();
     assert.equal(storedRequest.results.length, 1);
     assert.notEqual(storedRequest.results[0].state_hash, ownerFlow.state);
@@ -180,7 +181,7 @@ export async function runTask4Cases() {
       environment: cfg.environment,
       callbackUrl: cfg.callbackUrl,
       consent: true,
-    }, cfg), /approved|identity/i);
+    }, cfg), /Access is not enabled/);
 
     await expectReject(() => exchangeOwnerCode(fixture.db, {
       requestId: ownerFlow.start.requestId,
@@ -371,7 +372,7 @@ export async function runTask4Cases() {
       environment: cfg.environment,
       sourceScopes: [{ sourceProfileId: 'source-boc', accountId: 'account-boc', currency: 'CAD', hintKind: 'card_suffix', hintValue: '1234' }],
     }, cfg), /ambiguous|collision|review|hint/i);
-    const collisionStatus = await fixture.db.prepare('SELECT status FROM device_pairings WHERE id = ?')
+    const collisionStatus = await fixture.db.prepare('SELECT status FROM hosted_device_pairings WHERE id = ?')
       .bind(collisionPairing.pairingId).all<{ status: string }>();
     assert.equal(collisionStatus.results[0].status, 'pending');
 

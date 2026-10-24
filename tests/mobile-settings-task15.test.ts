@@ -4,7 +4,7 @@ import registeredCurrencies from '../contracts/currencies.json';
 import worker from '../worker/index';
 import { createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
 import { MAX_ALLOWED_CURRENCIES } from '../worker/mobile-device-service';
-import { applyMigrations, createD1Fixture, task15CurrencyMigrationNames, task15MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task15CurrencyMigrationNames, task15MigrationNames, task22MigrationNames } from './helpers/d1';
 
 const ORIGIN = 'https://pf.example.com';
 const ENVIRONMENT = 'sandbox';
@@ -22,6 +22,7 @@ const fixtures: Array<{ dispose(): Promise<void> }> = [];
 async function fixture(options: { oldApproval?: boolean } = {}, migrationNames: readonly string[] = task15MigrationNames) {
   const value = await createD1Fixture();
   await applyMigrations(value.db, migrationNames);
+  await applyMigrations(value.db, task22MigrationNames);
   const suffix = crypto.randomUUID();
   const accountId = `task15-account-${suffix}`;
   const sourceId = `task15-source-${suffix}`;

@@ -180,8 +180,32 @@ CREATE TRIGGER import_chunks_ledger_immutable BEFORE UPDATE OF ledger_id ON impo
 CREATE TRIGGER import_preview_errors_ledger_scope_insert BEFORE INSERT ON import_preview_errors BEGIN SELECT RAISE(ABORT, 'import_preview_errors ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)); END;
 CREATE TRIGGER import_preview_errors_ledger_scope_update BEFORE UPDATE ON import_preview_errors BEGIN SELECT RAISE(ABORT, 'import_preview_errors ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)); END;
 CREATE TRIGGER import_preview_errors_ledger_immutable BEFORE UPDATE OF ledger_id ON import_preview_errors BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
-CREATE TRIGGER import_duplicate_decisions_ledger_scope_insert BEFORE INSERT ON import_duplicate_decisions BEGIN SELECT RAISE(ABORT, 'import_duplicate_decisions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.statement_transaction_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.candidate_transaction_id AND ledger_id = NEW.ledger_id)); END;
-CREATE TRIGGER import_duplicate_decisions_ledger_scope_update BEFORE UPDATE ON import_duplicate_decisions BEGIN SELECT RAISE(ABORT, 'import_duplicate_decisions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.statement_transaction_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.candidate_transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_duplicate_decisions_ledger_scope_insert BEFORE INSERT ON import_duplicate_decisions BEGIN
+  SELECT RAISE(ABORT, 'import_duplicate_decisions ledger mismatch') WHERE NOT EXISTS (
+    SELECT 1 FROM import_previews p JOIN transactions candidate
+      ON candidate.id = NEW.candidate_transaction_id AND candidate.ledger_id = p.ledger_id AND candidate.account_id = p.account_id
+    WHERE p.id = NEW.preview_id AND p.ledger_id = NEW.ledger_id AND (
+      EXISTS (SELECT 1 FROM transactions statement WHERE statement.id = NEW.statement_transaction_id
+        AND statement.ledger_id = p.ledger_id AND statement.account_id = p.account_id)
+      OR EXISTS (SELECT 1 FROM import_chunks chunk, json_each(chunk.rows_json) staged
+        WHERE chunk.preview_id = p.id AND chunk.ledger_id = p.ledger_id
+          AND json_extract(staged.value, '$.rowId') = NEW.statement_transaction_id
+          AND json_extract(staged.value, '$.accountId') = p.account_id)
+    )
+  ); END;
+CREATE TRIGGER import_duplicate_decisions_ledger_scope_update BEFORE UPDATE ON import_duplicate_decisions BEGIN
+  SELECT RAISE(ABORT, 'import_duplicate_decisions ledger mismatch') WHERE NOT EXISTS (
+    SELECT 1 FROM import_previews p JOIN transactions candidate
+      ON candidate.id = NEW.candidate_transaction_id AND candidate.ledger_id = p.ledger_id AND candidate.account_id = p.account_id
+    WHERE p.id = NEW.preview_id AND p.ledger_id = NEW.ledger_id AND (
+      EXISTS (SELECT 1 FROM transactions statement WHERE statement.id = NEW.statement_transaction_id
+        AND statement.ledger_id = p.ledger_id AND statement.account_id = p.account_id)
+      OR EXISTS (SELECT 1 FROM import_chunks chunk, json_each(chunk.rows_json) staged
+        WHERE chunk.preview_id = p.id AND chunk.ledger_id = p.ledger_id
+          AND json_extract(staged.value, '$.rowId') = NEW.statement_transaction_id
+          AND json_extract(staged.value, '$.accountId') = p.account_id)
+    )
+  ); END;
 CREATE TRIGGER import_duplicate_decisions_ledger_immutable BEFORE UPDATE OF ledger_id ON import_duplicate_decisions BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
 CREATE TRIGGER ledger_preferences_ledger_scope_insert BEFORE INSERT ON ledger_preferences BEGIN SELECT RAISE(ABORT, 'ledger_preferences ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
 CREATE TRIGGER ledger_preferences_ledger_scope_update BEFORE UPDATE ON ledger_preferences BEGIN SELECT RAISE(ABORT, 'ledger_preferences ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;

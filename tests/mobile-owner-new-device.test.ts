@@ -72,6 +72,7 @@ describe('owner login from an unpaired installation', () => {
   it.each([false, true])('binds capture only after consent without reusing an installation ID (collision: %s)', async (existingDevice) => {
     const fixture = createSqliteD1Fixture();
     fixtures.push(fixture);
+    await fixture.db.prepare("INSERT INTO user_identities(issuer,subject,user_id) VALUES ('https://team.cloudflareaccess.com', 'owner-subject', 'owner')").run();
     if (existingDevice) await fixture.db.prepare("INSERT INTO mobile_devices (id, ledger_id, device_name, platform, status) VALUES (?, 'personal', 'Existing capture device', 'android', 'paired')").bind(DEVICE_ID).run();
     const env = {
       DB: fixture.db,

@@ -1,12 +1,13 @@
+import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it } from 'vitest';
 import worker from '../worker/index';
-import { createD1Fixture } from './helpers/d1';
+import { createD1Fixture, task22MigrationNames } from './helpers/d1';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 const env = (db: Awaited<ReturnType<typeof createD1Fixture>>['db']) => ({
   DB: db,
   ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
-  LEDGER_API_KEY: 'test-key',
+  ...VERIFIED_WEB_ENV,
   LEDGER_APP_ORIGIN: 'https://pf.example.com',
 });
 
@@ -15,6 +16,7 @@ afterEach(async () => {
 });
 
 async function seed(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
+  await provisionWebOwner(db);
   const recentSyncAt = new Date(Date.now() - 60_000).toISOString();
   await db.batch([
     db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)').bind('account-cad', 'CAD account', 'RBC', 'CAD', 'chequing', 'connected'),
@@ -33,7 +35,7 @@ async function seed(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
 
 describe('recurring API routes', () => {
   it('does not expose the recurring projection without private authorization', async () => {
-    const fixture = await createD1Fixture();
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const response = await worker.fetch(new Request('https://pf.example.com/api/recurring'), env(fixture.db) as never);
@@ -42,35 +44,35 @@ describe('recurring API routes', () => {
   });
 
   it('reads the private recurring projection and summary without contacting Plaid', async () => {
-    const fixture = await createD1Fixture();
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const runtime = env(fixture.db);
 
-    const pageResponse = await worker.fetch(new Request('https://pf.example.com/api/recurring?limit=1', { headers: { authorization: 'Bearer test-key' } }), runtime as never);
+    const pageResponse = await worker.fetch(new Request('https://pf.example.com/api/recurring?limit=1', { headers: { ...VERIFIED_WEB_HEADERS } }), runtime as never);
     expect(pageResponse.status).toBe(200);
     expect(await pageResponse.json()).toMatchObject({ streams: [{ id: 'item-1:stream-1' }], state: 'ready' });
 
-    const summaryResponse = await worker.fetch(new Request('https://pf.example.com/api/recurring/summary?start=2026-01-01&end=2026-10-31&today=2026-10-13', { headers: { authorization: 'Bearer test-key' } }), runtime as never);
+    const summaryResponse = await worker.fetch(new Request('https://pf.example.com/api/recurring/summary?start=2026-01-01&end=2026-10-31&today=2026-10-13', { headers: { ...VERIFIED_WEB_HEADERS } }), runtime as never);
     expect(summaryResponse.status).toBe(200);
     expect(await summaryResponse.json()).toMatchObject({ streamCount: 1, monthlyByCurrency: { CAD: expect.any(Number) } });
   });
 
   it('requires bounded queries and same-origin classification mutations', async () => {
-    const fixture = await createD1Fixture();
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const runtime = env(fixture.db);
 
-    const invalid = await worker.fetch(new Request('https://pf.example.com/api/recurring?limit=101', { headers: { authorization: 'Bearer test-key' } }), runtime as never);
+    const invalid = await worker.fetch(new Request('https://pf.example.com/api/recurring?limit=101', { headers: { ...VERIFIED_WEB_HEADERS } }), runtime as never);
     expect(invalid.status).toBe(400);
 
-    const invalidSummary = await worker.fetch(new Request('https://pf.example.com/api/recurring/summary?start=2026-10-31&end=2026-01-01&today=2026-10-13', { headers: { authorization: 'Bearer test-key' } }), runtime as never);
+    const invalidSummary = await worker.fetch(new Request('https://pf.example.com/api/recurring/summary?start=2026-10-31&end=2026-01-01&today=2026-10-13', { headers: { ...VERIFIED_WEB_HEADERS } }), runtime as never);
     expect(invalidSummary.status).toBe(400);
 
     const mutation = await worker.fetch(new Request('https://pf.example.com/api/recurring/item-1%3Astream-1/classification', {
       method: 'PATCH',
-      headers: { authorization: 'Bearer test-key', origin: 'https://pf.example.com', 'content-type': 'application/json' },
+      headers: { ...VERIFIED_WEB_HEADERS, origin: 'https://pf.example.com', 'content-type': 'application/json' },
       body: JSON.stringify({ classification: 'subscription' }),
     }), runtime as never);
     expect(mutation.status).toBe(200);
@@ -78,14 +80,14 @@ describe('recurring API routes', () => {
 
     const foreignMutation = await worker.fetch(new Request('https://pf.example.com/api/recurring/item-1%3Astream-1/classification', {
       method: 'PATCH',
-      headers: { authorization: 'Bearer test-key', origin: 'https://evil.example', 'content-type': 'application/json' },
+      headers: { ...VERIFIED_WEB_HEADERS, origin: 'https://evil.example', 'content-type': 'application/json' },
       body: JSON.stringify({ classification: 'bill' }),
     }), runtime as never);
     expect(foreignMutation.status).toBe(403);
 
     const invalidClassification = await worker.fetch(new Request('https://pf.example.com/api/recurring/item-1%3Astream-1/classification', {
       method: 'PATCH',
-      headers: { authorization: 'Bearer test-key', origin: 'https://pf.example.com', 'content-type': 'application/json' },
+      headers: { ...VERIFIED_WEB_HEADERS, origin: 'https://pf.example.com', 'content-type': 'application/json' },
       body: JSON.stringify({ classification: 'admin' }),
     }), runtime as never);
     expect(invalidClassification.status).toBe(400);

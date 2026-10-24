@@ -1,6 +1,7 @@
+import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it } from 'vitest';
 import worker from '../worker/index';
-import { createD1Fixture, task18MigrationNames } from './helpers/d1';
+import { createD1Fixture, task22MigrationNames } from './helpers/d1';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 
@@ -10,8 +11,9 @@ afterEach(async () => {
 
 describe('Worker reconciliation routes', () => {
   it('uses a stable import operation and response identity when a commit is retried', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
+    await provisionWebOwner(fixture.db);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('route-account', 'Route account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
 
@@ -34,10 +36,10 @@ describe('Worker reconciliation routes', () => {
     };
     const request = () => new Request('https://pf.example.com/api/imports/commit', {
       method: 'POST',
-      headers: { authorization: 'Bearer route-key', origin: 'https://pf.example.com', 'content-type': 'application/json' },
+      headers: { ...VERIFIED_WEB_HEADERS, origin: 'https://pf.example.com', 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const env = { DB: fixture.db, ASSETS: { fetch: async () => new Response('not found', { status: 404 }) }, LEDGER_API_KEY: 'route-key', LEDGER_APP_ORIGIN: 'https://pf.example.com' } as never;
+    const env = { DB: fixture.db, ASSETS: { fetch: async () => new Response('not found', { status: 404 }) }, ...VERIFIED_WEB_ENV, LEDGER_APP_ORIGIN: 'https://pf.example.com' } as never;
 
     const first = await worker.fetch(request(), env);
     const firstPayload = await first.json() as { importId: string; accepted: number };
@@ -53,8 +55,9 @@ describe('Worker reconciliation routes', () => {
   });
 
   it('uses registered currencies for reads and reports while hiding superseded alert evidence', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
+    await provisionWebOwner(fixture.db);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('route-usd-account', 'USD account', 'Synthetic bank', 'USD', 'single', 'chequing', 'import_only')`).run();
     await fixture.db.prepare(`INSERT OR IGNORE INTO account_currencies (account_id, currency) VALUES ('route-usd-account', 'USD')`).run();
@@ -71,9 +74,9 @@ describe('Worker reconciliation routes', () => {
       (id, event_id, transaction_id, state, reason_codes_json, revision)
       VALUES ('route-usd-event', 'route-usd-event', 'route-usd-alert', 'superseded', '["confirmed_elsewhere"]', 2)`).run();
 
-    const env = { DB: fixture.db, ASSETS: { fetch: async () => new Response('not found', { status: 404 }) }, LEDGER_API_KEY: 'route-key', LEDGER_APP_ORIGIN: 'https://pf.example.com' } as never;
+    const env = { DB: fixture.db, ASSETS: { fetch: async () => new Response('not found', { status: 404 }) }, ...VERIFIED_WEB_ENV, LEDGER_APP_ORIGIN: 'https://pf.example.com' } as never;
     const request = (path: string) => new Request(`https://pf.example.com${path}`, {
-      headers: { authorization: 'Bearer route-key', origin: 'https://pf.example.com' },
+      headers: { ...VERIFIED_WEB_HEADERS, origin: 'https://pf.example.com' },
     });
 
     const transactionsResponse = await worker.fetch(request('/api/transactions?currency=USD'), env);

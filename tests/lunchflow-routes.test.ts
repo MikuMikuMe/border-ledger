@@ -1,3 +1,4 @@
+import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../worker/index';
 import type { D1Database } from '../worker/db-types';
@@ -47,7 +48,7 @@ function webEnv(db: D1Database, queue?: { send(message: unknown): Promise<void> 
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
-    LEDGER_API_KEY: LEGACY_API_KEY,
+    ...VERIFIED_WEB_ENV,
     LEDGER_APP_ORIGIN: ORIGIN,
     LUNCHFLOW_API_KEY,
     SYNC_QUEUE: queue,
@@ -68,7 +69,7 @@ function webRequest(path: string, init: RequestInit = {}) {
   return new Request(`${ORIGIN}${path}`, {
     ...init,
     headers: {
-      authorization: `Bearer ${LEGACY_API_KEY}`,
+      ...VERIFIED_WEB_HEADERS,
       origin: ORIGIN,
       ...(init.headers ?? {}),
     },
@@ -95,6 +96,7 @@ function mobileRequest(path: string, token: string, init: RequestInit = {}) {
 
 async function fixture() {
   const value = createSqliteD1Fixture();
+  await provisionWebOwner(value.db);
   fixtures.push(value);
   return value;
 }
@@ -190,7 +192,7 @@ describe('Lunch Flow web route boundaries', () => {
     const response = await worker.fetch(new Request(`${ORIGIN}/api/lunchflow/account-selection`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${LEGACY_API_KEY}`,
+        ...VERIFIED_WEB_HEADERS,
         origin: 'https://evil.example',
         'content-type': 'application/json',
       },

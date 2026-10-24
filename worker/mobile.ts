@@ -3,6 +3,8 @@ import {
   OWNER_SCOPES,
   MobileAuthError,
   assertAccessIdentity,
+  resolveMobileIdentity,
+  accessSubjectHash,
   assertHttpsCallback,
   assertCaptureEventScope,
   authorizeMobileRoute,
@@ -176,7 +178,6 @@ export function isMobileAuthConfigured(env: MobileRouteEnv) {
     return Boolean(
       config.approvedAccessIssuers?.length
       && config.approvedAccessAudiences?.length
-      && config.approvedAccessSubjects?.length
     );
   } catch {
     return false;
@@ -506,10 +507,10 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
       const pairingMatch = url.pathname.match(/^\/api\/device-pairings\/([^/]+)\/approval$/);
       if (!pairingMatch) return json({ code: 'not_found', message: 'Not found.', requestId: requestId(), retryable: false }, { status: 404 });
       const body = bodyRecord(await readJsonBody<unknown>(request, 32 * 1024));
-      const subjectHash = await hashSecret(accessIdentity.subject);
+      const subjectHash = await accessSubjectHash(accessIdentity);
       const owner = {
         credentialType: 'owner' as const,
-        ledgerId: 'personal' as const,
+        ...await resolveMobileIdentity(env.DB, accessIdentity, config),
         familyId: 'access-approval',
         subjectHash,
         deviceId: null,

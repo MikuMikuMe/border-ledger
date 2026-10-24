@@ -1,3 +1,4 @@
+import { resolveLedgerContext, type LedgerContext } from './tenant-context';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from 'jose';
 import {
   buildPlaidRequest,
@@ -277,15 +278,17 @@ async function accessIdentity(request: Request, env: Env): Promise<AccessIdentit
   return { subject, issuer: verified.issuer, audience, email };
 }
 
-async function hasValidAccessJwt(request: Request, env: Env) {
-  return Boolean(await verifiedAccessJwt(request, env));
-}
-
-async function isAuthorized(request: Request, env: Env) {
-  if (await hasValidAccessJwt(request, env)) return true;
-  const configuredKey = env.LEDGER_API_KEY;
-  const authorization = request.headers.get('authorization');
-  return Boolean(configuredKey && authorization && timingSafeEqual(authorization, `Bearer ${configuredKey}`));
+async function authorizeWebLedger(request: Request, env: Env) {
+  const identity = await accessIdentity(request, env);
+  if (!identity) return json({ error: 'Ledger API access is not configured.' }, { status: 401 });
+  try {
+    const context = await resolveLedgerContext(env.DB, identity);
+    // Task 2B/2C must replace this temporary gate as each financial consumer is scoped.
+    if (context.ledgerId !== 'personal') return json({ error: 'This ledger is not available on this route yet.' }, { status: 503 });
+    return context;
+  } catch {
+    return json({ error: 'Access is not enabled' }, { status: 403 });
+  }
 }
 
 function plaidConfig(env: Env): { environment: PlaidEnvironment; clientId: string; secret: string } {
@@ -1117,7 +1120,7 @@ async function handleImportAndPlaidRoutes(request: Request, env: Env, url: URL) 
   return handler ? handler(request, env, url) : null;
 }
 
-async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL) {
+async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, _context: LedgerContext) {
   try {
     const response = await dispatchAuthorizedRoutes([
       () => handleLunchFlowRequest(request, env),
@@ -1236,9 +1239,10 @@ export default {
     if (request.method !== 'GET' && request.method !== 'HEAD' && !isSameOriginMutation(request, env.LEDGER_APP_ORIGIN)) {
       return json({ error: 'A same-origin request is required.' }, { status: 403 });
     }
-    if (!(await isAuthorized(request, env))) return json({ error: 'Ledger API access is not configured.' }, { status: 401 });
+    const context = await authorizeWebLedger(request, env);
+    if (context instanceof Response) return context;
 
-    return handleAuthorizedApiRequest(request, env, url);
+    return handleAuthorizedApiRequest(request, env, url, context);
   },
 
   async scheduled(controller: { scheduledTime: number }, env: Env) {

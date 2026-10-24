@@ -1,3 +1,4 @@
+import { resolveActiveLedgerContext, resolveLedgerContext, type LedgerContext } from './tenant-context';
 import type { D1Database, LedgerId } from './db-types.ts';
 
 export const OWNER_SCOPES = [
@@ -38,9 +39,8 @@ export interface AccessIdentity {
   email?: string | null;
 }
 
-export interface OwnerContext {
+export interface OwnerContext extends LedgerContext {
   credentialType: 'owner';
-  ledgerId: 'personal';
   familyId: string;
   subjectHash: string;
   deviceId: string | null;
@@ -62,9 +62,8 @@ export interface CaptureScopeRecord {
   instrumentHint?: CaptureInstrumentHint | null;
 }
 
-export interface CaptureContext {
+export interface CaptureContext extends LedgerContext {
   credentialType: 'capture';
-  ledgerId: 'personal';
   credentialId: string;
   deviceId: string;
   generation: number;
@@ -74,7 +73,7 @@ export interface CaptureContext {
   environmentHash: string;
 }
 
-export interface RevocationContext {
+export interface RevocationContext extends LedgerContext {
   credentialType: 'revocation';
   grantType: RevocationGrantType;
   grantId: string;
@@ -210,8 +209,7 @@ export function assertHttpsCallback(callbackUrl: string | undefined, config: Mob
 export function assertAccessIdentity(identity: AccessIdentity, config: MobileAuthConfig) {
   const issuerOkay = (config.approvedAccessIssuers ?? []).includes(identity.issuer);
   const audienceOkay = (config.approvedAccessAudiences ?? []).includes(identity.audience);
-  const subjectOkay = (config.approvedAccessSubjects ?? []).includes(identity.subject) || (identity.email ? (config.approvedAccessSubjects ?? []).includes(identity.email) : false);
-  if (!identity.subject || !issuerOkay || !audienceOkay || !subjectOkay) throw new MobileAuthError('identity_not_approved', 'The Access identity is not approved for this ledger.', 403);
+  if (!identity.subject || !issuerOkay || !audienceOkay) throw new MobileAuthError('identity_not_approved', 'The Access identity is not approved for this ledger.', 403);
 }
 
 export function validateScope(scope: string): scope is OwnerScope {
@@ -356,7 +354,7 @@ export async function authenticateOwner(credential: Request | string, db: D1Data
     scope_json: string;
     environment_hash: string;
   }>();
-  if (!family || family.revoked_at || family.ledger_id !== 'personal' || family.access_generation !== payload.generation || family.environment_hash !== expectedEnvironmentHash) {
+  if (!family || family.revoked_at || family.access_generation !== payload.generation || family.environment_hash !== expectedEnvironmentHash) {
     throw new MobileAuthError('revoked', 'The owner session is not active.', 401);
   }
   validExpiry(family.access_expires_at, current);
@@ -370,7 +368,7 @@ export async function authenticateOwner(credential: Request | string, db: D1Data
   if (requiredScope && !scopes.includes(requiredScope)) throw new MobileAuthError('forbidden', 'The owner session lacks the required scope.', 403);
   return {
     credentialType: 'owner',
-    ledgerId: 'personal',
+    ...await activeMobileLedger(db, family.ledger_id),
     familyId: family.id,
     subjectHash: family.subject_hash,
     deviceId: family.device_id,
@@ -388,7 +386,7 @@ export async function authenticateCapture(credential: Request | string, db: D1Da
   const current = now(config);
   const row = await db.prepare(`SELECT c.id, c.device_id, c.credential_type, c.scope, c.generation, c.expires_at, c.revoked_at, c.environment_hash,
       d.ledger_id, d.status
-    FROM capture_credentials c JOIN mobile_devices d ON d.id = c.device_id
+    FROM capture_credentials c JOIN mobile_devices d ON d.id = c.device_id AND d.ledger_id = c.ledger_id
     WHERE c.credential_hash = ?`).bind(credentialHash).first<{
     id: string;
     device_id: string;
@@ -402,14 +400,14 @@ export async function authenticateCapture(credential: Request | string, db: D1Da
     status: string;
   }>();
   const environmentHash = await hashSecret(config.environment);
-  if (!row || row.credential_type !== 'capture' || row.scope !== CAPTURE_SCOPE || row.ledger_id !== 'personal' || row.environment_hash !== environmentHash) throw new MobileAuthError('unauthorized', 'The capture credential is not valid.');
+  if (!row || row.credential_type !== 'capture' || row.scope !== CAPTURE_SCOPE || row.environment_hash !== environmentHash) throw new MobileAuthError('unauthorized', 'The capture credential is not valid.');
   validExpiry(row.expires_at, current);
   if (row.revoked_at || row.status === 'revoked') throw new MobileAuthError('revoked', 'The capture credential is revoked.', 401);
   const scopes = await db.prepare(`SELECT source_profile_id AS sourceProfileId, account_id AS accountId, currency,
       instrument_hint_kind AS instrumentHintKind, instrument_hint_value AS instrumentHintValue
-    FROM device_source_scopes WHERE device_id = ? AND status = 'approved'
+    FROM device_source_scopes WHERE ledger_id = ? AND device_id = ? AND status = 'approved'
       AND (expires_at IS NULL OR expires_at > ?)
-    ORDER BY source_profile_id, account_id, instrument_hint_kind, instrument_hint_value, currency`).bind(row.device_id, current.toISOString()).all<{
+    ORDER BY source_profile_id, account_id, instrument_hint_kind, instrument_hint_value, currency`).bind(row.ledger_id, row.device_id, current.toISOString()).all<{
       sourceProfileId: string;
       accountId: string;
       currency: string;
@@ -418,7 +416,7 @@ export async function authenticateCapture(credential: Request | string, db: D1Da
     }>();
   return {
     credentialType: 'capture',
-    ledgerId: 'personal',
+    ...await activeMobileLedger(db, row.ledger_id),
     credentialId: row.id,
     deviceId: row.device_id,
     generation: row.generation,
@@ -450,17 +448,21 @@ export async function authenticateRevocation(credential: Request | string, db: D
   const environmentHash = await hashSecret(config.environment);
   if (!constantTimeEqual(payload.environmentHash, environmentHash)) throw new MobileAuthError('environment_mismatch', 'The mobile environment is not valid.', 401);
   const capabilityHash = await hashSecret(raw);
+  let ledgerId: string;
   if (payload.grantType === 'owner-family') {
-    const family = await db.prepare(`SELECT id, revoked_at, revocation_generation, revocation_capability_hash, refresh_expires_at
-      FROM owner_session_families WHERE id = ?`).bind(payload.grantId).first<{ id: string; revoked_at: string | null; revocation_generation: number; revocation_capability_hash: string; refresh_expires_at: string }>();
+    const family = await db.prepare(`SELECT id, ledger_id, revoked_at, revocation_generation, revocation_capability_hash, refresh_expires_at
+      FROM owner_session_families WHERE id = ?`).bind(payload.grantId).first<{ id: string; ledger_id: string; revoked_at: string | null; revocation_generation: number; revocation_capability_hash: string; refresh_expires_at: string }>();
     if (!family || family.revocation_generation !== payload.generation || !constantTimeEqual(family.revocation_capability_hash, capabilityHash)) throw new MobileAuthError('revocation_not_current', 'The revocation capability is no longer current.', 409);
+    ledgerId = family.ledger_id;
   } else {
-    const capture = await db.prepare(`SELECT id, revoked_at, generation, revocation_capability_hash, expires_at
-      FROM capture_credentials WHERE id = ?`).bind(payload.grantId).first<{ id: string; revoked_at: string | null; generation: number; revocation_capability_hash: string; expires_at: string }>();
+    const capture = await db.prepare(`SELECT id, ledger_id, revoked_at, generation, revocation_capability_hash, expires_at
+      FROM capture_credentials WHERE id = ?`).bind(payload.grantId).first<{ id: string; ledger_id: string; revoked_at: string | null; generation: number; revocation_capability_hash: string; expires_at: string }>();
     if (!capture || capture.generation !== payload.generation || !constantTimeEqual(capture.revocation_capability_hash, capabilityHash)) throw new MobileAuthError('revocation_not_current', 'The revocation capability is no longer current.', 409);
+    ledgerId = capture.ledger_id;
   }
   return {
     credentialType: 'revocation',
+    ...await activeMobileLedger(db, ledgerId),
     grantType: payload.grantType,
     grantId: payload.grantId,
     generation: payload.generation,
@@ -474,10 +476,10 @@ export async function revokeGrantByCapability(credential: string, db: D1Database
   const revokedAt = now(config).toISOString();
   if (context.grantType === 'owner-family') {
     await db.prepare(`UPDATE owner_session_families SET revoked_at = COALESCE(revoked_at, ?), updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND revocation_generation = ?`).bind(revokedAt, context.grantId, context.generation).run();
+      WHERE ledger_id = ? AND id = ? AND revocation_generation = ?`).bind(revokedAt, context.ledgerId, context.grantId, context.generation).run();
   } else {
     await db.prepare(`UPDATE capture_credentials SET revoked_at = COALESCE(revoked_at, ?)
-      WHERE id = ? AND generation = ?`).bind(revokedAt, context.grantId, context.generation).run();
+      WHERE ledger_id = ? AND id = ? AND generation = ?`).bind(revokedAt, context.ledgerId, context.grantId, context.generation).run();
   }
 }
 
@@ -487,10 +489,10 @@ export async function assertCaptureEventScope(db: D1Database, context: CaptureCo
   if (!allowed) throw new MobileAuthError('forbidden', 'The capture credential is outside the approved source scope.', 403);
   const instrumentHint = normalizeCaptureInstrumentHint(scope.instrumentHint);
   const current = await db.prepare(`SELECT 1 AS allowed FROM device_source_scopes
-    WHERE device_id = ? AND source_profile_id = ? AND account_id = ? AND currency = ? AND status = 'approved'
+    WHERE ledger_id = ? AND device_id = ? AND source_profile_id = ? AND account_id = ? AND currency = ? AND status = 'approved'
       AND instrument_hint_kind = ? AND instrument_hint_value = ?
       AND (expires_at IS NULL OR expires_at > ?)`).bind(
-    context.deviceId, scope.sourceProfileId, scope.accountId, scope.currency,
+    context.ledgerId, context.deviceId, scope.sourceProfileId, scope.accountId, scope.currency,
     instrumentHint?.kind ?? 'none', instrumentHint?.value ?? '',
     config ? now(config).toISOString() : new Date().toISOString(),
   ).first<{ allowed: number }>();
@@ -498,6 +500,7 @@ export async function assertCaptureEventScope(db: D1Database, context: CaptureCo
 }
 
 export function authorizeMobileRoute(context: MobileContext, pathname: string, requiredScope?: OwnerScope | CaptureScope) {
+  assertRuntimeLedgerEnabled(context);
   if (!pathname.startsWith('/api/mobile/v1/')) throw new MobileAuthError('forbidden', 'The credential cannot access this route.', 403);
   if (context.credentialType === 'owner') {
     if (pathname.startsWith('/api/mobile/v1/auth/') || pathname.startsWith('/api/mobile/v1/pairings') || pathname === '/api/mobile/v1/status') throw new MobileAuthError('forbidden', 'The owner credential cannot access this route.', 403);
@@ -537,3 +540,25 @@ export function isMobileAuthPath(pathname: string) {
 }
 
 export { constantTimeEqual };
+
+export async function activeMobileLedger(db: D1Database, ledgerId: string): Promise<LedgerContext> {
+  try { return await resolveActiveLedgerContext(db, ledgerId); }
+  catch { throw new MobileAuthError('access_not_enabled', 'Access is not enabled', 403); }
+}
+
+/** Temporary until Tasks 2B/2C scope financial route consumers. */
+function assertRuntimeLedgerEnabled(context: MobileContext) {
+  if (context.credentialType === 'revocation') return;
+  if (!('ledgerId' in context)) return;
+  if (context.ledgerId !== 'personal') throw new MobileAuthError('tenant_runtime_pending', 'This ledger is not available on this route yet.', 503);
+}
+
+export async function resolveMobileIdentity(db: D1Database, identity: AccessIdentity, config: MobileAuthConfig) {
+  assertAccessIdentity(identity, config);
+  try { return await resolveLedgerContext(db, identity); }
+  catch { throw new MobileAuthError('access_not_enabled', 'Access is not enabled', 403); }
+}
+
+export function accessSubjectHash(identity: AccessIdentity) {
+  return requestDigest({ issuer: identity.issuer, subject: identity.subject });
+}

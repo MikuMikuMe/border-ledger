@@ -13,7 +13,7 @@ async function setup() {
   fixtures.push(fixture);
   await applyMigrations(fixture.db, [...task4MigrationNames, '0019-owner-installation-binding.sql']);
   const environmentHash = await hashSecret(config.environment);
-  const owner: OwnerContext & { consent: true } = { credentialType: 'owner', ledgerId: 'personal', familyId: 'owner-family', subjectHash: 'owner', deviceId: null, accessGeneration: 1, scopes: ['devices:manage'], expiresAt: '2026-10-20T13:00:00.000Z', environmentHash, consent: true };
+  const owner: OwnerContext & { consent: true } = { credentialType: 'owner', ledgerId: 'personal', userId: 'owner', familyId: 'owner-family', subjectHash: 'owner', deviceId: null, accessGeneration: 1, scopes: ['devices:manage'], expiresAt: '2026-10-20T13:00:00.000Z', environmentHash, consent: true };
   await fixture.db.prepare(`INSERT INTO owner_session_families
     (id, subject_hash, installation_id, access_expires_at, refresh_expires_at, environment_hash)
     VALUES (?, 'owner', 'claimed-installation', ?, '2026-10-21T12:00:00.000Z', ?)`).bind(owner.familyId, owner.expiresAt, environmentHash).run();

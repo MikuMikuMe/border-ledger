@@ -36,3 +36,12 @@ export async function provisionOwnerIdentityBindings(db: D1Database, bindings: r
     ) THEN 'owner' ELSE NULL END)
     ON CONFLICT(issuer, subject) DO NOTHING`).bind(binding.issuer, binding.subject)));
 }
+
+/** Resolve ownership from an already-authenticated server-side credential or job binding. */
+export async function resolveActiveLedgerContext(db: D1Database, ledgerId: string): Promise<LedgerContext> {
+  const context = await db.prepare(`SELECT u.id AS userId, l.id AS ledgerId
+    FROM ledgers l JOIN users u ON u.id = l.user_id
+    WHERE l.id = ? AND u.status = 'active'`).bind(ledgerId).first<LedgerContext>();
+  if (!context) throw new Error('Access is not enabled');
+  return context;
+}

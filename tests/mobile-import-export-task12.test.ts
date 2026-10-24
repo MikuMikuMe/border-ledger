@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createD1Fixture, task18MigrationNames } from './helpers/d1';
+import { createD1Fixture, task22MigrationNames } from './helpers/d1';
 import worker from '../worker/index';
 import { createImportPreviewForOwner, commitImportForOwner, decideImportDuplicateForOwner } from '../worker/mobile-import';
 import { createOpaqueCredential, hashSecret, type OwnerContext, type OwnerScope } from '../worker/mobile-auth';
@@ -23,7 +23,7 @@ afterEach(async () => {
 
 const owner: OwnerContext = {
   credentialType: 'owner',
-  ledgerId: 'personal',
+  ledgerId: 'personal', userId: 'owner',
   familyId: 'task12-family',
   subjectHash: 'task12-owner-hash',
   deviceId: null,
@@ -138,7 +138,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('persists modern preview metadata including the declared file size', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -159,7 +159,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('rejects reusing a preview idempotency key with different file metadata', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-idempotency-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -179,7 +179,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('allows a publication retry after the preview revision advanced to publishing', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-publication-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -216,7 +216,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('returns a non-empty duplicateCandidates contract with the canonical candidate shape', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-duplicate-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -302,7 +302,7 @@ describe('Task 12 mobile import/export primitives', () => {
   }, 15_000);
 
   it('calculates statement-overlap candidates from staged rows without publishing ledger state', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-statement-candidate-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -347,7 +347,7 @@ describe('Task 12 mobile import/export primitives', () => {
   }, 15_000);
 
   it('does not allow a publishing operation to change its selected rows', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-operation-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -383,7 +383,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('serves owner import lifecycle methods and a complete CSV export', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-route-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -435,7 +435,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('cancels an owner preview and rejects export without its scope', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-cancel-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -461,7 +461,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('requires a matching cancellation revision and fences publishing previews', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
       VALUES ('task12-cancel-fence-account', 'Task 12 account', 'Synthetic bank', 'CAD', 'single', 'chequing', 'import_only')`).run();
@@ -489,7 +489,7 @@ describe('Task 12 mobile import/export primitives', () => {
   });
 
   it('requires recent owner approval for an unfiltered all-record export', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     const token = await routeOwner(fixture.db, ['exports:read']);
     await fixture.db.prepare(`UPDATE owner_session_families SET created_at = '2000-01-01T00:00:00.000Z' WHERE id = ?`)
