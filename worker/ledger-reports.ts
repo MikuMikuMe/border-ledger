@@ -1,3 +1,4 @@
+import type { LedgerContext } from './tenant-context';
 import {
   insertFxSnapshotIfAbsent,
   readFxSnapshot,
@@ -74,7 +75,7 @@ export interface LedgerReportFx {
 }
 
 export interface LedgerReport {
-  ledgerId: 'personal';
+  ledgerId: string;
   asOf: string;
   timeBasis: 'accounting_date';
   timeZone: string;
@@ -142,14 +143,14 @@ export function notSupersededAlertTransactionPredicate(alias = 't') {
       JOIN alert_projections superseded_alert
         ON superseded_alert.ledger_id = alert_source.ledger_id
         AND superseded_alert.event_id = alert_source.event_id
-      WHERE alert_source.ledger_id = 'personal'
+      WHERE alert_source.ledger_id = ${alias}.ledger_id
         AND alert_source.source_kind = 'alert'
         AND alert_source.transaction_id = ${alias}.id
         AND superseded_alert.state = 'superseded'
     )
     OR EXISTS (
       SELECT 1 FROM alert_projections superseded_alert
-      WHERE superseded_alert.transaction_id = ${alias}.id AND superseded_alert.state = 'superseded'
+      WHERE superseded_alert.ledger_id = ${alias}.ledger_id AND superseded_alert.transaction_id = ${alias}.id AND superseded_alert.state = 'superseded'
     )
   ))`;
 }
@@ -173,12 +174,9 @@ function validateQuery(input: LedgerReportQuery) {
   return { from, to, currency, reportingCurrency, timeZone, includeProvisional: input.includeProvisional === true };
 }
 
-function whereFor(query: ReturnType<typeof validateQuery>) {
-  // D1 is currently a single-ledger database; the owner route fixes the
-  // ledger context before calling this service. Keep the owner boundary in
-  // the route rather than accepting a ledger id from the mobile client.
-  const clauses: string[] = [notSupersededAlertTransactionPredicate('t')];
-  const bindings: unknown[] = [];
+function whereFor(context: LedgerContext, query: ReturnType<typeof validateQuery>) {
+  const clauses: string[] = ['t.ledger_id = ?', notSupersededAlertTransactionPredicate('t')];
+  const bindings: unknown[] = [context.ledgerId];
   if (query.from) {
     clauses.push('t.date >= ?');
     bindings.push(query.from);
@@ -341,7 +339,7 @@ async function convertedReport(
   const rows = await db.prepare(`SELECT t.date, COALESCE(t.fx_lock_date, t.date) AS lock_date,
       t.amount_minor, t.currency, t.kind, t.status, COALESCE(a.institution, '') AS institution
     FROM transactions t
-    JOIN accounts a ON a.id = t.account_id
+    JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
     WHERE ${where} AND (${confirmed} OR ${query.includeProvisional ? provisional : '0'})
     ORDER BY t.date, t.id`).bind(...bindings).all<ConversionRow>();
   const countedRows = rows.results ?? [];
@@ -456,11 +454,12 @@ async function convertedReport(
  */
 export async function readLedgerReport(
   db: D1Database,
+  context: LedgerContext,
   input: LedgerReportQuery = {},
   dependencies: LedgerReportDependencies = {},
 ): Promise<LedgerReport> {
   const query = validateQuery(input);
-  const { where, bindings } = whereFor(query);
+  const { where, bindings } = whereFor(context, query);
   const spending = "t.kind IN ('expense', 'refund', 'fee')";
   const signedAmount = "CASE WHEN t.kind = 'refund' THEN -ABS(t.amount_minor) ELSE ABS(t.amount_minor) END";
   const confirmed = `t.status = 'confirmed' AND ${spending}`;
@@ -485,7 +484,7 @@ export async function readLedgerReport(
     : { convertedTotals: null, convertedDailyTotals: [], fx: emptyFx() };
 
   return {
-    ledgerId: 'personal',
+    ledgerId: context.ledgerId,
     asOf: (dependencies.now?.() ?? new Date()).toISOString(),
     timeBasis: 'accounting_date',
     timeZone: query.timeZone,

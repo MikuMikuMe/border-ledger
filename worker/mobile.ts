@@ -1,3 +1,4 @@
+import { LedgerAccessError } from './tenant-context';
 import type { D1Database } from './db-types';
 import {
   OWNER_SCOPES,
@@ -199,8 +200,10 @@ function requestId() {
 }
 
 function typedServiceErrorResponse(error: unknown, id: string) {
-  if (!(error instanceof ConnectionServiceError) && !(error instanceof LunchFlowError)) return null;
-  return json({ code: error.code, message: error.message, requestId: id, retryable: error.retryable }, { status: error.status });
+  const supported = [ConnectionServiceError, LunchFlowError, LedgerAccessError].some(type => error instanceof type);
+  if (!supported) return null;
+  const serviceError = error as ConnectionServiceError | LunchFlowError | LedgerAccessError;
+  return json({ code: serviceError.code, message: serviceError.message, requestId: id, retryable: serviceError.retryable }, { status: serviceError.status });
 }
 
 function errorResponse(error: unknown) {
@@ -584,14 +587,14 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/preferences') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
-      return json(await readPreferences(env.DB), { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json(await readPreferences(env.DB, owner), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     if (request.method === 'PATCH' && url.pathname === '/api/mobile/v1/preferences') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'preferences:write');
       authorizeMobileRoute(owner, url.pathname, 'preferences:write');
       const body = bodyRecord(await readJsonBody<unknown>(request, 16 * 1024));
       const preferredCurrency = body.preferredCurrency === null ? null : stringField(body, 'preferredCurrency', 12);
-      return json(await updatePreferences(env.DB, safeIntegerField(body, 'expectedRevision'), {
+      return json(await updatePreferences(env.DB, owner, safeIntegerField(body, 'expectedRevision'), {
         reportingTimezone: stringField(body, 'reportingTimezone', 128),
         weekStart: safeIntegerField(body, 'weekStart'),
         preferredCurrency,
@@ -729,7 +732,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/ledger/snapshot') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
-      return json(await readOwnerLedgerSnapshot(env.DB), { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json(await readOwnerLedgerSnapshot(env.DB, owner), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
     if (lunchFlowResponse) return lunchFlowResponse;
@@ -738,7 +741,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/transactions') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
-      return json(await readMobileTransactionPage(env.DB, url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json(await readMobileTransactionPage(env.DB, owner, url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/recurring') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
@@ -769,7 +772,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
       const startDate = url.searchParams.get('startDate');
       const endDate = url.searchParams.get('endDate');
       if (!startDate || !endDate) throw new MobileAuthError('invalid_request', 'startDate and endDate are required.', 400);
-      const report = await readLedgerReport(env.DB, {
+      const report = await readLedgerReport(env.DB, owner, {
         from: startDate,
         to: endDate,
         includeProvisional: url.searchParams.get('includeProvisional') === 'true',

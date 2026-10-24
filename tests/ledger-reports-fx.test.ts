@@ -1,3 +1,4 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeFxSnapshotDigest, FxSnapshotIntegrityError, readLedgerReport } from '../worker/ledger-reports';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
@@ -87,7 +88,7 @@ describe('FX ledger report aggregation', () => {
     ]);
     await snapshot(db, { effectiveDate: '2026-10-09' });
 
-    const confirmedOnly = await readLedgerReport(db, { reportingCurrency: 'CAD' }, { now: () => NOW });
+    const confirmedOnly = await readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { now: () => NOW });
     expect(confirmedOnly.currencyTotals).toEqual([
       { currency: 'CNY', confirmedMinorUnits: 200, provisionalMinorUnits: 0, confirmedCount: 2, provisionalCount: 0 },
       { currency: 'EUR', confirmedMinorUnits: 100, provisionalMinorUnits: 0, confirmedCount: 1, provisionalCount: 0 },
@@ -119,7 +120,7 @@ describe('FX ledger report aggregation', () => {
       },
     });
 
-    const withProvisional = await readLedgerReport(db, {
+    const withProvisional = await readLedgerReport(db, OWNER_LEDGER, {
       reportingCurrency: 'CAD',
       includeProvisional: true,
     }, { now: () => NOW });
@@ -144,7 +145,7 @@ describe('FX ledger report aggregation', () => {
     await transaction(db, { id: 'partial-boc-usd', accountId: 'partial-boc' });
     await snapshot(db, { rates: { CAD: '1.5' } });
 
-    const report = await readLedgerReport(db, { reportingCurrency: 'CAD' }, { now: () => NOW });
+    const report = await readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { now: () => NOW });
 
     expect(report.currencyTotals).toEqual([
       { currency: 'EUR', confirmedMinorUnits: 100, provisionalMinorUnits: 0, confirmedCount: 1, provisionalCount: 0 },
@@ -165,7 +166,7 @@ describe('FX ledger report aggregation', () => {
     await transaction(db, { id: 'outage-usd', accountId: 'outage' });
     const fetcher = vi.fn(async () => { throw new Error('provider unavailable'); });
 
-    const report = await readLedgerReport(db, { reportingCurrency: 'CAD' }, { fetcher, now: () => NOW });
+    const report = await readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { fetcher, now: () => NOW });
 
     expect(report.currencyTotals[0]).toMatchObject({ currency: 'USD', confirmedMinorUnits: 100, confirmedCount: 1 });
     expect(report.convertedTotals).toEqual({ confirmedMinorUnits: 0, provisionalMinorUnits: 0, confirmedCount: 0, provisionalCount: 0 });
@@ -187,7 +188,7 @@ describe('FX ledger report aggregation', () => {
     await transaction(db, { id: 'identity-cad', accountId: 'identity', currency: 'CAD', amountMinor: -123 });
     const fetcher = vi.fn(async () => { throw new Error('provider unavailable'); });
 
-    const report = await readLedgerReport(db, { reportingCurrency: 'CAD' }, { fetcher, now: () => NOW });
+    const report = await readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { fetcher, now: () => NOW });
 
     expect(fetcher).not.toHaveBeenCalled();
     expect(report.convertedTotals).toEqual({ confirmedMinorUnits: 123, provisionalMinorUnits: 0, confirmedCount: 1, provisionalCount: 0 });
@@ -209,12 +210,12 @@ describe('FX ledger report aggregation', () => {
       { date: '2026-10-09', base: 'EUR', quote: 'CAD', rate: 1.5 },
     ]), { status: 200, headers: { 'content-type': 'application/json' } }));
 
-    const first = await readLedgerReport(db, { reportingCurrency: 'CAD' }, { fetcher: firstFetch, now: () => NOW });
+    const first = await readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { fetcher: firstFetch, now: () => NOW });
     const changedFetch = vi.fn(async () => new Response(JSON.stringify([
       { date: '2026-10-10', base: 'EUR', quote: 'USD', rate: 1 },
       { date: '2026-10-10', base: 'EUR', quote: 'CAD', rate: 2 },
     ]), { status: 200 }));
-    const second = await readLedgerReport(db, { reportingCurrency: 'CAD' }, { fetcher: changedFetch, now: () => NOW });
+    const second = await readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { fetcher: changedFetch, now: () => NOW });
 
     expect(first.convertedTotals?.confirmedMinorUnits).toBe(75);
     expect(second.convertedTotals).toEqual(first.convertedTotals);
@@ -230,7 +231,7 @@ describe('FX ledger report aggregation', () => {
     await snapshot(db, { requestedDate: '2026-10-10', rates: { USD: '2', CAD: '1.5' } });
     await snapshot(db, { requestedDate: '2026-10-11', rates: { USD: '2', CAD: '2' } });
 
-    const report = await readLedgerReport(db, { reportingCurrency: 'CAD' }, { now: () => NOW });
+    const report = await readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { now: () => NOW });
 
     expect(report.convertedTotals?.confirmedMinorUnits).toBe(75);
     expect(report.convertedDailyTotals).toEqual([{ date: '2026-10-11', confirmedMinorUnits: 75, provisionalMinorUnits: 0 }]);
@@ -243,7 +244,7 @@ describe('FX ledger report aggregation', () => {
     await transaction(db, { id: 'tampered-usd', accountId: 'tampered' });
     await snapshot(db, { contentDigest: '0'.repeat(64) });
 
-    await expect(readLedgerReport(db, { reportingCurrency: 'CAD' }, { now: () => NOW }))
+    await expect(readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { now: () => NOW }))
       .rejects.toBeInstanceOf(FxSnapshotIntegrityError);
   });
 
@@ -254,7 +255,7 @@ describe('FX ledger report aggregation', () => {
     await transaction(db, { id: 'overflow-one', accountId: 'overflow', amountMinor: -1 });
     await snapshot(db, { rates: { USD: '1', CAD: '1' } });
 
-    await expect(readLedgerReport(db, { reportingCurrency: 'CAD' }, { now: () => NOW }))
+    await expect(readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { now: () => NOW }))
       .rejects.toThrow(/safe integer range|too large to be represented/i);
   });
 
@@ -270,7 +271,7 @@ describe('FX ledger report aggregation', () => {
       FROM numbers`).run();
     await snapshot(db, { rates: { USD: '1', CAD: '1' } });
 
-    const report = await readLedgerReport(db, { reportingCurrency: 'CAD' }, { now: () => NOW });
+    const report = await readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'CAD' }, { now: () => NOW });
 
     expect(report.currencyTotals).toEqual([
       { currency: 'USD', confirmedMinorUnits: 501, provisionalMinorUnits: 0, confirmedCount: 501, provisionalCount: 0 },
@@ -280,7 +281,7 @@ describe('FX ledger report aggregation', () => {
 
   it('keeps omitted reporting currency source-only and rejects unregistered source and target codes', async () => {
     const { db } = fixture();
-    const report = await readLedgerReport(db, {}, { now: () => NOW });
+    const report = await readLedgerReport(db, OWNER_LEDGER, {}, { now: () => NOW });
     expect(report).toMatchObject({
       reportingCurrency: null,
       convertedTotals: null,
@@ -294,7 +295,7 @@ describe('FX ledger report aggregation', () => {
         chineseBankBand: null,
       },
     });
-    await expect(readLedgerReport(db, { currency: 'XYZ' })).rejects.toThrow('The report currency is not valid.');
-    await expect(readLedgerReport(db, { reportingCurrency: 'XYZ' })).rejects.toThrow('The reporting currency is not valid.');
+    await expect(readLedgerReport(db, OWNER_LEDGER, { currency: 'XYZ' })).rejects.toThrow('The report currency is not valid.');
+    await expect(readLedgerReport(db, OWNER_LEDGER, { reportingCurrency: 'XYZ' })).rejects.toThrow('The reporting currency is not valid.');
   });
 });

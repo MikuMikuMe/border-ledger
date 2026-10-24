@@ -1,4 +1,4 @@
-import { resolveLedgerContext, type LedgerContext } from './tenant-context';
+import { resolveLedgerContext, LedgerAccessError, type LedgerContext } from './tenant-context';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from 'jose';
 import {
   buildPlaidRequest,
@@ -793,20 +793,20 @@ function summarize(transactions: StoredTransaction[], includeProvisional: boolea
   }, totals);
 }
 
-async function readTransactions(env: Env, url: URL) {
-  const clauses: string[] = [`NOT (t.source = 'alert' AND EXISTS (
+async function readTransactions(env: Env, context: LedgerContext, url: URL) {
+  const clauses: string[] = ['t.ledger_id = ?', `NOT (t.source = 'alert' AND EXISTS (
     SELECT 1
     FROM alert_projections superseded_alert
-    WHERE superseded_alert.state = 'superseded'
+    WHERE superseded_alert.ledger_id = t.ledger_id AND superseded_alert.state = 'superseded'
       AND (superseded_alert.transaction_id = t.id OR EXISTS (
         SELECT 1
         FROM transaction_source_records alert_source
-        WHERE alert_source.transaction_id = t.id
+        WHERE alert_source.ledger_id = t.ledger_id AND alert_source.transaction_id = t.id
           AND alert_source.source_kind = 'alert'
           AND alert_source.event_id = superseded_alert.event_id
       ))
   ))`];
-  const bindings: string[] = [];
+  const bindings: string[] = [context.ledgerId];
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
   const currency = url.searchParams.get('currency');
@@ -829,7 +829,7 @@ async function readTransactions(env: Env, url: URL) {
   return result.results;
 }
 
-async function handleImportCommit(request: Request, env: Env) {
+async function handleImportCommit(request: Request, env: Env, _url: URL, context: LedgerContext) {
   const body = await readJsonBody<unknown>(request, MAX_JSON_BODY_BYTES);
   const input = validateImportPayload(body);
   if ('error' in input) return json({ error: input.error }, { status: 400 });
@@ -837,7 +837,7 @@ async function handleImportCommit(request: Request, env: Env) {
   const importId = input.operationId ?? `statement-import:${fileSha256}`;
   let result: Awaited<ReturnType<typeof commitStatementRows>>;
   try {
-    result = await commitStatementRows(env.DB, {
+    result = await commitStatementRows(env.DB, context, {
       importId,
       operationId: input.operationId,
       accountId: input.accountId,
@@ -948,6 +948,7 @@ function knownErrorResponse(error: unknown) {
 }
 
 function errorResponse(error: unknown) {
+  if (error instanceof LedgerAccessError) return json({ code: error.code, error: error.message }, { status: error.status });
   const response = knownErrorResponse(error);
   if (response) return response;
   console.error('api_error', error instanceof Error ? error.name : 'unknown');
@@ -968,11 +969,11 @@ function preferencesInput(value: unknown) {
   };
 }
 
-async function handlePreferencesRequest(request: Request, env: Env) {
-  if (request.method === 'GET') return json(await readPreferences(env.DB));
+async function handlePreferencesRequest(request: Request, env: Env, context: LedgerContext) {
+  if (request.method === 'GET') return json(await readPreferences(env.DB, context));
   if (request.method === 'PATCH') {
     const body = preferencesInput(await readJsonBody<unknown>(request, 16 * 1024));
-    return json(await updatePreferences(env.DB, body.expectedRevision, {
+    return json(await updatePreferences(env.DB, context, body.expectedRevision, {
       reportingTimezone: body.reportingTimezone,
       weekStart: body.weekStart,
       preferredCurrency: body.preferredCurrency,
@@ -1029,43 +1030,43 @@ async function dispatchAuthorizedRoutes(handlers: readonly AuthorizedRouteDispat
   return null;
 }
 
-async function handleAccountsListRoute(_request: Request, env: Env, _url: URL) {
+async function handleAccountsListRoute(_request: Request, env: Env, _url: URL, context: LedgerContext) {
   const result = await env.DB.prepare(`SELECT accounts.*,
-    (SELECT item_id FROM plaid_accounts WHERE account_id = accounts.id LIMIT 1) AS plaid_item_id,
+    (SELECT item_id FROM plaid_accounts WHERE ledger_id = accounts.ledger_id AND account_id = accounts.id LIMIT 1) AS plaid_item_id,
     CASE
-      WHEN EXISTS (SELECT 1 FROM lunchflow_accounts WHERE account_id = accounts.id) THEN 'lunchflow'
-      WHEN EXISTS (SELECT 1 FROM plaid_accounts WHERE account_id = accounts.id) THEN 'plaid'
+      WHEN EXISTS (SELECT 1 FROM lunchflow_accounts WHERE ledger_id = accounts.ledger_id AND account_id = accounts.id) THEN 'lunchflow'
+      WHEN EXISTS (SELECT 1 FROM plaid_accounts WHERE ledger_id = accounts.ledger_id AND account_id = accounts.id) THEN 'plaid'
       ELSE NULL
     END AS provider
-    FROM accounts ORDER BY institution, name`).all();
+    FROM accounts WHERE ledger_id = ? ORDER BY institution, name`).bind(context.ledgerId).all();
   return json({ accounts: result.results });
 }
 
-async function handleTransactionsRoute(_request: Request, env: Env, url: URL) {
-  return json({ transactions: await readTransactions(env, url) });
+async function handleTransactionsRoute(_request: Request, env: Env, url: URL, context: LedgerContext) {
+  return json({ transactions: await readTransactions(env, context, url) });
 }
 
-type AuthorizedRouteHandler = (request: Request, env: Env, url: URL) => Promise<Response | null>;
+type AuthorizedRouteHandler = (request: Request, env: Env, url: URL, context: LedgerContext) => Promise<Response | null>;
 
 const accountRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
   ['GET /api/accounts', handleAccountsListRoute],
-  ['GET /api/preferences', (request, env) => handlePreferencesRequest(request, env)],
-  ['PATCH /api/preferences', (request, env) => handlePreferencesRequest(request, env)],
+  ['GET /api/preferences', (request, env, _url, context) => handlePreferencesRequest(request, env, context)],
+  ['PATCH /api/preferences', (request, env, _url, context) => handlePreferencesRequest(request, env, context)],
   ['GET /api/transactions', handleTransactionsRoute],
 ]);
 
-async function handleAccountRoutes(request: Request, env: Env, url: URL) {
+async function handleAccountRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   const handler = accountRouteHandlers.get(`${request.method} ${url.pathname}`);
-  return handler ? handler(request, env, url) : null;
+  return handler ? handler(request, env, url, context) : null;
 }
 
-async function reportResponse(env: Env, url: URL) {
+async function reportResponse(env: Env, context: LedgerContext, url: URL) {
   const requestedCurrency = url.searchParams.get('currency');
   const reportingCurrency = url.searchParams.get('reportingCurrency');
   const currencyCodes = await registeredCurrencyCodes(env);
   if (requestedCurrency && requestedCurrency !== 'all' && !currencyCodes.includes(requestedCurrency)) throw new RequestValidationError('The currency filter is not valid.');
   if (reportingCurrency !== null && getCurrencyMeta(reportingCurrency) === null) throw new RequestValidationError('The reporting currency is not valid.');
-  const report = await readLedgerReport(env.DB, {
+  const report = await readLedgerReport(env.DB, context, {
     from: url.searchParams.get('from'),
     to: url.searchParams.get('to'),
     currency: requestedCurrency && requestedCurrency !== 'all' ? requestedCurrency : null,
@@ -1079,9 +1080,9 @@ async function reportResponse(env: Env, url: URL) {
   return json({ ...report, summary, transactionCount });
 }
 
-async function handleReportRoutes(request: Request, env: Env, url: URL) {
+async function handleReportRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   if (request.method !== 'GET' || url.pathname !== '/api/reports/summary') return null;
-  return reportResponse(env, url);
+  return reportResponse(env, context, url);
 }
 
 const recurringRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
@@ -1101,9 +1102,9 @@ async function handleRecurringItemRoutes(request: Request, env: Env, url: URL) {
   return null;
 }
 
-async function handleRecurringRoutes(request: Request, env: Env, url: URL) {
+async function handleRecurringRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   const handler = recurringRouteHandlers.get(`${request.method} ${url.pathname}`);
-  return handler ? handler(request, env, url) : handleRecurringItemRoutes(request, env, url);
+  return handler ? handler(request, env, url, context) : handleRecurringItemRoutes(request, env, url);
 }
 
 const importAndPlaidRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
@@ -1115,19 +1116,19 @@ const importAndPlaidRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> =
   ['POST /api/plaid/disconnect', handlePlaidDisconnect],
 ]);
 
-async function handleImportAndPlaidRoutes(request: Request, env: Env, url: URL) {
+async function handleImportAndPlaidRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   const handler = importAndPlaidRouteHandlers.get(`${request.method} ${url.pathname}`);
-  return handler ? handler(request, env, url) : null;
+  return handler ? handler(request, env, url, context) : null;
 }
 
-async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, _context: LedgerContext) {
+async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, context: LedgerContext) {
   try {
     const response = await dispatchAuthorizedRoutes([
       () => handleLunchFlowRequest(request, env),
-      () => handleAccountRoutes(request, env, url),
-      () => handleReportRoutes(request, env, url),
-      () => handleRecurringRoutes(request, env, url),
-      () => handleImportAndPlaidRoutes(request, env, url),
+      () => handleAccountRoutes(request, env, url, context),
+      () => handleReportRoutes(request, env, url, context),
+      () => handleRecurringRoutes(request, env, url, context),
+      () => handleImportAndPlaidRoutes(request, env, url, context),
     ]);
     return response ?? json({ error: 'Not found' }, { status: 404 });
   } catch (error) {

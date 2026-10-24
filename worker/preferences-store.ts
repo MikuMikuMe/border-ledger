@@ -1,3 +1,4 @@
+import type { LedgerContext } from './tenant-context';
 import type { CurrencyCode, D1Database, LedgerId, LedgerPreferenceRow } from './db-types';
 
 export interface ReportingPreferences {
@@ -46,15 +47,15 @@ function mapRow(row: LedgerPreferenceRow): ReportingPreferences {
   };
 }
 
-export async function readPreferences(db: D1Database): Promise<ReportingPreferences> {
+export async function readPreferences(db: D1Database, context: LedgerContext): Promise<ReportingPreferences> {
   const result = await db.prepare(`SELECT ledger_id, reporting_timezone, week_start, preferred_currency, revision, updated_at
-    FROM ledger_preferences WHERE ledger_id = 'personal'`).all<LedgerPreferenceRow>();
+    FROM ledger_preferences WHERE ledger_id = ?`).bind(context.ledgerId).all<LedgerPreferenceRow>();
   const row = result.results[0];
-  if (!row) throw new Error('Personal reporting preferences are not initialized.');
+  if (!row) throw new Error('Ledger reporting preferences are not initialized.');
   return mapRow(row);
 }
 
-export async function updatePreferences(db: D1Database, expectedRevision: number, input: ReportingPreferencesInput) {
+export async function updatePreferences(db: D1Database, context: LedgerContext, expectedRevision: number, input: ReportingPreferencesInput) {
   if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw new RangeError('Preference revision is not valid.');
   validTimezone(input.reportingTimezone);
   if (!Number.isInteger(input.weekStart) || input.weekStart < 0 || input.weekStart > 6) throw new RangeError('Week start is not valid.');
@@ -65,15 +66,16 @@ export async function updatePreferences(db: D1Database, expectedRevision: number
   }
   const result = await db.prepare(`UPDATE ledger_preferences SET
       reporting_timezone = ?, week_start = ?, preferred_currency = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
-    WHERE ledger_id = 'personal' AND revision = ?`).bind(
+    WHERE ledger_id = ? AND revision = ?`).bind(
     input.reportingTimezone,
     input.weekStart,
     input.preferredCurrency,
+    context.ledgerId,
     expectedRevision,
   ).run();
   if (result.meta?.changes !== 1) {
-    const current = await readPreferences(db);
+    const current = await readPreferences(db, context);
     throw new PreferenceRevisionConflictError(current.revision);
   }
-  return readPreferences(db);
+  return readPreferences(db, context);
 }

@@ -1,3 +1,5 @@
+import { assertActiveLedgerContext, LedgerAccessError, type LedgerContext } from './tenant-context';
+import { ledgerScopedIdentifier, statementTransactionIdentifier } from './ledger-identifiers';
 import type { D1Database } from './db-types';
 import type { OwnerContext } from './mobile-auth';
 import { MobileAuthError } from './mobile-auth';
@@ -134,8 +136,8 @@ function safeInteger(value: unknown, name: string) {
   return value as number;
 }
 
-function assertOwner(owner: OwnerContext) {
-  if (owner.credentialType !== 'owner' || owner.ledgerId !== 'personal' || !owner.scopes.includes('imports:write')) throw new MobileAuthError('forbidden', 'The owner imports scope is required.', 403);
+function assertOwner(context: OwnerContext) {
+  if (context.credentialType !== 'owner' || !context.scopes.includes('imports:write')) throw new MobileAuthError('forbidden', 'The owner imports scope is required.', 403);
 }
 
 async function sha256Hex(value: string) {
@@ -152,10 +154,10 @@ function isoAfter(now: Date, milliseconds: number) {
   return new Date(now.getTime() + milliseconds).toISOString();
 }
 
-async function previewResponse(db: D1Database, value: Awaited<ReturnType<typeof readImportPreview>>): Promise<ImportPreviewResponse> {
+async function previewResponse(db: D1Database, context: LedgerContext, value: Awaited<ReturnType<typeof readImportPreview>>): Promise<ImportPreviewResponse> {
   const { preview, state, error } = value;
   const duplicateCandidates = ['ready', 'publishing', 'published'].includes(preview.status)
-    ? await readStagedDuplicateCandidates(db, preview)
+    ? await readStagedDuplicateCandidates(db, context, preview)
     : [];
   return {
     id: preview.id,
@@ -173,8 +175,9 @@ async function previewResponse(db: D1Database, value: Awaited<ReturnType<typeof 
   };
 }
 
-export async function createImportPreviewForOwner(db: D1Database, owner: OwnerContext, input: CreateImportPreviewInput, now = new Date()) {
-  assertOwner(owner);
+export async function createImportPreviewForOwner(db: D1Database, context: OwnerContext, input: CreateImportPreviewInput, now = new Date()) {
+  assertOwner(context);
+  await assertActiveLedgerContext(db, context);
   const fileName = boundedString(input.fileName, 'fileName', 512);
   const fileSizeBytes = safeInteger(input.fileSizeBytes, 'fileSizeBytes');
   if (fileSizeBytes <= 0 || fileSizeBytes > MAX_IMPORT_FILE_BYTES) throw new MobileImportError('file_too_large', 'CSV files are limited to 10 MiB.', 413);
@@ -183,18 +186,18 @@ export async function createImportPreviewForOwner(db: D1Database, owner: OwnerCo
   const rowCount = safeInteger(input.rowCount, 'rowCount');
   if (rowCount < 1 || rowCount > MAX_IMPORT_ROWS) throw new MobileImportError('invalid_row_count', `Imports must contain 1-${MAX_IMPORT_ROWS} rows.`, 400);
   const idempotencyKey = boundedString(input.idempotencyKey, 'idempotency key', 256);
-  const account = await db.prepare('SELECT id FROM accounts WHERE id = ?').bind(input.accountId).first<{ id: string }>();
+  const account = await db.prepare('SELECT id FROM accounts WHERE id = ? AND ledger_id = ?').bind(input.accountId, context.ledgerId).first<{ id: string }>();
   if (!account) throw new MobileImportError('account_not_found', 'The selected owner account does not exist.', 404);
-  const id = `mobile-import-${await sha256Hex(`${owner.subjectHash}|${idempotencyKey}`)}`;
+  const id = await ledgerScopedIdentifier(context, 'import-preview', `mobile-import-${await sha256Hex(`${context.subjectHash}|${idempotencyKey}`)}`);
   const previewDigest = await sha256Hex(`${id}|${fileSizeBytes}|${fileSha256}|${rowCount}`);
-  const ownerBindingDigest = await sha256Hex(`${owner.subjectHash}|${id}|${fileSha256}`);
+  const ownerBindingDigest = await sha256Hex(`${context.subjectHash}|${id}|${fileSha256}`);
   try {
-    await createImportPreview(db, { id, accountId: input.accountId, filename: fileName, fileSizeBytes, fileSha256, previewDigest, ownerBindingDigest, rowCount, expiresAt: isoAfter(now, IMPORT_PREVIEW_TTL_MS) });
+    await createImportPreview(db, context, { id, accountId: input.accountId, filename: fileName, fileSizeBytes, fileSha256, previewDigest, ownerBindingDigest, rowCount, expiresAt: isoAfter(now, IMPORT_PREVIEW_TTL_MS) });
   } catch (error) {
     if (!(error instanceof Error) || !/unique constraint/i.test(error.message)) throw error;
   }
   const existingMetadata = await db.prepare(`SELECT account_id, filename, file_size_bytes, file_sha256, row_count, owner_binding_digest
-    FROM import_previews WHERE id = ?`).bind(id).first<{
+    FROM import_previews WHERE id = ? AND ledger_id = ?`).bind(id, context.ledgerId).first<{
     account_id: string;
     filename: string;
     file_size_bytes: number;
@@ -205,11 +208,11 @@ export async function createImportPreviewForOwner(db: D1Database, owner: OwnerCo
   if (existingMetadata && existingMetadata.owner_binding_digest !== ownerBindingDigest) {
     throw new MobileImportError('idempotency_conflict', 'The idempotency key is already bound to a different import.', 409);
   }
-  const existing = await readImportPreview(db, id, ownerBindingDigest);
+  const existing = await readImportPreview(db, context, id, ownerBindingDigest);
   if (existing.preview.account_id !== input.accountId || existingMetadata?.filename !== fileName || existing.preview.file_size_bytes !== fileSizeBytes || existing.preview.file_sha256 !== fileSha256 || existing.preview.row_count !== rowCount) {
     throw new MobileImportError('idempotency_conflict', 'The idempotency key is already bound to a different import.', 409);
   }
-  return previewResponse(db, existing);
+  return previewResponse(db, context, existing);
 }
 
 export interface StageImportChunkInput {
@@ -220,31 +223,47 @@ export interface StageImportChunkInput {
   rows: readonly ImportRowInput[];
 }
 
-export async function stageImportChunkForOwner(db: D1Database, owner: OwnerContext, input: StageImportChunkInput) {
-  assertOwner(owner);
-  const preview = await readImportPreviewByOwner(db, owner, input.previewId);
+export async function stageImportChunkForOwner(db: D1Database, context: OwnerContext, input: StageImportChunkInput) {
+  assertOwner(context);
+  await assertActiveLedgerContext(db, context);
+  const preview = await readImportPreviewByOwner(db, context, input.previewId);
   if (input.rows.length < 1 || input.rows.length > MAX_IMPORT_CHUNK_ROWS) throw new MobileImportError('invalid_chunk', `Chunks must contain 1-${MAX_IMPORT_CHUNK_ROWS} rows.`, 400);
   const errors = input.rows.map((row) => validateImportRowShape(row, preview.preview.account_id)).filter((error): error is ImportRowValidation => error !== null);
   if (errors.length > 0) {
-    await markImportError(db, input.previewId, preview.preview.owner_binding_digest, errors[0].code, errors[0].message);
+    await markImportError(db, context, {previewId:input.previewId, ownerBindingDigest:preview.preview.owner_binding_digest, code:errors[0].code, message:errors[0].message});
     throw new MobileImportError(errors[0].code, errors[0].message, 422);
   }
-  const rowsJson = JSON.stringify(input.rows);
+  const rowsJson = await canonicalChunkRows(db, context, {rows:input.rows, preview:preview.preview});
   if (new TextEncoder().encode(rowsJson).byteLength > MAX_IMPORT_CHUNK_BYTES) throw new MobileImportError('chunk_too_large', 'The import chunk exceeds 128 KiB.', 413);
   const chunkDigest = await sha256Hex(rowsJson);
-  await stageImportChunk(db, { previewId: input.previewId, ownerBindingDigest: preview.preview.owner_binding_digest, chunkIndex: safeInteger(input.chunkIndex, 'chunkIndex'), operationId: boundedString(input.operationId, 'operationId', 256), chunkDigest, rowStart: safeInteger(input.rowStart, 'rowStart'), rowCount: input.rows.length, rowsJson });
-  return previewResponse(db, await readImportPreviewByOwner(db, owner, input.previewId));
+  await stageImportChunk(db, context, { previewId: input.previewId, ownerBindingDigest: preview.preview.owner_binding_digest, chunkIndex: safeInteger(input.chunkIndex, 'chunkIndex'), operationId: boundedString(input.operationId, 'operationId', 256), chunkDigest, rowStart: safeInteger(input.rowStart, 'rowStart'), rowCount: input.rows.length, rowsJson });
+  return previewResponse(db, context, await readImportPreviewByOwner(db, context, input.previewId));
 }
 
-async function readImportPreviewByOwner(db: D1Database, owner: OwnerContext, previewId: string) {
+async function canonicalChunkRows(db: D1Database, context: LedgerContext,
+  input: {rows: readonly ImportRowInput[]; preview: Awaited<ReturnType<typeof readImportPreview>>['preview']}) {
+  const occupied = new Set<string>();
+  const canonicalRows = [];
+  for (const row of input.rows) {
+    const statement = previewStatementRow(input.preview, row);
+    const canonicalTransactionId = await statementTransactionIdentifier(db, context, {
+      rawId:row.rowId, identityKey:statementSourceIdentityKey(statement.sourceIdentity), rowIndex:row.rowIndex, occupied,
+    });
+    occupied.add(canonicalTransactionId);
+    canonicalRows.push({...row, canonicalTransactionId});
+  }
+  return JSON.stringify(canonicalRows);
+}
+
+async function readImportPreviewByOwner(db: D1Database, context: OwnerContext, previewId: string) {
   const id = boundedString(previewId, 'previewId', 256);
-  const digestHint = await db.prepare(`SELECT owner_binding_digest FROM import_previews WHERE id = ?`).bind(id).first<{ owner_binding_digest: string }>();
+  const digestHint = await db.prepare(`SELECT owner_binding_digest FROM import_previews WHERE id = ? AND ledger_id = ?`).bind(id, context.ledgerId).first<{ owner_binding_digest: string }>();
   if (!digestHint) throw new MobileImportError('not_found', 'The import preview does not exist.', 404);
-  const preview = await db.prepare(`SELECT file_sha256 FROM import_previews WHERE id = ?`).bind(id).first<{ file_sha256: string }>();
+  const preview = await db.prepare(`SELECT file_sha256 FROM import_previews WHERE id = ? AND ledger_id = ?`).bind(id, context.ledgerId).first<{ file_sha256: string }>();
   if (!preview) throw new MobileImportError('not_found', 'The import preview does not exist.', 404);
-  const ownerBindingDigest = await sha256Hex(`${owner.subjectHash}|${id}|${preview.file_sha256}`);
-  if (digestHint.owner_binding_digest !== ownerBindingDigest) throw new MobileImportError('forbidden', 'The import preview belongs to another owner.', 403);
-  return readImportPreview(db, id, ownerBindingDigest);
+  const ownerBindingDigest = await sha256Hex(`${context.subjectHash}|${id}|${preview.file_sha256}`);
+  if (digestHint.owner_binding_digest !== ownerBindingDigest) throw new MobileImportError('forbidden', 'The import preview belongs to another context.', 403);
+  return readImportPreview(db, context, id, ownerBindingDigest);
 }
 
 const PREVIEW_CANDIDATE_LOOKUP_LIMIT = 50;
@@ -296,12 +315,6 @@ function previewSourceRecordId(identityKey: string) {
 
 function previewCandidateId(sourceId: string, candidateTransactionId: string) {
   return `statement-candidate:${encodeURIComponent(`${sourceId}:${candidateTransactionId}`)}`;
-}
-
-function previewHash(value: string) {
-  let result = 2166136261;
-  for (let index = 0; index < value.length; index += 1) result = Math.imul(result ^ value.charCodeAt(index), 16777619);
-  return (result >>> 0).toString(16).padStart(8, '0');
 }
 
 function previewStatementRow(preview: { account_id: string; file_sha256: string }, row: ImportRowInput): StatementCommitRow {
@@ -384,57 +397,47 @@ function rankAlertPreviewCandidate(row: StatementCommitRow, candidate: PreviewCa
   };
 }
 
-async function readPreviewCandidateRows(db: D1Database, row: StatementCommitRow, excludedStatementFileSha256: string): Promise<PreviewCandidateRow[]> {
+async function readPreviewCandidateRows(db: D1Database, context: LedgerContext, row: StatementCommitRow, excludedStatementFileSha256: string): Promise<PreviewCandidateRow[]> {
   const statementCandidates = await db.prepare(`SELECT DISTINCT t.id, sr.id AS source_record_id, sr.source_kind, sr.identity_key, sr.event_id,
       t.account_id, t.date, t.merchant, t.amount_minor, t.currency, t.kind, t.status, t.source, sr.bank_reference
     FROM transaction_source_records sr
-    JOIN transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id
-    WHERE sr.ledger_id = 'personal' AND sr.source_kind = 'statement' AND sr.account_id = ? AND t.account_id = ?
+    JOIN transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id AND t.ledger_id = sr.ledger_id
+    WHERE sr.ledger_id = ? AND sr.source_kind = 'statement' AND sr.account_id = ? AND t.account_id = ?
       AND t.source = 'statement' AND t.kind = ? AND t.status IN ('confirmed', 'provisional', 'needs_review')
       AND t.currency = ? AND t.amount_minor = ?
       AND (sr.file_sha256 IS NULL OR sr.file_sha256 <> ?)
       AND date(t.date) BETWEEN date(?, '-3 day') AND date(?, '+3 day')
     ORDER BY t.date DESC, t.id LIMIT ${PREVIEW_CANDIDATE_LOOKUP_LIMIT}`).bind(
-    row.accountId, row.accountId, row.kind, row.currency, row.amountMinor, excludedStatementFileSha256, row.date, row.date,
+    context.ledgerId, row.accountId, row.accountId, row.kind, row.currency, row.amountMinor, excludedStatementFileSha256, row.date, row.date,
   ).all<PreviewCandidateRow>();
   const reference = row.bankReference?.trim() || null;
   const alertCandidates = await db.prepare(`SELECT DISTINCT t.id, sr.id AS source_record_id, sr.source_kind, sr.identity_key, sr.event_id,
       t.account_id, t.date, t.merchant, t.amount_minor, t.currency, t.kind, t.status, t.source,
       COALESCE(
         sr.bank_reference,
-        (SELECT ae.bank_reference FROM alert_projections ap JOIN alert_events ae ON ae.event_id = ap.event_id
-          WHERE ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1)
+        (SELECT ae.bank_reference FROM alert_projections ap JOIN alert_events ae ON ae.event_id = ap.event_id AND ae.ledger_id = ap.ledger_id
+          WHERE ap.ledger_id = t.ledger_id AND ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1)
       ) AS bank_reference
     FROM transaction_source_records sr
-    JOIN transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id
-    WHERE sr.ledger_id = 'personal' AND sr.source_kind = 'alert' AND sr.account_id = ? AND t.account_id = ?
+    JOIN transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id AND t.ledger_id = sr.ledger_id
+    WHERE sr.ledger_id = ? AND sr.source_kind = 'alert' AND sr.account_id = ? AND t.account_id = ?
       AND t.kind = ? AND t.status IN ('confirmed', 'provisional', 'needs_review')
       AND NOT EXISTS (SELECT 1 FROM alert_projections superseded_alert
-        WHERE superseded_alert.state = 'superseded'
+        WHERE superseded_alert.ledger_id = t.ledger_id AND superseded_alert.state = 'superseded'
           AND (superseded_alert.transaction_id = t.id OR superseded_alert.event_id = sr.event_id))
       AND ((t.currency = ? AND t.amount_minor = ?)
         OR (? IS NOT NULL AND lower(COALESCE(sr.bank_reference,
-          (SELECT ae.bank_reference FROM alert_projections ap JOIN alert_events ae ON ae.event_id = ap.event_id
-            WHERE ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1))) = lower(?)))
+          (SELECT ae.bank_reference FROM alert_projections ap JOIN alert_events ae ON ae.event_id = ap.event_id AND ae.ledger_id = ap.ledger_id
+            WHERE ap.ledger_id = t.ledger_id AND ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1))) = lower(?)))
       AND date(t.date) BETWEEN date(?, '-3 day') AND date(?, '+3 day')
     ORDER BY t.date DESC, t.id LIMIT ${PREVIEW_CANDIDATE_LOOKUP_LIMIT}`).bind(
-    row.accountId, row.accountId, row.kind, row.currency, row.amountMinor, reference, reference, row.date, row.date,
+    context.ledgerId, row.accountId, row.accountId, row.kind, row.currency, row.amountMinor, reference, reference, row.date, row.date,
   ).all<PreviewCandidateRow>();
   return [...statementCandidates.results, ...alertCandidates.results];
 }
 
-async function previewTransactionId(db: D1Database, row: ImportRowInput, identityKey: string, occupied: Set<string>) {
-  const proposed = row.rowId;
-  const proposedExists = occupied.has(proposed) || Boolean(await db.prepare('SELECT id FROM transactions WHERE id = ? LIMIT 1').bind(proposed).first<{ id: string }>());
-  if (!proposedExists) return proposed;
-  const fallback = `statement-${previewHash(identityKey)}-${row.rowIndex}`;
-  const fallbackExists = occupied.has(fallback) || Boolean(await db.prepare('SELECT id FROM transactions WHERE id = ? LIMIT 1').bind(fallback).first<{ id: string }>());
-  if (!fallbackExists) return fallback;
-  return `${fallback}-${previewHash(`${identityKey}:${proposed}`)}`.slice(0, 160);
-}
-
-async function readPublishedImportRows(db: D1Database, preview: Awaited<ReturnType<typeof readImportPreview>>['preview']) {
-  const chunks = await db.prepare(`SELECT row_start, row_count, rows_json FROM import_chunks WHERE preview_id = ? ORDER BY row_start, chunk_index`).bind(preview.id).all<{ row_start: number; row_count: number; rows_json: string }>();
+async function readPublishedImportRows(db: D1Database, context: LedgerContext, preview: Awaited<ReturnType<typeof readImportPreview>>['preview']) {
+  const chunks = await db.prepare(`SELECT row_start, row_count, rows_json FROM import_chunks WHERE preview_id = ? AND ledger_id = ? ORDER BY row_start, chunk_index`).bind(preview.id, context.ledgerId).all<{ row_start: number; row_count: number; rows_json: string }>();
   const rows: unknown[] = [];
   let cursor = 0;
   for (const chunk of chunks.results) {
@@ -471,25 +474,26 @@ function readPublishedSelectedRows(preview: Awaited<ReturnType<typeof readImport
 
 async function readStagedDuplicateCandidates(
   db: D1Database,
+  context: LedgerContext,
   preview: Awaited<ReturnType<typeof readImportPreview>>['preview'],
   selectedValues?: readonly unknown[],
 ): Promise<ImportDuplicateCandidate[]> {
   await ensureImportDuplicateDecisionStore(db);
   const values = selectedValues ?? (preview.status === 'published'
-    ? await readPublishedImportRows(db, preview)
-    : (await readStagedImportRows(db, preview.id, preview.owner_binding_digest)).rows);
+    ? await readPublishedImportRows(db, context, preview)
+    : (await readStagedImportRows(db, context, preview.id, preview.owner_binding_digest)).rows);
   const occupied = new Set<string>();
   const candidates: ImportDuplicateCandidate[] = [];
   for (const value of values) {
     const validation = validateImportRowShape(value, preview.account_id);
     if (validation) throw new ImportStoreError('import_error', `A staged import row is invalid: ${validation.message}`, 409);
-    const row = value as ImportRowInput;
+    const row = value as ImportRowInput & { canonicalTransactionId?: string };
     const statement = previewStatementRow(preview, row);
     const identityKey = statementSourceIdentityKey(statement.sourceIdentity);
     const sourceId = previewSourceRecordId(identityKey);
-    const statementTransactionId = await previewTransactionId(db, row, identityKey, occupied);
+    const statementTransactionId = row.canonicalTransactionId ?? await statementTransactionIdentifier(db, context, {rawId:row.rowId, identityKey, rowIndex:row.rowIndex, occupied});
     occupied.add(statementTransactionId);
-    const ranked = (await readPreviewCandidateRows(db, statement, preview.file_sha256))
+    const ranked = (await readPreviewCandidateRows(db, context, statement, preview.file_sha256))
       .map((candidate) => candidate.source_kind === 'statement'
         ? rankStatementPreviewCandidate(statement, candidate, identityKey)
         : rankAlertPreviewCandidate(statement, candidate))
@@ -508,7 +512,7 @@ async function readStagedDuplicateCandidates(
     }
   }
   const decisions = await db.prepare(`SELECT candidate_id, status
-    FROM import_duplicate_decisions WHERE preview_id = ?`).bind(preview.id).all<{ candidate_id: string; status: 'accepted' | 'dismissed' }>();
+    FROM import_duplicate_decisions WHERE preview_id = ? AND ledger_id = ?`).bind(preview.id, context.ledgerId).all<{ candidate_id: string; status: 'accepted' | 'dismissed' }>();
   const decisionById = new Map(decisions.results.map((decision) => [decision.candidate_id, decision.status]));
   return candidates
     .map((candidate) => ({ ...candidate, status: decisionById.get(candidate.id) ?? candidate.status }))
@@ -528,51 +532,52 @@ export interface DecideImportDuplicateInput {
  * another account or for a candidate outside this preview. The insert and
  * preview revision CAS are one D1 batch; a stale request cannot mutate state.
  */
-export async function decideImportDuplicateForOwner(db: D1Database, owner: OwnerContext, input: DecideImportDuplicateInput) {
-  assertOwner(owner);
-  const current = await readImportPreviewByOwner(db, owner, input.previewId);
+export async function decideImportDuplicateForOwner(db: D1Database, context: OwnerContext, input: DecideImportDuplicateInput) {
+  assertOwner(context);
+  await assertActiveLedgerContext(db, context);
+  const current = await readImportPreviewByOwner(db, context, input.previewId);
   if (!['staged', 'ready'].includes(current.preview.status)) throw new MobileImportError('not_writable', 'Duplicate decisions are only available before commit.', 409);
   if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) throw new MobileImportError('invalid_request', 'The expected import revision is not valid.', 400);
   if (input.decision !== 'resolve' && input.decision !== 'keep_separate') throw new MobileImportError('invalid_request', 'The duplicate decision is not supported.', 400);
   const candidateId = boundedString(input.candidateId, 'candidateId', 256);
-  const candidate = (await readStagedDuplicateCandidates(db, current.preview)).find((item) => item.id === candidateId);
+  const candidate = (await readStagedDuplicateCandidates(db, context, current.preview)).find((item) => item.id === candidateId);
   if (!candidate) throw new MobileImportError('candidate_not_found', 'The duplicate candidate is not part of this import preview.', 404);
   const status: ImportDuplicateCandidate['status'] = input.decision === 'resolve' ? 'accepted' : 'dismissed';
   await ensureImportDuplicateDecisionStore(db);
-  const existing = await db.prepare(`SELECT status FROM import_duplicate_decisions WHERE preview_id = ? AND candidate_id = ?`)
-    .bind(current.preview.id, candidate.id).first<{ status: 'accepted' | 'dismissed' }>();
+  const existing = await db.prepare(`SELECT status FROM import_duplicate_decisions WHERE preview_id = ? AND ledger_id = ? AND candidate_id = ?`)
+    .bind(current.preview.id, context.ledgerId, candidate.id).first<{ status: 'accepted' | 'dismissed' }>();
   if (existing?.status === status && (current.preview.revision === input.expectedRevision || current.preview.revision === input.expectedRevision + 1)) {
-    return previewResponse(db, await readImportPreviewByOwner(db, owner, current.preview.id));
+    return previewResponse(db, context, await readImportPreviewByOwner(db, context, current.preview.id));
   }
   if (current.preview.revision !== input.expectedRevision) throw new MobileImportError('revision_conflict', 'The import preview changed; refresh before deciding this candidate.', 409);
   await db.batch([
     db.prepare(`INSERT INTO import_duplicate_decisions
-      (preview_id, candidate_id, statement_transaction_id, candidate_transaction_id, status)
-      SELECT ?, ?, ?, ?, ?
+      (preview_id, ledger_id, candidate_id, statement_transaction_id, candidate_transaction_id, status)
+      SELECT ?, ?, ?, ?, ?, ?
       WHERE EXISTS (
         SELECT 1 FROM import_previews
-        WHERE id = ? AND owner_binding_digest = ? AND status IN ('staged', 'ready') AND revision = ?
+        WHERE id = ? AND ledger_id = ? AND owner_binding_digest = ? AND status IN ('staged', 'ready') AND revision = ?
       )
       ON CONFLICT(preview_id, candidate_id) DO UPDATE SET
         statement_transaction_id = excluded.statement_transaction_id,
         candidate_transaction_id = excluded.candidate_transaction_id,
         status = excluded.status,
         updated_at = CURRENT_TIMESTAMP`).bind(
-      current.preview.id, candidate.id, candidate.statementTransactionId, candidate.candidateTransactionId, status,
-      current.preview.id, current.preview.owner_binding_digest, input.expectedRevision,
+      current.preview.id, context.ledgerId, candidate.id, candidate.statementTransactionId, candidate.candidateTransactionId, status,
+      current.preview.id, context.ledgerId, current.preview.owner_binding_digest, input.expectedRevision,
     ),
     db.prepare(`UPDATE import_previews SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND owner_binding_digest = ? AND status IN ('staged', 'ready') AND revision = ?`).bind(
-      current.preview.id, current.preview.owner_binding_digest, input.expectedRevision,
+      WHERE id = ? AND ledger_id = ? AND owner_binding_digest = ? AND status IN ('staged', 'ready') AND revision = ?`).bind(
+      current.preview.id, context.ledgerId, current.preview.owner_binding_digest, input.expectedRevision,
     ),
   ]);
-  const after = await readImportPreviewByOwner(db, owner, current.preview.id);
+  const after = await readImportPreviewByOwner(db, context, current.preview.id);
   if (after.preview.revision !== input.expectedRevision + 1) {
-    const afterCandidate = (await readStagedDuplicateCandidates(db, after.preview)).find((item) => item.id === candidate.id);
-    if (afterCandidate?.status === status) return previewResponse(db, after);
+    const afterCandidate = (await readStagedDuplicateCandidates(db, context, after.preview)).find((item) => item.id === candidate.id);
+    if (afterCandidate?.status === status) return previewResponse(db, context, after);
     throw new MobileImportError('revision_conflict', 'The import preview changed; refresh before deciding this candidate.', 409);
   }
-  return previewResponse(db, after);
+  return previewResponse(db, context, after);
 }
 
 export interface CancelImportInput {
@@ -580,18 +585,19 @@ export interface CancelImportInput {
   expectedRevision: number;
 }
 
-export async function cancelImportForOwner(db: D1Database, owner: OwnerContext, input: CancelImportInput) {
-  assertOwner(owner);
-  const current = await readImportPreviewByOwner(db, owner, input.previewId);
-  await import('./import-store').then(({ cancelImport }) => cancelImport(db, current.preview.id, current.preview.owner_binding_digest, input.expectedRevision));
-  return previewResponse(db, await readImportPreviewByOwner(db, owner, input.previewId));
+export async function cancelImportForOwner(db: D1Database, context: OwnerContext, input: CancelImportInput) {
+  assertOwner(context);
+  await assertActiveLedgerContext(db, context);
+  const current = await readImportPreviewByOwner(db, context, input.previewId);
+  await import('./import-store').then(({ cancelImport }) => cancelImport(db, context, {previewId:current.preview.id, ownerBindingDigest:current.preview.owner_binding_digest, expectedRevision:input.expectedRevision}));
+  return previewResponse(db, context, await readImportPreviewByOwner(db, context, input.previewId));
 }
 
-async function readDuplicateCandidates(db: D1Database, accountId: string, fileSha256: string): Promise<ImportDuplicateCandidate[]> {
+async function readDuplicateCandidates(db: D1Database, context: LedgerContext, accountId: string, fileSha256: string): Promise<ImportDuplicateCandidate[]> {
   const result = await db.prepare(`SELECT c.id, c.statement_transaction_id, c.candidate_transaction_id, c.score, c.reason_codes_json, c.status
-    FROM statement_reconciliation_candidates c JOIN transaction_source_records r ON r.id = c.source_record_id
-    WHERE r.ledger_id = 'personal' AND r.account_id = ? AND r.file_sha256 = ?
-    ORDER BY c.id`).bind(accountId, fileSha256).all<{
+    FROM statement_reconciliation_candidates c JOIN transaction_source_records r ON r.id = c.source_record_id AND r.ledger_id = c.ledger_id
+    WHERE r.ledger_id = ? AND r.account_id = ? AND r.file_sha256 = ?
+    ORDER BY c.id`).bind(context.ledgerId, accountId, fileSha256).all<{
     id: string;
     statement_transaction_id: string;
     candidate_transaction_id: string;
@@ -617,25 +623,25 @@ function mergeDuplicateCandidates(...lists: readonly ImportDuplicateCandidate[][
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
-async function applyImportCandidateDecisions(db: D1Database, previewId: string, candidates: readonly ImportDuplicateCandidate[]) {
+async function applyImportCandidateDecisions(db: D1Database, context: LedgerContext, previewId: string, candidates: readonly ImportDuplicateCandidate[]) {
   const decisions = await db.prepare(`SELECT candidate_id, status
-    FROM import_duplicate_decisions WHERE preview_id = ? AND status IN ('accepted', 'dismissed')`).bind(previewId).all<{ candidate_id: string; status: 'accepted' | 'dismissed' }>();
+    FROM import_duplicate_decisions WHERE preview_id = ? AND ledger_id = ? AND status IN ('accepted', 'dismissed')`).bind(previewId, context.ledgerId).all<{ candidate_id: string; status: 'accepted' | 'dismissed' }>();
   const decisionById = new Map(decisions.results.map((decision) => [decision.candidate_id, decision.status]));
   const statements = candidates.flatMap((candidate) => {
     const status = decisionById.get(candidate.id);
     return status ? [db.prepare(`UPDATE statement_reconciliation_candidates
       SET status = ?, evidence_basis = 'user_review', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND status = 'open'`).bind(status, candidate.id)] : [];
+      WHERE id = ? AND ledger_id = ? AND status = 'open'`).bind(status, candidate.id, context.ledgerId)] : [];
   });
   if (statements.length > 0) await db.batch(statements);
 }
 
-async function assertKeepSeparateCanPublish(db: D1Database, candidates: readonly ImportDuplicateCandidate[]) {
+async function assertKeepSeparateCanPublish(db: D1Database, context: LedgerContext, candidates: readonly ImportDuplicateCandidate[]) {
   for (const candidate of candidates) {
     if (candidate.status !== 'dismissed') continue;
     const alert = await db.prepare(`SELECT 1 AS present FROM transaction_source_records
-      WHERE ledger_id = 'personal' AND transaction_id = ? AND source_kind = 'alert' LIMIT 1`)
-      .bind(candidate.candidateTransactionId).first<{ present: number }>();
+      WHERE ledger_id = ? AND transaction_id = ? AND source_kind = 'alert' LIMIT 1`)
+      .bind(context.ledgerId, candidate.candidateTransactionId).first<{ present: number }>();
     if (alert) throw new MobileImportError('keep_separate_requires_review', 'This alert candidate cannot be kept separate through the import path yet; use Review to record the reconciliation decision.', 409);
   }
 }
@@ -647,13 +653,14 @@ export interface CommitImportInput {
   operationId: string;
 }
 
-export async function commitImportForOwner(db: D1Database, owner: OwnerContext, input: CommitImportInput) {
-  assertOwner(owner);
-  const current = await readImportPreviewByOwner(db, owner, input.previewId);
+export async function commitImportForOwner(db: D1Database, context: OwnerContext, input: CommitImportInput) {
+  assertOwner(context);
+  await assertActiveLedgerContext(db, context);
+  const current = await readImportPreviewByOwner(db, context, input.previewId);
   const operationId = boundedString(input.operationId, 'operationId', 160);
   if (current.preview.status === 'published') {
     if (current.preview.operation_id !== operationId) throw new MobileImportError('operation_conflict', 'The import preview is already published under another operation.', 409);
-    const publishedRows = await readPublishedImportRows(db, current.preview);
+    const publishedRows = await readPublishedImportRows(db, context, current.preview);
     const selectedRows = readPublishedSelectedRows(current.preview, publishedRows);
     return {
       receiptId: current.preview.receipt_id,
@@ -664,8 +671,8 @@ export async function commitImportForOwner(db: D1Database, owner: OwnerContext, 
       revision: current.preview.revision,
       committedAt: current.preview.published_at,
       duplicateCandidates: mergeDuplicateCandidates(
-        await readStagedDuplicateCandidates(db, current.preview, selectedRows),
-        await readDuplicateCandidates(db, current.preview.account_id, current.preview.file_sha256),
+        await readStagedDuplicateCandidates(db, context, current.preview, selectedRows),
+        await readDuplicateCandidates(db, context, current.preview.account_id, current.preview.file_sha256),
       ),
     };
   }
@@ -673,48 +680,60 @@ export async function commitImportForOwner(db: D1Database, owner: OwnerContext, 
   if (!resumesPublishing && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision !== current.preview.revision)) throw new MobileImportError('revision_conflict', 'The import preview changed; refresh before committing.', 409);
   const selected = [...new Set(input.rowIds.map((id) => boundedString(id, 'rowId', 160)))].sort();
   if (selected.length < 1 || selected.length > 500) throw new MobileImportError('invalid_selection', 'Select between 1 and 500 rows to commit.', 400);
-  const staged = await readStagedImportRows(db, current.preview.id, current.preview.owner_binding_digest);
+  const staged = await readStagedImportRows(db, context, current.preview.id, current.preview.owner_binding_digest);
   const byId = new Map(staged.rows.map((row) => [typeof row === 'object' && row !== null ? (row as { rowId?: string }).rowId : undefined, row]));
   const selectedRows = selected.map((id) => byId.get(id));
   if (selectedRows.some((row) => row === undefined)) throw new MobileImportError('invalid_selection', 'A selected row is not in the preview.', 400);
-  const accountCurrencies = await db.prepare(`SELECT currency FROM account_currencies WHERE account_id = ?`).bind(current.preview.account_id).all<{ currency: string }>();
+  const accountCurrencies = await db.prepare(`SELECT currency FROM account_currencies WHERE account_id = ? AND ledger_id = ?`).bind(current.preview.account_id, context.ledgerId).all<{ currency: string }>();
   const allowedCurrencies = new Set(accountCurrencies.results.map((row) => row.currency));
   const rows: StatementCommitRow[] = [];
   for (const value of selectedRows) {
     const validation = validateImportRowShape(value, current.preview.account_id);
     if (validation) {
-      await markImportError(db, current.preview.id, current.preview.owner_binding_digest, validation.code, validation.message);
+      await markImportError(db, context, {previewId:current.preview.id, ownerBindingDigest:current.preview.owner_binding_digest, code:validation.code, message:validation.message});
       throw new MobileImportError(validation.code, validation.message, 422);
     }
     const row = value as ImportRowInput;
     if (!allowedCurrencies.has(row.currency)) {
-      await markImportError(db, current.preview.id, current.preview.owner_binding_digest, 'currency_not_allowed', `Currency ${row.currency} is not approved for this account.`);
+      await markImportError(db, context, {previewId:current.preview.id, ownerBindingDigest:current.preview.owner_binding_digest, code:'currency_not_allowed', message:`Currency ${row.currency} is not approved for this account.`});
       throw new MobileImportError('currency_not_allowed', `Currency ${row.currency} is not approved for this account.`, 422);
     }
     rows.push({ id: row.rowId, accountId: row.accountId, date: row.date, merchant: row.merchant, amountMinor: row.amountMinor, currency: row.currency, category: row.category, kind: row.kind, status: row.status, source: 'statement', fingerprint: row.fingerprint, note: row.note, bankReference: row.bankReference, sourceIdentity: { accountId: row.accountId, fileSha256: current.preview.file_sha256, rowIndex: row.rowIndex, bankSourceId: row.sourceIdentity?.bankSourceId, bankRowId: row.sourceIdentity?.bankRowId } });
   }
-  const previewCandidates = await readStagedDuplicateCandidates(db, current.preview, selectedRows);
+  const previewCandidates = await readStagedDuplicateCandidates(db, context, current.preview, selectedRows);
   if (previewCandidates.some((candidate) => candidate.status === 'open')) {
     throw new MobileImportError('open_duplicate_candidates', 'Resolve or keep separate every duplicate candidate before committing the import.', 409);
   }
-  await assertKeepSeparateCanPublish(db, previewCandidates);
-  const publication = await beginImportPublication(db, current.preview.id, current.preview.owner_binding_digest, operationId, selected);
+  await assertKeepSeparateCanPublish(db, context, previewCandidates);
+  const publication = await beginImportPublication(db, context, {previewId:current.preview.id, ownerBindingDigest:current.preview.owner_binding_digest, operationId, selectedRowIds:selected});
+  const receiptId = publication.receipt_id ?? `receipt-${crypto.randomUUID()}`;
+  const publishedAt = new Date().toISOString();
   try {
-    const result = await commitStatementRows(db, { importId: publication.id, operationId, accountId: publication.account_id, filename: publication.filename, fileSha256: publication.file_sha256, rows });
-    await applyImportCandidateDecisions(db, publication.id, result.candidates);
-    const receiptId = publication.receipt_id ?? `receipt-${crypto.randomUUID()}`;
-    const completed = await completeImportPublication(db, publication.id, publication.owner_binding_digest, operationId, receiptId, { accepted: result.accepted, duplicates: result.duplicates, needsReview: result.needsReview }, new Date().toISOString());
-    const committedCandidates = await readDuplicateCandidates(db, current.preview.account_id, current.preview.file_sha256);
+    const result = await commitStatementRows(db, context, { importId: publication.id, operationId, accountId: publication.account_id, filename: publication.filename, fileSha256: publication.file_sha256, rows,
+      publication:{previewId:publication.id,ownerBindingDigest:publication.owner_binding_digest,operationId,revision:publication.revision,receiptId,publishedAt} });
+    await applyImportCandidateDecisions(db, context, publication.id, result.candidates);
+    const completed = await completeImportPublication(db, context, {previewId:publication.id, ownerBindingDigest:publication.owner_binding_digest, operationId, receiptId, counts:{accepted:result.accepted, duplicates:result.duplicates, needsReview:result.needsReview}, publishedAt});
+    const committedCandidates = await readDuplicateCandidates(db, context, current.preview.account_id, current.preview.file_sha256);
     return { receiptId: completed.receipt_id, importId: completed.id, publishedRows: completed.committed_count, duplicateRows: completed.duplicate_count, needsReview: completed.review_count, revision: completed.revision, committedAt: completed.published_at, duplicateCandidates: mergeDuplicateCandidates(previewCandidates, committedCandidates) };
   } catch (error) {
-    if (error instanceof RangeError || error instanceof ImportStoreError) {
-      await markImportError(db, publication.id, publication.owner_binding_digest, 'commit_failed', error.message);
+    return failImportPublication(db, context, publication, error);
+  }
+}
+
+async function failImportPublication(db: D1Database, context: LedgerContext,
+  publication: Awaited<ReturnType<typeof beginImportPublication>>, error: unknown): Promise<never> {
+    if (error instanceof LedgerAccessError) throw error;
+    if (isPublicationValidationError(error)) {
+      await markImportError(db, context, {previewId:publication.id, ownerBindingDigest:publication.owner_binding_digest, code:'commit_failed', message:error.message});
       throw error;
     }
     if (error instanceof ReconciliationConflictError) {
-      await markImportError(db, publication.id, publication.owner_binding_digest, error.code, error.message);
+      await markImportError(db, context, {previewId:publication.id, ownerBindingDigest:publication.owner_binding_digest, code:error.code, message:error.message});
       throw new MobileImportError(error.code, error.message, 409);
     }
     throw new MobileImportError('commit_failed', 'The import could not be committed.', 503, true);
-  }
+}
+
+function isPublicationValidationError(error: unknown): error is RangeError | ImportStoreError {
+  return error instanceof RangeError || error instanceof ImportStoreError;
 }

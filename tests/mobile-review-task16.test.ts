@@ -1,3 +1,4 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import { describe, expect, it } from 'vitest';
 import worker from '../worker/index';
 import { createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
@@ -104,7 +105,7 @@ describe('Task 16 mobile owner Review API', () => {
       bankReference: null,
     })]);
     const sourceBefore = (await fixture.db.prepare('SELECT payload_digest, merchant, event_money_currency, event_money_amount_minor FROM alert_events WHERE event_id = ?').bind(alertId).all()).results;
-    await commitStatementRows(fixture.db, {
+    await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'review-candidate-import',
       accountId: 'account-boc',
       filename: 'review.csv',
