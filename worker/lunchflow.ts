@@ -2,7 +2,7 @@ import { classifyTransaction } from '../src/domain/ledger';
 import type { TransactionKind } from '../src/domain/types';
 import { getCurrencyMeta } from '../src/domain/currencies';
 
-export const LUNCHFLOW_API_BASE_URL = 'https://lunchflow.app/api/v1';
+export const LUNCHFLOW_API_BASE_URL = 'https://www.lunchflow.app/api/v1';
 export const LUNCHFLOW_REQUEST_TIMEOUT_MS = 15_000;
 export const LUNCHFLOW_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const LUNCHFLOW_MAX_ACCOUNTS = 25;

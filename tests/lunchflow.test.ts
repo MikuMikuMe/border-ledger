@@ -56,6 +56,20 @@ function serviceEnv(db: D1Database, queue?: { send(message: unknown): Promise<vo
 }
 
 describe('Lunch Flow adapter', () => {
+  it('discovers accounts at the canonical host without following credential-bearing redirects', async () => {
+    const fetcher: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      expect(request.redirect).toBe('error');
+      expect(request.headers.get('x-api-key')).toBe('server-only-test-key');
+      // The apex host redirects to www; fetch with redirect:error rejects it.
+      if (new URL(request.url).hostname === 'lunchflow.app') throw new TypeError('Redirect rejected');
+      expect(request.url).toBe('https://www.lunchflow.app/api/v1/accounts');
+      return Response.json({ accounts: [{ id: 'one', name: 'Test', status: 'ACTIVE' }], total: 1 });
+    };
+    const provider = createLunchFlowProvider({ LUNCHFLOW_API_KEY: 'server-only-test-key' }, fetcher);
+    await expect(provider.listAccounts()).resolves.toMatchObject([{ id: 'one' }]);
+  });
+
   it('sends the server-only key and includes pending rows in a complete snapshot request', async () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const request = new Request(input, init);

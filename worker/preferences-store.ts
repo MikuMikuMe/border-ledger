@@ -1,7 +1,7 @@
-import type { CurrencyCode, D1Database, LedgerPreferenceRow } from './db-types';
+import type { CurrencyCode, D1Database, LedgerId, LedgerPreferenceRow } from './db-types';
 
 export interface ReportingPreferences {
-  ledgerId: 'personal';
+  ledgerId: LedgerId;
   reportingTimezone: string;
   weekStart: number;
   preferredCurrency: CurrencyCode | null;

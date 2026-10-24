@@ -26,7 +26,7 @@ export interface D1Database {
   batch(statements: D1Statement[]): Promise<D1Result[]>;
 }
 
-export type LedgerId = 'personal';
+export type LedgerId = string;
 export type CurrencyCode = string;
 export type AlertEventState = 'provisional' | 'non_spending' | 'needs_review' | 'voided' | 'superseded';
 export type AlertEventRelation = 'cancels' | 'partially_reverses' | 'replaces_authorization' | 'refund_of' | 'confirms' | 'possible_duplicate';

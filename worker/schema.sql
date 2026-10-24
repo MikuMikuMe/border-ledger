@@ -1,9 +1,27 @@
-CREATE TABLE IF NOT EXISTS ledgers (
+CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+INSERT OR IGNORE INTO users (id) VALUES ('owner');
+
+CREATE TABLE IF NOT EXISTS user_identities (
+  issuer TEXT NOT NULL CHECK (length(trim(issuer)) > 0),
+  subject TEXT NOT NULL CHECK (length(trim(subject)) > 0),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (issuer, subject)
+);
+
+CREATE TABLE IF NOT EXISTS ledgers (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  user_id TEXT NOT NULL DEFAULT 'owner'
+);
+
 INSERT OR IGNORE INTO ledgers (id) VALUES ('personal');
+CREATE UNIQUE INDEX IF NOT EXISTS ledgers_user_idx ON ledgers(user_id);
 
 CREATE TABLE IF NOT EXISTS currencies (
   code TEXT PRIMARY KEY,
@@ -184,13 +202,15 @@ CREATE TABLE IF NOT EXISTS accounts (
   currency_mode TEXT NOT NULL DEFAULT 'single' CHECK (currency_mode IN ('single', 'multi')),
   kind TEXT NOT NULL,
   status TEXT NOT NULL,
-  last_synced_at TEXT
+  last_synced_at TEXT,
+  ledger_id TEXT NOT NULL DEFAULT 'personal'
 );
 
 CREATE TABLE IF NOT EXISTS account_currencies (
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   currency TEXT NOT NULL REFERENCES currencies(code),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   PRIMARY KEY (account_id, currency)
 );
 
@@ -213,6 +233,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   provider_pending_transaction_id TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   UNIQUE (id, account_id),
   FOREIGN KEY (account_id, currency) REFERENCES account_currencies(account_id, currency)
 );
@@ -239,7 +260,8 @@ CREATE TABLE IF NOT EXISTS imports (
   accepted_count INTEGER NOT NULL,
   error_count INTEGER NOT NULL,
   status TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal'
 );
 
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -248,7 +270,8 @@ CREATE TABLE IF NOT EXISTS sync_state (
   cursor TEXT,
   last_success_at TEXT,
   last_error TEXT,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal'
 );
 
 CREATE TABLE IF NOT EXISTS plaid_items (
@@ -258,7 +281,8 @@ CREATE TABLE IF NOT EXISTS plaid_items (
   institution_id TEXT,
   institution_name TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal'
 );
 
 CREATE TABLE IF NOT EXISTS plaid_accounts (
@@ -269,14 +293,15 @@ CREATE TABLE IF NOT EXISTS plaid_accounts (
   mask TEXT,
   subtype TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal'
 );
 
 CREATE INDEX IF NOT EXISTS plaid_accounts_item_idx ON plaid_accounts(item_id);
 CREATE INDEX IF NOT EXISTS plaid_accounts_account_idx ON plaid_accounts(account_id);
 
 CREATE TABLE IF NOT EXISTS lunchflow_accounts (
-  provider_account_id TEXT PRIMARY KEY,
+  provider_account_id TEXT NOT NULL,
   account_id TEXT UNIQUE REFERENCES accounts(id),
   ledger_id TEXT NOT NULL DEFAULT 'personal' REFERENCES ledgers(id),
   name TEXT NOT NULL,
@@ -288,7 +313,8 @@ CREATE TABLE IF NOT EXISTS lunchflow_accounts (
   last_synced_at TEXT,
   last_error TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (ledger_id, provider_account_id)
 );
 
 CREATE INDEX IF NOT EXISTS lunchflow_accounts_ledger_idx ON lunchflow_accounts(ledger_id, enabled, provider_account_id);
@@ -375,6 +401,7 @@ CREATE TABLE IF NOT EXISTS recurring_streams (
   present_in_latest_snapshot INTEGER NOT NULL DEFAULT 1 CHECK (present_in_latest_snapshot IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   UNIQUE(item_id, stream_id)
 );
 
@@ -397,6 +424,7 @@ CREATE TABLE IF NOT EXISTS recurring_stream_transactions (
   present_in_latest_snapshot INTEGER NOT NULL DEFAULT 1 CHECK (present_in_latest_snapshot IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   PRIMARY KEY (recurring_stream_id, provider_transaction_id)
 );
 
@@ -411,7 +439,8 @@ CREATE TABLE IF NOT EXISTS recurring_classifications (
   classification TEXT NOT NULL CHECK (classification IN ('unclassified', 'subscription', 'bill', 'other', 'excluded')),
   note TEXT,
   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal'
 );
 
 CREATE TABLE IF NOT EXISTS recurring_sync_state (
@@ -426,7 +455,8 @@ CREATE TABLE IF NOT EXISTS recurring_sync_state (
   coverage_warnings TEXT NOT NULL DEFAULT '[]',
   lifecycle TEXT NOT NULL DEFAULT 'active' CHECK (lifecycle IN ('active', 'disconnecting', 'disconnected')),
   scope_version INTEGER NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal'
 );
 
 CREATE INDEX IF NOT EXISTS recurring_sync_state_stale_idx
@@ -452,6 +482,7 @@ CREATE TABLE IF NOT EXISTS source_profile_hints (
   hint_kind TEXT NOT NULL,
   hint_value TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   UNIQUE (source_profile_id, hint_kind, hint_value)
 );
 
@@ -518,6 +549,7 @@ CREATE TABLE IF NOT EXISTS capture_credentials (
   revocation_capability_hash TEXT NOT NULL DEFAULT '',
   revoked_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   UNIQUE (credential_hash)
 );
 
@@ -533,6 +565,7 @@ CREATE TABLE IF NOT EXISTS device_source_scopes (
   expires_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   FOREIGN KEY (account_id, currency) REFERENCES account_currencies(account_id, currency),
   UNIQUE (device_id, source_profile_id, account_id, currency, instrument_hint_kind, instrument_hint_value)
 );
@@ -651,6 +684,7 @@ CREATE TABLE IF NOT EXISTS alert_event_digests (
   algorithm TEXT NOT NULL,
   digest TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   PRIMARY KEY (event_id, algorithm)
 );
 
@@ -789,6 +823,7 @@ CREATE TABLE IF NOT EXISTS owner_refresh_generations (
   expires_at TEXT NOT NULL,
   consumed_at TEXT,
   revoked_at TEXT,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   PRIMARY KEY (family_id, generation),
   UNIQUE (token_hash)
 );
@@ -844,6 +879,7 @@ CREATE TABLE IF NOT EXISTS import_chunks (
   rows_json TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   published_at TEXT,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   PRIMARY KEY (preview_id, chunk_index),
   UNIQUE (preview_id, chunk_digest)
 );
@@ -855,7 +891,8 @@ CREATE TABLE IF NOT EXISTS import_preview_errors (
   preview_id TEXT PRIMARY KEY REFERENCES import_previews(id) ON DELETE CASCADE,
   code TEXT NOT NULL,
   message TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal'
 );
 
 CREATE TABLE IF NOT EXISTS import_duplicate_decisions (
@@ -866,6 +903,7 @@ CREATE TABLE IF NOT EXISTS import_duplicate_decisions (
   status TEXT NOT NULL CHECK (status IN ('accepted', 'dismissed')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ledger_id TEXT NOT NULL DEFAULT 'personal',
   PRIMARY KEY (preview_id, candidate_id)
 );
 
@@ -884,9 +922,7 @@ CREATE TABLE IF NOT EXISTS ledger_preferences (
 INSERT OR IGNORE INTO ledger_preferences (ledger_id, reporting_timezone, week_start, revision)
   VALUES ('personal', 'America/Toronto', 1, 0);
 
-CREATE TRIGGER IF NOT EXISTS accounts_default_currency_insert AFTER INSERT ON accounts BEGIN INSERT OR IGNORE INTO account_currencies (account_id, currency) VALUES (NEW.id, NEW.currency); END;
 
-CREATE TRIGGER IF NOT EXISTS accounts_default_currency_update AFTER UPDATE OF currency ON accounts BEGIN INSERT OR IGNORE INTO account_currencies (account_id, currency) VALUES (NEW.id, NEW.currency); END;
 
 CREATE TRIGGER IF NOT EXISTS transactions_fx_lock_date_insert BEFORE INSERT ON transactions WHEN NEW.fx_lock_date IS NOT NULL AND NEW.fx_lock_date IS NOT NEW.date BEGIN SELECT RAISE(ABORT, 'transaction fx lock date must match date'); END;
 CREATE TRIGGER IF NOT EXISTS transactions_fx_lock_date_default AFTER INSERT ON transactions WHEN NEW.fx_lock_date IS NULL BEGIN UPDATE transactions SET fx_lock_date = NEW.date WHERE id = NEW.id; END;
@@ -895,7 +931,7 @@ CREATE TRIGGER IF NOT EXISTS transactions_fx_lock_date_immutable BEFORE UPDATE O
 CREATE TRIGGER IF NOT EXISTS fx_rate_snapshots_immutable_update BEFORE UPDATE ON fx_rate_snapshots BEGIN SELECT RAISE(ABORT, 'fx rate snapshots are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS fx_rate_snapshots_immutable_delete BEFORE DELETE ON fx_rate_snapshots BEGIN SELECT RAISE(ABORT, 'fx rate snapshots are immutable'); END;
 
-CREATE TRIGGER IF NOT EXISTS alert_event_links_same_scope BEFORE INSERT ON alert_event_links BEGIN SELECT RAISE(ABORT, 'alert link ledger mismatch') WHERE NEW.ledger_id <> 'personal' OR (NEW.to_event_id IS NOT NULL AND EXISTS (SELECT 1 FROM alert_events source JOIN alert_events target ON target.id = NEW.to_event_id WHERE source.id = NEW.from_event_id AND (source.ledger_id <> target.ledger_id OR (source.account_id IS NOT NULL AND target.account_id IS NOT NULL AND source.account_id <> target.account_id)))) OR (NEW.to_transaction_id IS NOT NULL AND EXISTS (SELECT 1 FROM alert_events source JOIN transactions target ON target.id = NEW.to_transaction_id WHERE source.id = NEW.from_event_id AND source.account_id IS NOT NULL AND source.account_id <> target.account_id)); END;
+CREATE TRIGGER alert_event_links_same_scope BEFORE INSERT ON alert_event_links BEGIN SELECT RAISE(ABORT, 'alert link ledger mismatch') WHERE (NEW.to_event_id IS NOT NULL AND EXISTS (SELECT 1 FROM alert_events source JOIN alert_events target ON target.id = NEW.to_event_id WHERE source.id = NEW.from_event_id AND (source.ledger_id <> target.ledger_id OR (source.account_id IS NOT NULL AND target.account_id IS NOT NULL AND source.account_id <> target.account_id)))) OR (NEW.to_transaction_id IS NOT NULL AND EXISTS (SELECT 1 FROM alert_events source JOIN transactions target ON target.id = NEW.to_transaction_id WHERE source.id = NEW.from_event_id AND source.account_id IS NOT NULL AND source.account_id <> target.account_id)); END;
 CREATE TRIGGER IF NOT EXISTS alert_event_links_no_cycle BEFORE INSERT ON alert_event_links WHEN NEW.to_event_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'alert event link cycle') WHERE EXISTS (WITH RECURSIVE reachable(id) AS (SELECT NEW.to_event_id UNION ALL SELECT l.to_event_id FROM alert_event_links l JOIN reachable r ON l.from_event_id = r.id WHERE l.to_event_id IS NOT NULL) SELECT 1 FROM reachable WHERE id = NEW.from_event_id); END;
 CREATE TRIGGER IF NOT EXISTS alert_events_immutable_update BEFORE UPDATE ON alert_events BEGIN SELECT RAISE(ABORT, 'alert events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS alert_events_immutable_delete BEFORE DELETE ON alert_events BEGIN SELECT RAISE(ABORT, 'alert events are immutable'); END;
@@ -907,3 +943,158 @@ CREATE TRIGGER IF NOT EXISTS alert_projection_provenance_immutable_update BEFORE
 CREATE TRIGGER IF NOT EXISTS alert_projection_provenance_immutable_delete BEFORE DELETE ON alert_projection_provenance BEGIN SELECT RAISE(ABORT, 'alert projection provenance is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS annotation_revisions_immutable_update BEFORE UPDATE ON annotation_revisions BEGIN SELECT RAISE(ABORT, 'annotation revisions are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS annotation_revisions_immutable_delete BEFORE DELETE ON annotation_revisions BEGIN SELECT RAISE(ABORT, 'annotation revisions are immutable'); END;
+
+CREATE TRIGGER accounts_default_currency_insert AFTER INSERT ON accounts BEGIN INSERT OR IGNORE INTO account_currencies (account_id, currency, ledger_id) VALUES (NEW.id, NEW.currency, NEW.ledger_id); END;
+CREATE TRIGGER accounts_default_currency_update AFTER UPDATE OF currency ON accounts BEGIN INSERT OR IGNORE INTO account_currencies (account_id, currency, ledger_id) VALUES (NEW.id, NEW.currency, NEW.ledger_id); END;
+CREATE TRIGGER user_identities_no_takeover BEFORE INSERT ON user_identities BEGIN SELECT RAISE(ABORT, 'identity is already assigned') WHERE EXISTS (SELECT 1 FROM user_identities WHERE issuer = NEW.issuer AND subject = NEW.subject AND user_id <> NEW.user_id); END;
+CREATE TRIGGER user_identities_immutable_update BEFORE UPDATE ON user_identities BEGIN SELECT RAISE(ABORT, 'identity mappings are immutable'); END;
+CREATE TRIGGER user_identities_immutable_delete BEFORE DELETE ON user_identities BEGIN SELECT RAISE(ABORT, 'identity mappings are immutable'); END;
+CREATE TRIGGER ledgers_owner_insert BEFORE INSERT ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger owner is required') WHERE NEW.user_id IS NULL OR NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id); END;
+CREATE TRIGGER ledgers_owner_update BEFORE UPDATE OF user_id, id ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.user_id IS NOT OLD.user_id OR NEW.id IS NOT OLD.id; END;
+CREATE TRIGGER accounts_ledger_scope_insert BEFORE INSERT ON accounts BEGIN SELECT RAISE(ABORT, 'accounts ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER accounts_ledger_scope_update BEFORE UPDATE ON accounts BEGIN SELECT RAISE(ABORT, 'accounts ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER accounts_ledger_immutable BEFORE UPDATE OF ledger_id ON accounts BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER account_currencies_ledger_scope_insert BEFORE INSERT ON account_currencies BEGIN SELECT RAISE(ABORT, 'account_currencies ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER account_currencies_ledger_scope_update BEFORE UPDATE ON account_currencies BEGIN SELECT RAISE(ABORT, 'account_currencies ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER account_currencies_ledger_immutable BEFORE UPDATE OF ledger_id ON account_currencies BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER transactions_ledger_scope_insert BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'transactions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER transactions_ledger_scope_update BEFORE UPDATE ON transactions BEGIN SELECT RAISE(ABORT, 'transactions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER transactions_ledger_immutable BEFORE UPDATE OF ledger_id ON transactions BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER imports_ledger_scope_insert BEFORE INSERT ON imports BEGIN SELECT RAISE(ABORT, 'imports ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER imports_ledger_scope_update BEFORE UPDATE ON imports BEGIN SELECT RAISE(ABORT, 'imports ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER imports_ledger_immutable BEFORE UPDATE OF ledger_id ON imports BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER sync_state_ledger_scope_insert BEFORE INSERT ON sync_state BEGIN SELECT RAISE(ABORT, 'sync_state ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER sync_state_ledger_scope_update BEFORE UPDATE ON sync_state BEGIN SELECT RAISE(ABORT, 'sync_state ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER sync_state_ledger_immutable BEFORE UPDATE OF ledger_id ON sync_state BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER plaid_items_ledger_scope_insert BEFORE INSERT ON plaid_items BEGIN SELECT RAISE(ABORT, 'plaid_items ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER plaid_items_ledger_scope_update BEFORE UPDATE ON plaid_items BEGIN SELECT RAISE(ABORT, 'plaid_items ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER plaid_items_ledger_immutable BEFORE UPDATE OF ledger_id ON plaid_items BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER plaid_accounts_ledger_scope_insert BEFORE INSERT ON plaid_accounts BEGIN SELECT RAISE(ABORT, 'plaid_accounts ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plaid_items WHERE item_id = NEW.item_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER plaid_accounts_ledger_scope_update BEFORE UPDATE ON plaid_accounts BEGIN SELECT RAISE(ABORT, 'plaid_accounts ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plaid_items WHERE item_id = NEW.item_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER plaid_accounts_ledger_immutable BEFORE UPDATE OF ledger_id ON plaid_accounts BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER lunchflow_accounts_ledger_scope_insert BEFORE INSERT ON lunchflow_accounts BEGIN SELECT RAISE(ABORT, 'lunchflow_accounts ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER lunchflow_accounts_ledger_scope_update BEFORE UPDATE ON lunchflow_accounts BEGIN SELECT RAISE(ABORT, 'lunchflow_accounts ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER lunchflow_accounts_ledger_immutable BEFORE UPDATE OF ledger_id ON lunchflow_accounts BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER mobile_connections_ledger_scope_insert BEFORE INSERT ON mobile_connections BEGIN SELECT RAISE(ABORT, 'mobile_connections ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER mobile_connections_ledger_scope_update BEFORE UPDATE ON mobile_connections BEGIN SELECT RAISE(ABORT, 'mobile_connections ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER mobile_connections_ledger_immutable BEFORE UPDATE OF ledger_id ON mobile_connections BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER mobile_connection_operations_ledger_scope_insert BEFORE INSERT ON mobile_connection_operations BEGIN SELECT RAISE(ABORT, 'mobile_connection_operations ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER mobile_connection_operations_ledger_scope_update BEFORE UPDATE ON mobile_connection_operations BEGIN SELECT RAISE(ABORT, 'mobile_connection_operations ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER mobile_connection_operations_ledger_immutable BEFORE UPDATE OF ledger_id ON mobile_connection_operations BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER lunchflow_operations_ledger_scope_insert BEFORE INSERT ON lunchflow_operations BEGIN SELECT RAISE(ABORT, 'lunchflow_operations ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER lunchflow_operations_ledger_scope_update BEFORE UPDATE ON lunchflow_operations BEGIN SELECT RAISE(ABORT, 'lunchflow_operations ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER lunchflow_operations_ledger_immutable BEFORE UPDATE OF ledger_id ON lunchflow_operations BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER recurring_streams_ledger_scope_insert BEFORE INSERT ON recurring_streams BEGIN SELECT RAISE(ABORT, 'recurring_streams ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plaid_items WHERE item_id = NEW.item_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER recurring_streams_ledger_scope_update BEFORE UPDATE ON recurring_streams BEGIN SELECT RAISE(ABORT, 'recurring_streams ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plaid_items WHERE item_id = NEW.item_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER recurring_streams_ledger_immutable BEFORE UPDATE OF ledger_id ON recurring_streams BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER recurring_stream_transactions_ledger_scope_insert BEFORE INSERT ON recurring_stream_transactions BEGIN SELECT RAISE(ABORT, 'recurring_stream_transactions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.recurring_stream_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recurring_streams WHERE id = NEW.recurring_stream_id AND ledger_id = NEW.ledger_id)) OR (NEW.item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plaid_items WHERE item_id = NEW.item_id AND ledger_id = NEW.ledger_id)) OR (NEW.transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER recurring_stream_transactions_ledger_scope_update BEFORE UPDATE ON recurring_stream_transactions BEGIN SELECT RAISE(ABORT, 'recurring_stream_transactions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.recurring_stream_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recurring_streams WHERE id = NEW.recurring_stream_id AND ledger_id = NEW.ledger_id)) OR (NEW.item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plaid_items WHERE item_id = NEW.item_id AND ledger_id = NEW.ledger_id)) OR (NEW.transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER recurring_stream_transactions_ledger_immutable BEFORE UPDATE OF ledger_id ON recurring_stream_transactions BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER recurring_classifications_ledger_scope_insert BEFORE INSERT ON recurring_classifications BEGIN SELECT RAISE(ABORT, 'recurring_classifications ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.recurring_stream_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recurring_streams WHERE id = NEW.recurring_stream_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER recurring_classifications_ledger_scope_update BEFORE UPDATE ON recurring_classifications BEGIN SELECT RAISE(ABORT, 'recurring_classifications ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.recurring_stream_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recurring_streams WHERE id = NEW.recurring_stream_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER recurring_classifications_ledger_immutable BEFORE UPDATE OF ledger_id ON recurring_classifications BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER recurring_sync_state_ledger_scope_insert BEFORE INSERT ON recurring_sync_state BEGIN SELECT RAISE(ABORT, 'recurring_sync_state ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plaid_items WHERE item_id = NEW.item_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER recurring_sync_state_ledger_scope_update BEFORE UPDATE ON recurring_sync_state BEGIN SELECT RAISE(ABORT, 'recurring_sync_state ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.item_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plaid_items WHERE item_id = NEW.item_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER recurring_sync_state_ledger_immutable BEFORE UPDATE OF ledger_id ON recurring_sync_state BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER source_profiles_ledger_scope_insert BEFORE INSERT ON source_profiles BEGIN SELECT RAISE(ABORT, 'source_profiles ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER source_profiles_ledger_scope_update BEFORE UPDATE ON source_profiles BEGIN SELECT RAISE(ABORT, 'source_profiles ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER source_profiles_ledger_immutable BEFORE UPDATE OF ledger_id ON source_profiles BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER source_profile_hints_ledger_scope_insert BEFORE INSERT ON source_profile_hints BEGIN SELECT RAISE(ABORT, 'source_profile_hints ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.source_profile_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM source_profiles WHERE id = NEW.source_profile_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER source_profile_hints_ledger_scope_update BEFORE UPDATE ON source_profile_hints BEGIN SELECT RAISE(ABORT, 'source_profile_hints ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.source_profile_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM source_profiles WHERE id = NEW.source_profile_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER source_profile_hints_ledger_immutable BEFORE UPDATE OF ledger_id ON source_profile_hints BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER source_account_mappings_ledger_scope_insert BEFORE INSERT ON source_account_mappings BEGIN SELECT RAISE(ABORT, 'source_account_mappings ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.source_profile_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM source_profiles WHERE id = NEW.source_profile_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER source_account_mappings_ledger_scope_update BEFORE UPDATE ON source_account_mappings BEGIN SELECT RAISE(ABORT, 'source_account_mappings ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.source_profile_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM source_profiles WHERE id = NEW.source_profile_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER source_account_mappings_ledger_immutable BEFORE UPDATE OF ledger_id ON source_account_mappings BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER mobile_devices_ledger_scope_insert BEFORE INSERT ON mobile_devices BEGIN SELECT RAISE(ABORT, 'mobile_devices ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER mobile_devices_ledger_scope_update BEFORE UPDATE ON mobile_devices BEGIN SELECT RAISE(ABORT, 'mobile_devices ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER mobile_devices_ledger_immutable BEFORE UPDATE OF ledger_id ON mobile_devices BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER device_pairings_ledger_scope_insert BEFORE INSERT ON device_pairings BEGIN SELECT RAISE(ABORT, 'device_pairings ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER device_pairings_ledger_scope_update BEFORE UPDATE ON device_pairings BEGIN SELECT RAISE(ABORT, 'device_pairings ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER device_pairings_ledger_immutable BEFORE UPDATE OF ledger_id ON device_pairings BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER capture_credentials_ledger_scope_insert BEFORE INSERT ON capture_credentials BEGIN SELECT RAISE(ABORT, 'capture_credentials ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER capture_credentials_ledger_scope_update BEFORE UPDATE ON capture_credentials BEGIN SELECT RAISE(ABORT, 'capture_credentials ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER capture_credentials_ledger_immutable BEFORE UPDATE OF ledger_id ON capture_credentials BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER device_source_scopes_ledger_scope_insert BEFORE INSERT ON device_source_scopes BEGIN SELECT RAISE(ABORT, 'device_source_scopes ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)) OR (NEW.source_profile_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM source_profiles WHERE id = NEW.source_profile_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER device_source_scopes_ledger_scope_update BEFORE UPDATE ON device_source_scopes BEGIN SELECT RAISE(ABORT, 'device_source_scopes ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)) OR (NEW.source_profile_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM source_profiles WHERE id = NEW.source_profile_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER device_source_scopes_ledger_immutable BEFORE UPDATE OF ledger_id ON device_source_scopes BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER transaction_source_records_ledger_scope_insert BEFORE INSERT ON transaction_source_records BEGIN SELECT RAISE(ABORT, 'transaction_source_records ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND account_id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER transaction_source_records_ledger_scope_update BEFORE UPDATE ON transaction_source_records BEGIN SELECT RAISE(ABORT, 'transaction_source_records ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND account_id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER transaction_source_records_ledger_immutable BEFORE UPDATE OF ledger_id ON transaction_source_records BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER statement_reconciliation_candidates_ledger_scope_insert BEFORE INSERT ON statement_reconciliation_candidates BEGIN SELECT RAISE(ABORT, 'statement_reconciliation_candidates ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.source_record_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transaction_source_records WHERE id = NEW.source_record_id AND ledger_id = NEW.ledger_id)) OR (NEW.statement_transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.statement_transaction_id AND ledger_id = NEW.ledger_id)) OR (NEW.candidate_transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.candidate_transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER statement_reconciliation_candidates_ledger_scope_update BEFORE UPDATE ON statement_reconciliation_candidates BEGIN SELECT RAISE(ABORT, 'statement_reconciliation_candidates ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.source_record_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transaction_source_records WHERE id = NEW.source_record_id AND ledger_id = NEW.ledger_id)) OR (NEW.statement_transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.statement_transaction_id AND ledger_id = NEW.ledger_id)) OR (NEW.candidate_transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.candidate_transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER statement_reconciliation_candidates_ledger_immutable BEFORE UPDATE OF ledger_id ON statement_reconciliation_candidates BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER import_commit_operations_ledger_scope_insert BEFORE INSERT ON import_commit_operations BEGIN SELECT RAISE(ABORT, 'import_commit_operations ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_commit_operations_ledger_scope_update BEFORE UPDATE ON import_commit_operations BEGIN SELECT RAISE(ABORT, 'import_commit_operations ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_commit_operations_ledger_immutable BEFORE UPDATE OF ledger_id ON import_commit_operations BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER alert_events_ledger_scope_insert BEFORE INSERT ON alert_events BEGIN SELECT RAISE(ABORT, 'alert_events ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)) OR (NEW.source_profile_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM source_profiles WHERE id = NEW.source_profile_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_events_ledger_scope_update BEFORE UPDATE ON alert_events BEGIN SELECT RAISE(ABORT, 'alert_events ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)) OR (NEW.source_profile_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM source_profiles WHERE id = NEW.source_profile_id AND ledger_id = NEW.ledger_id)) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_events_ledger_immutable BEFORE UPDATE OF ledger_id ON alert_events BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER alert_event_digests_ledger_scope_insert BEFORE INSERT ON alert_event_digests BEGIN SELECT RAISE(ABORT, 'alert_event_digests ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_events WHERE id = NEW.event_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_event_digests_ledger_scope_update BEFORE UPDATE ON alert_event_digests BEGIN SELECT RAISE(ABORT, 'alert_event_digests ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_events WHERE id = NEW.event_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_event_digests_ledger_immutable BEFORE UPDATE OF ledger_id ON alert_event_digests BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER alert_projections_ledger_scope_insert BEFORE INSERT ON alert_projections BEGIN SELECT RAISE(ABORT, 'alert_projections ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_events WHERE id = NEW.event_id AND ledger_id = NEW.ledger_id)) OR (NEW.transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_projections_ledger_scope_update BEFORE UPDATE ON alert_projections BEGIN SELECT RAISE(ABORT, 'alert_projections ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_events WHERE id = NEW.event_id AND ledger_id = NEW.ledger_id)) OR (NEW.transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_projections_ledger_immutable BEFORE UPDATE OF ledger_id ON alert_projections BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER alert_projection_provenance_ledger_scope_insert BEFORE INSERT ON alert_projection_provenance BEGIN SELECT RAISE(ABORT, 'alert_projection_provenance ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.projection_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_projections WHERE id = NEW.projection_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_projection_provenance_ledger_scope_update BEFORE UPDATE ON alert_projection_provenance BEGIN SELECT RAISE(ABORT, 'alert_projection_provenance ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.projection_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_projections WHERE id = NEW.projection_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_projection_provenance_ledger_immutable BEFORE UPDATE OF ledger_id ON alert_projection_provenance BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER alert_event_links_ledger_scope_insert BEFORE INSERT ON alert_event_links BEGIN SELECT RAISE(ABORT, 'alert_event_links ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.from_event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_events WHERE id = NEW.from_event_id AND ledger_id = NEW.ledger_id)) OR (NEW.to_event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_events WHERE id = NEW.to_event_id AND ledger_id = NEW.ledger_id)) OR (NEW.to_transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.to_transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_event_links_ledger_scope_update BEFORE UPDATE ON alert_event_links BEGIN SELECT RAISE(ABORT, 'alert_event_links ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.from_event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_events WHERE id = NEW.from_event_id AND ledger_id = NEW.ledger_id)) OR (NEW.to_event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM alert_events WHERE id = NEW.to_event_id AND ledger_id = NEW.ledger_id)) OR (NEW.to_transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.to_transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER alert_event_links_ledger_immutable BEFORE UPDATE OF ledger_id ON alert_event_links BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER alert_event_link_conflicts_ledger_scope_insert BEFORE INSERT ON alert_event_link_conflicts BEGIN SELECT RAISE(ABORT, 'alert_event_link_conflicts ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER alert_event_link_conflicts_ledger_scope_update BEFORE UPDATE ON alert_event_link_conflicts BEGIN SELECT RAISE(ABORT, 'alert_event_link_conflicts ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER alert_event_link_conflicts_ledger_immutable BEFORE UPDATE OF ledger_id ON alert_event_link_conflicts BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER annotation_revisions_ledger_scope_insert BEFORE INSERT ON annotation_revisions BEGIN SELECT RAISE(ABORT, 'annotation_revisions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER annotation_revisions_ledger_scope_update BEFORE UPDATE ON annotation_revisions BEGIN SELECT RAISE(ABORT, 'annotation_revisions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER annotation_revisions_ledger_immutable BEFORE UPDATE OF ledger_id ON annotation_revisions BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER mobile_auth_requests_ledger_scope_insert BEFORE INSERT ON mobile_auth_requests BEGIN SELECT RAISE(ABORT, 'mobile_auth_requests ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER mobile_auth_requests_ledger_scope_update BEFORE UPDATE ON mobile_auth_requests BEGIN SELECT RAISE(ABORT, 'mobile_auth_requests ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER mobile_auth_requests_ledger_immutable BEFORE UPDATE OF ledger_id ON mobile_auth_requests BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER owner_session_families_ledger_scope_insert BEFORE INSERT ON owner_session_families BEGIN SELECT RAISE(ABORT, 'owner_session_families ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER owner_session_families_ledger_scope_update BEFORE UPDATE ON owner_session_families BEGIN SELECT RAISE(ABORT, 'owner_session_families ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.device_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM mobile_devices WHERE id = NEW.device_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER owner_session_families_ledger_immutable BEFORE UPDATE OF ledger_id ON owner_session_families BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER owner_refresh_generations_ledger_scope_insert BEFORE INSERT ON owner_refresh_generations BEGIN SELECT RAISE(ABORT, 'owner_refresh_generations ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.family_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM owner_session_families WHERE id = NEW.family_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER owner_refresh_generations_ledger_scope_update BEFORE UPDATE ON owner_refresh_generations BEGIN SELECT RAISE(ABORT, 'owner_refresh_generations ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.family_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM owner_session_families WHERE id = NEW.family_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER owner_refresh_generations_ledger_immutable BEFORE UPDATE OF ledger_id ON owner_refresh_generations BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER owner_replay_records_ledger_scope_insert BEFORE INSERT ON owner_replay_records BEGIN SELECT RAISE(ABORT, 'owner_replay_records ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER owner_replay_records_ledger_scope_update BEFORE UPDATE ON owner_replay_records BEGIN SELECT RAISE(ABORT, 'owner_replay_records ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER owner_replay_records_ledger_immutable BEFORE UPDATE OF ledger_id ON owner_replay_records BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER import_previews_ledger_scope_insert BEFORE INSERT ON import_previews BEGIN SELECT RAISE(ABORT, 'import_previews ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_previews_ledger_scope_update BEFORE UPDATE ON import_previews BEGIN SELECT RAISE(ABORT, 'import_previews ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.account_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.account_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_previews_ledger_immutable BEFORE UPDATE OF ledger_id ON import_previews BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER import_chunks_ledger_scope_insert BEFORE INSERT ON import_chunks BEGIN SELECT RAISE(ABORT, 'import_chunks ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_chunks_ledger_scope_update BEFORE UPDATE ON import_chunks BEGIN SELECT RAISE(ABORT, 'import_chunks ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_chunks_ledger_immutable BEFORE UPDATE OF ledger_id ON import_chunks BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER import_preview_errors_ledger_scope_insert BEFORE INSERT ON import_preview_errors BEGIN SELECT RAISE(ABORT, 'import_preview_errors ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_preview_errors_ledger_scope_update BEFORE UPDATE ON import_preview_errors BEGIN SELECT RAISE(ABORT, 'import_preview_errors ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_preview_errors_ledger_immutable BEFORE UPDATE OF ledger_id ON import_preview_errors BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER import_duplicate_decisions_ledger_scope_insert BEFORE INSERT ON import_duplicate_decisions BEGIN SELECT RAISE(ABORT, 'import_duplicate_decisions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.statement_transaction_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.candidate_transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_duplicate_decisions_ledger_scope_update BEFORE UPDATE ON import_duplicate_decisions BEGIN SELECT RAISE(ABORT, 'import_duplicate_decisions ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id) OR (NEW.preview_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM import_previews WHERE id = NEW.preview_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.statement_transaction_id AND ledger_id = NEW.ledger_id)) OR (NOT EXISTS (SELECT 1 FROM transactions WHERE id = NEW.candidate_transaction_id AND ledger_id = NEW.ledger_id)); END;
+CREATE TRIGGER import_duplicate_decisions_ledger_immutable BEFORE UPDATE OF ledger_id ON import_duplicate_decisions BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+CREATE TRIGGER ledger_preferences_ledger_scope_insert BEFORE INSERT ON ledger_preferences BEGIN SELECT RAISE(ABORT, 'ledger_preferences ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER ledger_preferences_ledger_scope_update BEFORE UPDATE ON ledger_preferences BEGIN SELECT RAISE(ABORT, 'ledger_preferences ledger mismatch') WHERE NOT EXISTS (SELECT 1 FROM ledgers WHERE id = NEW.ledger_id); END;
+CREATE TRIGGER ledger_preferences_ledger_immutable BEFORE UPDATE OF ledger_id ON ledger_preferences BEGIN SELECT RAISE(ABORT, 'ledger ownership is immutable') WHERE NEW.ledger_id IS NOT OLD.ledger_id; END;
+
+CREATE TRIGGER users_owned_ledger_delete BEFORE DELETE ON users BEGIN SELECT RAISE(ABORT, 'user owns a ledger') WHERE EXISTS (SELECT 1 FROM ledgers WHERE user_id = OLD.id); END;
+CREATE TRIGGER users_owned_ledger_id_update BEFORE UPDATE OF id ON users BEGIN SELECT RAISE(ABORT, 'user identity is immutable') WHERE NEW.id IS NOT OLD.id AND EXISTS (SELECT 1 FROM ledgers WHERE user_id = OLD.id); END;
+
+CREATE TRIGGER ledgers_accounts_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains accounts') WHERE EXISTS (SELECT 1 FROM accounts WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_account_currencies_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains account_currencies') WHERE EXISTS (SELECT 1 FROM account_currencies WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_transactions_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains transactions') WHERE EXISTS (SELECT 1 FROM transactions WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_imports_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains imports') WHERE EXISTS (SELECT 1 FROM imports WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_sync_state_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains sync_state') WHERE EXISTS (SELECT 1 FROM sync_state WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_plaid_items_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains plaid_items') WHERE EXISTS (SELECT 1 FROM plaid_items WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_plaid_accounts_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains plaid_accounts') WHERE EXISTS (SELECT 1 FROM plaid_accounts WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_recurring_streams_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains recurring_streams') WHERE EXISTS (SELECT 1 FROM recurring_streams WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_recurring_stream_transactions_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains recurring_stream_transactions') WHERE EXISTS (SELECT 1 FROM recurring_stream_transactions WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_recurring_classifications_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains recurring_classifications') WHERE EXISTS (SELECT 1 FROM recurring_classifications WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_recurring_sync_state_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains recurring_sync_state') WHERE EXISTS (SELECT 1 FROM recurring_sync_state WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_source_profile_hints_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains source_profile_hints') WHERE EXISTS (SELECT 1 FROM source_profile_hints WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_capture_credentials_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains capture_credentials') WHERE EXISTS (SELECT 1 FROM capture_credentials WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_device_source_scopes_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains device_source_scopes') WHERE EXISTS (SELECT 1 FROM device_source_scopes WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_alert_event_digests_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains alert_event_digests') WHERE EXISTS (SELECT 1 FROM alert_event_digests WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_owner_refresh_generations_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains owner_refresh_generations') WHERE EXISTS (SELECT 1 FROM owner_refresh_generations WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_import_chunks_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains import_chunks') WHERE EXISTS (SELECT 1 FROM import_chunks WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_import_preview_errors_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains import_preview_errors') WHERE EXISTS (SELECT 1 FROM import_preview_errors WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_import_duplicate_decisions_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains import_duplicate_decisions') WHERE EXISTS (SELECT 1 FROM import_duplicate_decisions WHERE ledger_id = OLD.id); END;
+CREATE TRIGGER ledgers_alert_event_link_conflicts_delete_guard BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'ledger contains alert_event_link_conflicts') WHERE EXISTS (SELECT 1 FROM alert_event_link_conflicts WHERE ledger_id = OLD.id); END;

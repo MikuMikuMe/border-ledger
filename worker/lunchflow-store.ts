@@ -249,7 +249,7 @@ function selectionReplacementStatements(db: D1Database, context: SelectionSqlCon
         json_extract(selected.value, '$.currency'), json_extract(selected.value, '$.kind'), 1, 1, NULL, ?
       FROM json_each(?) AS selected
       WHERE ${operationGate}
-      ON CONFLICT(provider_account_id) DO UPDATE SET
+      ON CONFLICT(ledger_id, provider_account_id) DO UPDATE SET
         account_id = excluded.account_id,
         ledger_id = excluded.ledger_id,
         name = excluded.name,
