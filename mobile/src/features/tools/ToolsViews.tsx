@@ -21,7 +21,7 @@ function Check({dark,label,checked,onPress,disabled=false}:{dark:boolean;label:s
 }
 
 function Field({dark,label,value,onChange}:{dark:boolean;label:string;value:string;onChange(v:string):void}){
- return <View style={{gap:6}}><Copy dark={dark}>{label}</Copy><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} autoCapitalize="none" style={{minHeight:48,padding:12,borderWidth:1,borderRadius:12,borderColor:dark?'#43534B':'#D2CCC0',color:dark?'#EEF1E8':'#18201F',fontFamily:'DMSans',fontSize:15}}/>;</View>;
+ return <View style={{gap:6}}><Copy dark={dark}>{label}</Copy><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} autoCapitalize="none" style={{minHeight:48,padding:12,borderWidth:1,borderRadius:12,borderColor:dark?'#43534B':'#D2CCC0',color:dark?'#EEF1E8':'#18201F',fontFamily:'DMSans',fontSize:15}}/></View>;
 }
 
 function CaptureProfileCard({dark,controller,snapshot,state,profile,setConsent}:{dark:boolean;controller:ToolsController;snapshot:CaptureSnapshot;state:CaptureState;profile:CaptureSnapshot['profiles'][number];setConsent(value:boolean):void}){

@@ -1,4 +1,4 @@
-import React,{useRef} from 'react';
+import React,{useRef,useState} from 'react';
 import {AccessibilityInfo,ActivityIndicator,findNodeHandle,KeyboardAvoidingView,Modal,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
 import type {ActivityQuery,Report,Snapshot,Transaction,Transactions,Stream,Lens,RecurringData,MutationState} from './contracts';
 import {filterActivity,formatMoney,recurringMessage,reportingCurrencies,reportView,type LoadState,type Window} from './model';
@@ -23,6 +23,15 @@ export function Action({dark,label,text,onPress,disabled=false,selected,radio=fa
 function Choices({dark,label,values,value,onChange}:Theme&{label:string;values:string[];value:string|null;onChange(value:string|null):void}) {
   return <View style={styles.section}><Copy dark={dark} heading>{label}</Copy><ScrollView horizontal contentContainerStyle={{gap:8}}>{[null,...new Set([...(value?[value]:[]),...values])].map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'All'}`} text={v??'All'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</ScrollView></View>;
 }
+function FilterDisclosure({dark,label,summary,children}:Theme&{label:string;summary:string;children:React.ReactNode}) {
+  const [expanded,setExpanded]=useState(false),p=palette(dark);
+  return <View>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{expanded}} onPress={()=>setExpanded(!expanded)} style={{minHeight:48,paddingVertical:12}}>
+      <Text style={[styles.copy,{color:p.accent}]}>{expanded?'Hide':'Show'} {label.toLowerCase()} · {summary}</Text>
+    </Pressable>
+    {expanded?children:null}
+  </View>;
+}
 export function Status({dark,state,onRetry,label}:Theme&{state:LoadState<unknown>;onRetry():void;label:string}) {
   return <View style={styles.section} accessibilityLiveRegion="polite" accessibilityRole={state.message?'alert':undefined}>
     {state.phase==='loading'?<><ActivityIndicator accessibilityLabel={`Loading ${label}`} color={palette(dark).accent}/><Copy dark={dark}>Loading {label}…</Copy></>:null}
@@ -36,11 +45,11 @@ function MoneyRows({dark,label,values}:Theme&{label:string;values:{currency:stri
 export function OverviewView({dark,state,snapshot,lens,currencies,onLens,onRetry}:Theme&{state:LoadState<Report>;snapshot:Snapshot|null;lens:Lens;currencies:string[];onLens(value:Lens):void;onRetry():void}) {
   const report=state.data,view=report?reportView(report,lens.include,lens.source):null;
   return <View style={styles.section}>
-    <Copy dark={dark}>Server snapshot only; unsent capture records are not included.</Copy>
+
     {snapshot?<Copy dark={dark}>Snapshot {snapshot.snapshotAt} · {snapshot.timeZone} · {snapshot.accounts.length} account(s)</Copy>:null}
-    <Copy dark={dark} heading>Reporting lens</Copy><View style={styles.wrap}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}<Action dark={dark} label="Include provisional" selected={lens.include} onPress={()=>onLens({...lens,include:!lens.include})}/></View>
+    <View style={styles.wrap}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} text={window} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}</View><FilterDisclosure dark={dark} label="Report filters" summary={`${lens.source??'All currencies'} / ${lens.target??'No conversion'} / ${lens.include?'Including provisional':'Confirmed only'}`}><Action dark={dark} label="Include provisional" selected={lens.include} onPress={()=>onLens({...lens,include:!lens.include})}/>
     <Choices dark={dark} label="Source currency (no conversion)" values={currencies} value={lens.source} onChange={source=>onLens({...lens,source})}/>
-    <Choices dark={dark} label="Reporting currency" values={reportingCurrencies} value={lens.target} onChange={target=>onLens({...lens,target})}/>
+    <Choices dark={dark} label="Reporting currency" values={reportingCurrencies} value={lens.target} onChange={target=>onLens({...lens,target})}/></FilterDisclosure>
     <Status dark={dark} state={state} onRetry={onRetry} label="report"/>
     {report&&view?<>
       <Copy dark={dark}>{report.from??'Full history'} to {report.to??'today'} · {report.timeBasis} · {report.timeZone??snapshot?.timeZone}</Copy>
@@ -60,7 +69,7 @@ export function OverviewView({dark,state,snapshot,lens,currencies,onLens,onRetry
       })}
       {report.reportingCurrency?<MoneyRows dark={dark} label="Source currency audit" values={view.sourceTotals.map(v=>({currency:v.currency,amountMinor:v.amount}))}/>:null}
       {report.fx.chineseBankBand?<Card dark={dark}><Copy dark={dark} heading>Chinese bank estimate band</Copy><Copy dark={dark}>{report.fx.chineseBankBand.eligible?`${formatMoney(report.fx.chineseBankBand.lowerMinorUnits,report.fx.chineseBankBand.currency)} – ${formatMoney(report.fx.chineseBankBand.upperMinorUnits,report.fx.chineseBankBand.currency)}`:'Not eligible for an estimate band.'}</Copy><Copy dark={dark}>Estimate only · {report.fx.chineseBankBand.percentageBasisPoints/100}% · actual bank settlement may differ.</Copy></Card>:null}
-      <Copy dark={dark} heading>Source coverage</Copy>{[...report.sourceCoverage].sort((a,b)=>a.source.localeCompare(b.source)).map(s=><Copy key={s.source} dark={dark}>{s.source}: {s.count}</Copy>)}
+      <Copy dark={dark}>Server snapshot only; unsent capture records are not included.</Copy><Copy dark={dark} heading>Source coverage</Copy>{[...report.sourceCoverage].sort((a,b)=>a.source.localeCompare(b.source)).map(s=><Copy key={s.source} dark={dark}>{s.source}: {s.count}</Copy>)}
       <Copy dark={dark}>FX provider {report.fx.provider} · {report.fx.lockedDateCount} locked date(s) · {report.fx.earliest??'unavailable'} to {report.fx.latest??'unavailable'}</Copy>
     </>:state.phase==='ready'?<Copy dark={dark}>No report is available. Connect an account and refresh the owner snapshot.</Copy>:null}
   </View>;
@@ -78,7 +87,7 @@ function ActivityFilters({dark,facetRows,filters,onFilter}:{dark:boolean;facetRo
   const p=palette(dark);
   return <>
     <TextInput accessibilityLabel="Search merchant, account, status" placeholder="Search merchant, account, status" placeholderTextColor={p.muted} value={filters.query??''} onChangeText={query=>onFilter({...filters,query})} style={[styles.input,{color:p.text,borderColor:p.border}]} returnKeyType="search"/>
-    {activityFacetNames.map(name=><ActivityFacet key={name} dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter} name={name}/>)}
+    <FilterDisclosure dark={dark} label="Activity filters" summary={`${activityFacetNames.filter(name=>filters[name]).length} active`}>{activityFacetNames.map(name=><ActivityFacet key={name} dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter} name={name}/>)}</FilterDisclosure>
   </>;
 }
 function ActivityRow({dark,transaction,onOpen}:{dark:boolean;transaction:Transaction;onOpen(id:string):void}){
@@ -138,8 +147,8 @@ export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,on
   const row=(s:Stream,support:string,key:string)=><Card dark={dark} key={key}><Action dark={dark} label={`Open recurring: ${s.merchantName??'Merchant unavailable'}`} onPress={()=>onOpen(s.id)}/><Copy dark={dark}>{s.currency} · {s.classification} · {s.frequency} · Source {s.sourceStatus}</Copy><Copy dark={dark}>Expected source amount: {s.averageAmountMinor===null?'unavailable':formatMoney(s.averageAmountMinor,s.currency)}</Copy><Copy dark={dark}>Next expected: {s.predictedNextDate??'unavailable'} · {support}</Copy></Card>;
   return <View style={styles.section}>
     <Copy dark={dark}>Expected commitments stay separate from actual posted cost.</Copy>
-    <Choices dark={dark} label="Recurring currency" values={currencies} value={filters.currency??null} onChange={currency=>onFilter({...filters,currency})}/>
-    <Choices dark={dark} label="Classification" values={['unclassified','subscription','bill','other','excluded']} value={filters.classification??null} onChange={classification=>onFilter({...filters,classification})}/>
+    <FilterDisclosure dark={dark} label="Recurring filters" summary={`${filters.currency??'All currencies'} / ${filters.classification??'All classifications'}`}><Choices dark={dark} label="Recurring currency" values={currencies} value={filters.currency??null} onChange={currency=>onFilter({...filters,currency})}/>
+    <Choices dark={dark} label="Classification" values={['unclassified','subscription','bill','other','excluded']} value={filters.classification??null} onChange={classification=>onFilter({...filters,classification})}/></FilterDisclosure>
     <Status dark={dark} state={state} onRetry={onRetry} label="Recurring"/>
     {page?<><Copy dark={dark}>{page.state} · Checked {page.checkedAt??'unavailable'} · Source updated {page.sourceUpdatedAt??'unavailable'}</Copy>{page.state!=='ready'||!page.items.length?<Copy dark={dark}>{recurringMessage(page.state)}</Copy>:null}{page.coverageWarnings.map((w,i)=><Copy key={i} dark={dark}>{w}</Copy>)}{page.lastError?<Copy dark={dark} error>Source error: {page.lastError}</Copy>:null}</>:null}
     {summary?<>

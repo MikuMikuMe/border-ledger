@@ -20,6 +20,7 @@ describe('native financial view fixtures and accessibility',()=>{
     const facetRows=[transaction,cny];let filters:any={};
     const props=(state:unknown)=>({...actions,dark:false,state,filters,facetRows,selected:null,onFilter:(value:unknown)=>{filters=value;}});
     const tree=render(ActivityView,props(ready({items:facetRows,nextCursor:null,limit:50})));
+    act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Activity filters')[0].props.onPress());
     const labels=()=>tree.root.findAll((n:any)=>n.type==='Pressable').map((n:any)=>n.props.accessibilityLabel);
     act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Currency: CAD')[0].props.onPress());
     act(()=>tree.update(React.createElement(ActivityView,props({phase:'loading',data:null,message:null}))));
@@ -44,7 +45,9 @@ describe('native financial view fixtures and accessibility',()=>{
     expect(text(tree)).toContain('purchase_date');expect(text(tree)).toContain('Excluded');
     const week=tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report window: Week')[0];
     expect(week.props.accessibilityRole).toBe('radio');expect(week.props.style.minHeight).toBeGreaterThanOrEqual(48);
-    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD').length).toBe(1);
+    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(0);
+    act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report filters')[0].props.onPress());
+    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(1);
   });
   it('opens the actual transaction and exposes editable labeled fields with draft preservation',()=>{
     let opened='';let saved:any;
