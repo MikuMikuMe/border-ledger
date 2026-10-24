@@ -113,3 +113,74 @@ describe('hosted users migration', () => {
     } finally { fresh.close(); await fixture.dispose(); }
   });
 });
+
+const replaceCases = [
+  ['sync update replacement', "UPDATE OR REPLACE sync_state SET connection_id='old-sync' WHERE connection_id='second-sync'"],
+  ['transaction alternate provider update', "UPDATE OR REPLACE transactions SET plaid_item_id='old-item', provider_transaction_id='old-external-tx' WHERE id='second-tx'"],
+  ['ledger alternate owner key with null id', "INSERT OR REPLACE INTO ledgers (id,user_id) VALUES (NULL,'owner')"],
+  ['ledger primary key', "INSERT OR REPLACE INTO ledgers (id,user_id) VALUES ('personal','second')"],
+  ['ledger alternate owner key', "INSERT OR REPLACE INTO ledgers (id,user_id) VALUES ('replacement-ledger','owner')"],
+  ['populated account primary key', "INSERT OR REPLACE INTO accounts (id,ledger_id,name,institution,currency,kind,status) VALUES ('old-account','second-ledger','Replaced','Bank','CAD','savings','connected')"],
+  ['transaction alternate provider key', "INSERT OR REPLACE INTO transactions (id,ledger_id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,plaid_item_id,provider_transaction_id) VALUES ('replacement-tx','second-ledger','second-account','2026-10-20','Replaced',-1,'CAD','Food','expense','confirmed','plaid','replacement-fingerprint','old-item','old-external-tx')"],
+] as const;
+
+async function createReplaceFixture(kind: string) {
+  if (kind !== 'fresh SQLite') return createD1Fixture([...existingMigrations, migration]);
+  const fresh = createSqliteD1Fixture();
+  return { db: fresh.db, async dispose() { fresh.close(); } };
+}
+
+async function seedReplaceCase(db: D1Database, name: string) {
+  if (name.startsWith('ledger alternate owner key')) {
+    await db.prepare("DELETE FROM ledger_preferences WHERE ledger_id='personal'").run();
+    await db.prepare("INSERT INTO accounts (id,name,institution,currency,kind,status) VALUES ('old-account','Owner','Bank','CAD','savings','connected')").run();
+  } else if (name.startsWith('transaction alternate provider')) {
+    await db.batch([
+      db.prepare("INSERT INTO accounts (id,name,institution,currency,kind,status) VALUES ('old-account','Owner','Bank','CAD','savings','connected')"),
+      db.prepare("INSERT INTO plaid_items (item_id,access_token_ciphertext,access_token_iv) VALUES ('old-item','fixture-ciphertext','fixture-iv')"),
+      db.prepare("INSERT INTO transactions (id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,plaid_item_id,provider_transaction_id) VALUES ('old-tx','old-account','2026-10-20','Owner purchase',-1234,'CAD','Food','expense','confirmed','plaid','old-fingerprint','old-item','old-external-tx')"),
+    ]);
+  } else {
+    await seedOwnerHistory(db);
+  }
+  await db.prepare("INSERT INTO users (id) VALUES ('second')").run();
+  await db.prepare("INSERT INTO ledgers (id,user_id) VALUES ('second-ledger','second')").run();
+  await db.prepare("INSERT INTO accounts (id,ledger_id,name,institution,currency,kind,status) VALUES ('second-account','second-ledger','Second','Bank','CAD','savings','connected')").run();
+  if (name === 'sync update replacement') {
+    await db.batch([
+      db.prepare("INSERT INTO sync_state (connection_id,provider,ledger_id) VALUES ('old-sync','plaid','personal')"),
+      db.prepare("INSERT INTO sync_state (connection_id,provider,ledger_id) VALUES ('second-sync','plaid','second-ledger')"),
+    ]);
+  }
+  if (name === 'transaction alternate provider update') {
+    await db.prepare("INSERT INTO transactions (id,ledger_id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint) VALUES ('second-tx','second-ledger','second-account','2026-10-21','Second purchase',-2,'CAD','Food','expense','confirmed','manual','second-fingerprint')").run();
+  }
+}
+describe.each(['fresh SQLite', 'migrated D1'] as const)('REPLACE ownership collision protection: %s', (kind) => {
+  it.each(replaceCases)('rejects %s without changing ledger ownership or financial children', async (name, sql) => {
+    const fixture = await createReplaceFixture(kind);
+    const { db } = fixture;
+    try {
+      await db.prepare('PRAGMA recursive_triggers = OFF').run();
+      await seedReplaceCase(db, name);
+      const before = await snapshot(db);
+      const ledgers = (await db.prepare('SELECT id,user_id FROM ledgers ORDER BY id').all()).results;
+      await expect(db.prepare(sql).run()).rejects.toThrow('ownership collision');
+      expect(await snapshot(db)).toEqual(before);
+      expect((await db.prepare('SELECT id,user_id FROM ledgers ORDER BY id').all()).results).toEqual(ledgers);
+      expect((await db.prepare('PRAGMA foreign_key_check').all()).results).toEqual([]);
+    } finally { await fixture.dispose(); }
+  });
+
+  it('allows existing same-ledger upserts and replacements', async () => {
+    const fixture = await createReplaceFixture(kind);
+    const { db } = fixture;
+    try {
+      await db.prepare("INSERT INTO accounts (id,name,institution,currency,kind,status) VALUES ('same-account','Original','Bank','CAD','savings','connected')").run();
+      await db.prepare("INSERT INTO accounts (id,name,institution,currency,kind,status) VALUES ('same-account','Updated','Bank','CAD','savings','connected') ON CONFLICT(id) DO UPDATE SET name=excluded.name").run();
+      expect(await db.prepare("SELECT ledger_id,name FROM accounts WHERE id='same-account'").first()).toEqual({ ledger_id: 'personal', name: 'Updated' });
+      await db.prepare("INSERT OR REPLACE INTO accounts (id,name,institution,currency,kind,status) VALUES ('same-account','Replaced','Bank','CAD','savings','connected')").run();
+      expect(await db.prepare("SELECT ledger_id,name FROM accounts WHERE id='same-account'").first()).toEqual({ ledger_id: 'personal', name: 'Replaced' });
+    } finally { await fixture.dispose(); }
+  });
+});
