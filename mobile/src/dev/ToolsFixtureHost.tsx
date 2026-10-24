@@ -61,7 +61,7 @@ function FixtureScreen({value,controller,onClose}:{value:Fixture;controller:Tool
  return <><ToolsMutationStatus dark={value.dark} controller={controller}/><Screen {...props}/></>;
 }
 
-function Scene({fixture:value,onClose}:{fixture:Fixture;onClose():void}){
+export function ToolsFixtureScene({fixture:value,onClose}:{fixture:Fixture;onClose():void}){
  const [,render]=useReducer(n=>n+1,0),controller=useMemo(()=>new ToolsController(configurePorts(value.state),render),[value]);
  useEffect(()=>{void controller.start();return()=>controller.dispose();},[controller]);
  return <FixtureScreen value={value} controller={controller} onClose={onClose}/>;
@@ -69,7 +69,7 @@ function Scene({fixture:value,onClose}:{fixture:Fixture;onClose():void}){
 
 function FixtureSurface({value,setValue}:{value:Fixture;setValue(value:Fixture|null):void}){
  const close=()=>setValue(null),background=value.dark?'#101715':'#F3EFE6',foreground=value.dark?'#EEF1E8':'#18201F';
- return <SafeAreaView style={{flex:1,backgroundColor:background}}><StatusBar barStyle={value.dark?'light-content':'dark-content'}/><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{padding:22,paddingBottom:40}}><Text accessibilityRole="header" style={{fontFamily:'Newsreader',fontSize:24,color:foreground}}>Synthetic fixture · {value.screen} · {value.state}</Text><Scene fixture={value} onClose={close}/><Action dark={value.dark} label="Exit synthetic fixture" onPress={close}/></ScrollView></SafeAreaView>;
+ return <SafeAreaView style={{flex:1,backgroundColor:background}}><StatusBar barStyle={value.dark?'light-content':'dark-content'}/><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{padding:22,paddingBottom:40}}><Text accessibilityRole="header" style={{fontFamily:'Newsreader',fontSize:24,color:foreground}}>Synthetic fixture · {value.screen} · {value.state}</Text><ToolsFixtureScene fixture={value} onClose={close}/><Action dark={value.dark} label="Exit synthetic fixture" onPress={close}/></ScrollView></SafeAreaView>;
 }
 
 export function ToolsFixtureHost({children}:{children:React.ReactNode}){
