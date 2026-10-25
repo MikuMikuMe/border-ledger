@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import { pkceChallenge, hashSecret, authenticateCapture, type OwnerContext, type MobileAuthConfig } from '../worker/mobile-auth';
 import { startPairing, approvePairing, claimPairing, renewCaptureCredential } from '../worker/device-pairing';
-const config: MobileAuthConfig = { canonicalOrigin: 'https://pf.example.com', callbackUrl: 'https://pf.example.com/android/auth/callback', environment: 'test', accessAuthorizationUrl: 'https://pf.example.com/mobile/authorize', sessionEncryptionKey: 'synthetic-tenant-pairing-test-key', now: () => new Date('2026-10-24T12:00:00Z'), approvedAccessIssuers: ['https://access.example.com'], approvedAccessAudiences: ['test-audience'] };
+const pairingNow = new Date();
+const config: MobileAuthConfig = { canonicalOrigin: 'https://pf.example.com', callbackUrl: 'https://pf.example.com/android/auth/callback', environment: 'test', accessAuthorizationUrl: 'https://pf.example.com/mobile/authorize', sessionEncryptionKey: 'synthetic-tenant-pairing-test-key', now: () => pairingNow, approvedAccessIssuers: ['https://access.example.com'], approvedAccessAudiences: ['test-audience'] };
 const verifier = 'pairing-test-verifier-012345678901234567890123456789';
 async function secondUser(db: import('../worker/db-types').D1Database) {
   await db.batch([
@@ -13,7 +14,10 @@ async function secondUser(db: import('../worker/db-types').D1Database) {
     db.prepare("INSERT INTO source_profiles(id,ledger_id,provider,source_kind,display_name,parser_version,status) VALUES ('second-source','second-ledger','test','notification','Second','test','approved')"),
     db.prepare("INSERT INTO source_account_mappings(id,ledger_id,source_profile_id,hint_kind,hint_value,account_id,approval_status) VALUES ('second-map','second-ledger','second-source','none','','second-account','approved')"),
   ]);
-  const owner: OwnerContext & { consent: true } = { userId: 'second', ledgerId: 'second-ledger', credentialType: 'owner', familyId: 'access-approval', subjectHash: 'verified-second', deviceId: null, accessGeneration: 1, scopes: ['devices:manage'], expiresAt: '2099-01-01T00:00:00Z', environmentHash: await hashSecret(config.environment), consent: true };
+  const owner: OwnerContext & { consent: true } = { userId: 'second', ledgerId: 'second-ledger', credentialType: 'owner', familyId: 'pairing-fixture-family', subjectHash: 'verified-second', deviceId: null, accessGeneration: 1, scopes: ['devices:manage'], expiresAt: '2099-01-01T00:00:00Z', environmentHash: await hashSecret(config.environment), consent: true };
+  await db.prepare(`INSERT INTO owner_session_families(id,ledger_id,subject_hash,access_generation,refresh_generation,access_expires_at,refresh_expires_at,scope_json,environment_hash)
+    VALUES (?,'second-ledger',?,1,1,'2099-01-01T00:00:00Z','2099-01-01T00:00:00Z','["devices:manage"]',?)`)
+    .bind(owner.familyId,owner.subjectHash,owner.environmentHash).run();
   return owner;
 }
 async function pair(db: import('../worker/db-types').D1Database, owner: OwnerContext & { consent: true }) {
@@ -104,7 +108,7 @@ describe('unbound capture pairing', () => {
         .toMatchObject({ userId: 'second', ledgerId: 'second-ledger', deviceId: started.deviceId });
       await expect(authenticateCapture('second-capture-secret', fixture.db, config)).rejects.toThrow();
       expect((await fixture.db.prepare('SELECT ledger_id,generation,revoked_at FROM capture_credentials ORDER BY generation').all()).results)
-        .toEqual([{ ledger_id: 'second-ledger', generation: 1, revoked_at: '2026-10-24T12:00:00.000Z' },
+        .toEqual([{ ledger_id: 'second-ledger', generation: 1, revoked_at: pairingNow.toISOString() },
           { ledger_id: 'second-ledger', generation: 2, revoked_at: null }]);
     } finally { fixture.close(); }
   });

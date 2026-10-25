@@ -1,5 +1,5 @@
 import { afterEach } from 'vitest';
-import { applyMigrations, createD1Fixture, task18MigrationNames, task22MigrationNames } from './d1';
+import { applyMigrations, createD1Fixture, task18MigrationNames, task24MigrationNames } from './d1';
 import { hashSecret } from '../../worker/mobile-auth';
 import type { BankAlertEventInput } from '../../src/domain/bank-alerts';
 
@@ -18,7 +18,7 @@ export async function createAlertFixture(options: { secondAccount?: boolean; mig
   const fixture = await createD1Fixture();
   const requested = options.migrationNames ?? task18MigrationNames;
   await applyMigrations(fixture.db, requested);
-  if (!options.historicalSchema) await applyMigrations(fixture.db, task22MigrationNames);
+  if (!options.historicalSchema) await applyMigrations(fixture.db, task24MigrationNames);
   await fixture.db.batch([
     fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind('account-boc', 'Synthetic BOC card', 'BOC', 'CAD', 'multi', 'credit', 'connected'),
@@ -30,6 +30,7 @@ export async function createAlertFixture(options: { secondAccount?: boolean; mig
       .bind('capture-device', 'personal', 'Synthetic capture phone', 'android', 'paired'),
     fixture.db.prepare('INSERT INTO capture_credentials (id, device_id, credential_hash, credential_type, scope, generation, issued_at, expires_at, environment_hash, revocation_capability_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .bind('capture-credential', 'capture-device', await hashSecret(CAPTURE_SECRET), 'capture', 'alerts:write', 1, '2026-10-13T00:00:00.000Z', '2027-01-11T00:00:00.000Z', await hashSecret(ALERT_ENVIRONMENT), 'synthetic-revocation-hash'),
+    fixture.db.prepare("INSERT INTO source_account_mappings (id, ledger_id, source_profile_id, hint_kind, hint_value, account_id, approval_status, approved_at) VALUES ('capture-mapping', 'personal', 'source-boc', 'none', '', 'account-boc', 'approved', '2026-10-13T00:00:00Z')"),
     fixture.db.prepare('INSERT INTO device_source_scopes (id, device_id, source_profile_id, account_id, currency, status) VALUES (?, ?, ?, ?, ?, ?)')
       .bind('capture-scope-cad', 'capture-device', 'source-boc', 'account-boc', 'CAD', 'approved'),
   ]);

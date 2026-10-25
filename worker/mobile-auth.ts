@@ -1,3 +1,4 @@
+import { assertCaptureAuthority, assertCaptureScope, immutableCaptureContext } from './capture-authority';
 import { resolveActiveLedgerContext, resolveLedgerContext, type LedgerContext } from './tenant-context';
 import type { D1Database, LedgerId } from './db-types.ts';
 
@@ -69,6 +70,7 @@ export interface CaptureContext extends LedgerContext {
   generation: number;
   scope: CaptureScope;
   expiresAt: string;
+  sourceConfigRevision:number;
   sourceScopes: readonly CaptureScopeRecord[];
   environmentHash: string;
 }
@@ -385,7 +387,7 @@ export async function authenticateCapture(credential: Request | string, db: D1Da
   const credentialHash = await hashSecret(raw);
   const current = now(config);
   const row = await db.prepare(`SELECT c.id, c.device_id, c.credential_type, c.scope, c.generation, c.expires_at, c.revoked_at, c.environment_hash,
-      d.ledger_id, d.status
+      d.ledger_id, d.status, d.source_config_revision
     FROM capture_credentials c JOIN mobile_devices d ON d.id = c.device_id AND d.ledger_id = c.ledger_id
     WHERE c.credential_hash = ?`).bind(credentialHash).first<{
     id: string;
@@ -398,6 +400,7 @@ export async function authenticateCapture(credential: Request | string, db: D1Da
     environment_hash: string;
     ledger_id: LedgerId;
     status: string;
+    source_config_revision:number;
   }>();
   const environmentHash = await hashSecret(config.environment);
   if (!row || row.credential_type !== 'capture' || row.scope !== CAPTURE_SCOPE || row.environment_hash !== environmentHash) throw new MobileAuthError('unauthorized', 'The capture credential is not valid.');
@@ -414,7 +417,8 @@ export async function authenticateCapture(credential: Request | string, db: D1Da
       instrumentHintKind: string;
       instrumentHintValue: string;
     }>();
-  return {
+  const context:CaptureContext = {
+    sourceConfigRevision:row.source_config_revision,
     credentialType: 'capture',
     ...await activeMobileLedger(db, row.ledger_id),
     credentialId: row.id,
@@ -430,6 +434,8 @@ export async function authenticateCapture(credential: Request | string, db: D1Da
     })),
     environmentHash,
   };
+  await assertCaptureAuthority(db,context);
+  return immutableCaptureContext(context);
 }
 
 export async function authenticateRevocation(credential: Request | string, db: D1Database, config: MobileAuthConfig): Promise<RevocationContext> {
@@ -483,24 +489,11 @@ export async function revokeGrantByCapability(credential: string, db: D1Database
   }
 }
 
-export async function assertCaptureEventScope(db: D1Database, context: CaptureContext, scope: CaptureScopeRecord, config?: Pick<MobileAuthConfig, 'now'>) {
-  if (context.credentialType !== 'capture' || context.scope !== CAPTURE_SCOPE) throw new MobileAuthError('forbidden', 'The capture credential cannot write this resource.', 403);
-  const allowed = context.sourceScopes.some((candidate) => candidate.sourceProfileId === scope.sourceProfileId && candidate.accountId === scope.accountId && candidate.currency === scope.currency && sameCaptureInstrumentHint(candidate.instrumentHint, scope.instrumentHint));
-  if (!allowed) throw new MobileAuthError('forbidden', 'The capture credential is outside the approved source scope.', 403);
-  const instrumentHint = normalizeCaptureInstrumentHint(scope.instrumentHint);
-  const current = await db.prepare(`SELECT 1 AS allowed FROM device_source_scopes
-    WHERE ledger_id = ? AND device_id = ? AND source_profile_id = ? AND account_id = ? AND currency = ? AND status = 'approved'
-      AND instrument_hint_kind = ? AND instrument_hint_value = ?
-      AND (expires_at IS NULL OR expires_at > ?)`).bind(
-    context.ledgerId, context.deviceId, scope.sourceProfileId, scope.accountId, scope.currency,
-    instrumentHint?.kind ?? 'none', instrumentHint?.value ?? '',
-    config ? now(config).toISOString() : new Date().toISOString(),
-  ).first<{ allowed: number }>();
-  if (!current) throw new MobileAuthError('forbidden', 'The capture credential is outside the approved source scope.', 403);
+export async function assertCaptureEventScope(db:D1Database,context:CaptureContext,scope:CaptureScopeRecord,config?:Pick<MobileAuthConfig,'now'>) {
+  await assertCaptureScope(db,context,scope,config?now(config).toISOString():undefined);
 }
 
 export function authorizeMobileRoute(context: MobileContext, pathname: string, requiredScope?: OwnerScope | CaptureScope) {
-  assertRuntimeLedgerEnabled(context);
   if (!pathname.startsWith('/api/mobile/v1/')) throw new MobileAuthError('forbidden', 'The credential cannot access this route.', 403);
   if (context.credentialType === 'owner') {
     if (pathname.startsWith('/api/mobile/v1/auth/') || pathname.startsWith('/api/mobile/v1/pairings') || pathname === '/api/mobile/v1/status') throw new MobileAuthError('forbidden', 'The owner credential cannot access this route.', 403);
@@ -544,13 +537,6 @@ export { constantTimeEqual };
 export async function activeMobileLedger(db: D1Database, ledgerId: string): Promise<LedgerContext> {
   try { return await resolveActiveLedgerContext(db, ledgerId); }
   catch { throw new MobileAuthError('access_not_enabled', 'Access is not enabled', 403); }
-}
-
-/** Temporary until Tasks 2B/2C scope financial route consumers. */
-function assertRuntimeLedgerEnabled(context: MobileContext) {
-  if (context.credentialType === 'revocation') return;
-  if (!('ledgerId' in context)) return;
-  if (context.ledgerId !== 'personal') throw new MobileAuthError('tenant_runtime_pending', 'This ledger is not available on this route yet.', 503);
 }
 
 export async function resolveMobileIdentity(db: D1Database, identity: AccessIdentity, config: MobileAuthConfig) {

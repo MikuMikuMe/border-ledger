@@ -11,7 +11,8 @@ const SESSION_KEY = 'lunchflow-route-session-key';
 const LEGACY_API_KEY = 'legacy-route-key';
 const LUNCHFLOW_API_KEY = 'server-only-lunchflow-key';
 const NOW = new Date('2026-10-22T12:00:00.000Z');
-const OWNER_EXPIRY = '2026-10-23T12:00:00.000Z';
+// Store authority uses the database clock, independently of the injected route clock.
+const OWNER_EXPIRY = '2099-01-01T00:00:00.000Z';
 
 const fixtures: Array<{ close(): void }> = [];
 

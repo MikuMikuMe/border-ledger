@@ -1,3 +1,7 @@
+import { assertFinancialAuthority, financialAuthorityGuard, immutableFinancialContext } from './financial-authority';
+import { connectionPublicationStatements, plaidItemIdentifier, plaidClientUserId, readStoredPlaidItem, beginPlaidDisconnect, disconnectPublicationStatements } from './plaid-connection-store';
+import { requestPlaidSync } from './plaid-jobs';
+import type { LedgerContext } from './tenant-context';
 import type { D1Database, D1Statement } from './db-types';
 import type { OwnerContext } from './mobile-auth';
 import { requireRecentOwnerApproval } from './mobile-auth';
@@ -6,7 +10,6 @@ import { getCurrencyMeta, type CurrencyCode } from '../src/domain/currencies';
 import { selectPlaidAccounts } from './validation';
 
 export const CONNECTION_PENDING_TTL_MS = 15 * 60 * 1000;
-const RECENT_APPROVAL_TTL_MS = 10 * 60 * 1000;
 const SYNC_CONNECTION_PREFIX = 'plaid:';
 
 export interface ConnectionServiceEnv {
@@ -122,11 +125,11 @@ function linkTokenWebhookUrl(env: Pick<ConnectionServiceEnv, 'PLAID_ENV' | 'PLAI
   return webhook(env);
 }
 
-export function buildNativePlaidLinkTokenPayload(env: Pick<ConnectionServiceEnv, 'PLAID_CLIENT_USER_ID' | 'PLAID_ENV' | 'PLAID_ANDROID_PACKAGE_NAME' | 'PLAID_ANDROID_REDIRECT_URI' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>, accessToken?: string) {
+export function buildNativePlaidLinkTokenPayload(env: Pick<ConnectionServiceEnv, 'PLAID_CLIENT_USER_ID' | 'PLAID_ENV' | 'PLAID_ANDROID_PACKAGE_NAME' | 'PLAID_ANDROID_REDIRECT_URI' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>, context: LedgerContext, accessToken?: string) {
   const webhookUrl = linkTokenWebhookUrl(env);
   const payload: Record<string, unknown> = {
     client_name: 'Border Ledger',
-    user: { client_user_id: env.PLAID_CLIENT_USER_ID ?? 'border-ledger-owner' },
+    user: { client_user_id: plaidClientUserId(context,env.PLAID_CLIENT_USER_ID) },
     products: ['transactions'],
     transactions: { days_requested: 730 },
     country_codes: ['CA'],
@@ -181,27 +184,47 @@ function responseJson(response: ConnectionOperation) {
   return JSON.stringify(response);
 }
 
-async function operationReplay(env: ConnectionServiceEnv, owner: OwnerContext, kind: string, key: string) {
-  const row = await env.DB.prepare(`SELECT response_json FROM mobile_connection_operations
-    WHERE ledger_id = 'personal' AND owner_subject_hash = ? AND operation_kind = ? AND idempotency_key = ?`)
-    .bind(owner.subjectHash, kind, key).first<{ response_json: string }>();
-  return row ? parseJson<ConnectionOperation | null>(row.response_json, null) : null;
+async function requestDigest(input: unknown) {
+  const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(input)));
+  return Array.from(new Uint8Array(bytes),byte=>byte.toString(16).padStart(2,'0')).join('');
 }
-
-async function rememberOperation(env: ConnectionServiceEnv, owner: OwnerContext, kind: string, key: string, response: ConnectionOperation, connectionId?: string) {
-  await env.DB.prepare(`INSERT OR IGNORE INTO mobile_connection_operations
-    (id, ledger_id, owner_subject_hash, operation_kind, idempotency_key, connection_id, state, response_json)
-    VALUES (?, 'personal', ?, ?, ?, ?, ?, ?)`)
-    .bind(crypto.randomUUID(), owner.subjectHash, kind, key, connectionId ?? response.connectionId ?? response.pendingConnectionId ?? null, response.state, responseJson(response)).run();
-  const replay = await operationReplay(env, owner, kind, key);
-  return replay ?? response;
+interface ConnectionOperationIdentity {kind:string;key:string;digest:string;}
+async function operationReplay(env: ConnectionServiceEnv, owner: OwnerContext, identity:ConnectionOperationIdentity) {
+  const {kind,key,digest}=identity;
+  await assertFinancialAuthority(env.DB,owner,'connections:manage');
+  const row=await env.DB.prepare(`SELECT response_json,request_digest FROM mobile_connection_operations
+    WHERE ledger_id=? AND owner_subject_hash=? AND operation_kind=? AND idempotency_key=?`)
+    .bind(owner.ledgerId,owner.subjectHash,kind,key).first<{response_json:string;request_digest:string|null}>();
+  if(!row)return null;
+  if(row.request_digest!==digest)throw new ConnectionServiceError('idempotency_conflict','The operation key was used for a different request.',409);
+  await assertFinancialAuthority(env.DB,owner,'connections:manage');
+  return parseJson<ConnectionOperation|null>(row.response_json,null);
 }
-
-async function ownedConnection(env: ConnectionServiceEnv, owner: OwnerContext, id: string) {
-  const row = await env.DB.prepare(`SELECT * FROM mobile_connections
-    WHERE id = ? AND ledger_id = 'personal' AND owner_subject_hash = ?`).bind(id, owner.subjectHash).first<MobileConnectionRow>();
-  if (!row) throw new ConnectionServiceError('not_found', 'The connection was not found.', 404);
+async function rememberOperation(env:ConnectionServiceEnv,owner:OwnerContext,response:ConnectionOperation,
+  publication:ConnectionOperationIdentity & {statements?:D1Statement[]}) {
+  const {kind,key,digest,statements=[]}=publication;
+  const guard=env.DB.prepare(`INSERT INTO ledger_preferences(ledger_id) SELECT CASE WHEN NOT EXISTS
+    (SELECT 1 FROM mobile_connection_operations WHERE ledger_id=? AND owner_subject_hash=? AND operation_kind=? AND idempotency_key=?)
+    THEN ? ELSE NULL END WHERE 1 ON CONFLICT(ledger_id) DO NOTHING`).bind(owner.ledgerId,owner.subjectHash,kind,key,owner.ledgerId);
+  const receipt=env.DB.prepare(`INSERT INTO mobile_connection_operations
+    (id,ledger_id,owner_subject_hash,operation_kind,idempotency_key,connection_id,state,response_json,request_digest)
+    VALUES (?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),owner.ledgerId,owner.subjectHash,kind,key,
+      response.connectionId??response.pendingConnectionId??null,response.state,responseJson(response),digest);
+  try {await env.DB.batch([financialAuthorityGuard(env.DB,owner,'connections:manage'),guard,...statements,receipt]);}
+  catch(error){const replay=await operationReplay(env,owner,{kind,key,digest});if(replay)return replay;throw error;}
+  await assertFinancialAuthority(env.DB,owner,'connections:manage');
+  return response;
+}
+async function ownedConnection(env:ConnectionServiceEnv,owner:OwnerContext,id:string) {
+  await assertFinancialAuthority(env.DB,owner,'connections:manage');
+  const row=await env.DB.prepare('SELECT * FROM mobile_connections WHERE id=? AND ledger_id=?').bind(id,owner.ledgerId).first<MobileConnectionRow>();
+  if(!row)throw new ConnectionServiceError('not_found','The connection was not found.',404);
   return row;
+}
+function pendingGuard(env:ConnectionServiceEnv,owner:OwnerContext,connection:MobileConnectionRow) {
+  return env.DB.prepare(`INSERT INTO ledger_preferences(ledger_id) SELECT CASE WHEN EXISTS
+    (SELECT 1 FROM mobile_connections WHERE id=? AND ledger_id=? AND state='pending' AND expires_at=? AND julianday(expires_at)>julianday(?) AND julianday(expires_at)>julianday('now'))
+    THEN ? ELSE NULL END WHERE 1 ON CONFLICT(ledger_id) DO NOTHING`).bind(connection.id,owner.ledgerId,connection.expires_at,now(env).toISOString(),owner.ledgerId);
 }
 
 async function providerFailure(error: unknown): Promise<never> {
@@ -213,6 +236,7 @@ interface MobileConnectionRow {
   id: string;
   owner_subject_hash: string;
   item_id: string | null;
+  provider_item_id: string | null;
   institution_name: string | null;
   mode: 'create' | 'update';
   state: 'pending' | 'connected' | 'syncing' | 'canceled' | 'failed' | 'disconnecting';
@@ -226,6 +250,36 @@ interface MobileConnectionRow {
   provider_accounts_json: string;
   created_at: string;
   updated_at: string;
+}
+
+function assertExchangedItem(exchange:{access_token:string;item_id:string},itemId:string|undefined) {
+  if(!exchange.access_token)throw new ConnectionServiceError('provider_invalid_response','The provider credential is missing.',502,true);
+  if(!exchange.item_id)throw new ConnectionServiceError('provider_invalid_response','The provider identity is missing.',502,true);
+  if(itemId!==exchange.item_id)throw new ConnectionServiceError('provider_invalid_response','The provider identity did not match.',502,true);
+}
+function validateSelectionIds(accountIds:string[]) {
+  if(!Array.isArray(accountIds))throw new ConnectionServiceError('invalid_request','Provider accounts are required.');
+  if(accountIds.length<1||accountIds.length>100)throw new ConnectionServiceError('invalid_request','Choose 1 to 100 provider accounts.');
+  if(new Set(accountIds).size!==accountIds.length)throw new ConnectionServiceError('invalid_request','Provider accounts must be unique.');
+}
+function selectedConnectionAccounts(connection:MobileConnectionRow,accountIds:string[]) {
+  validateSelectionIds(accountIds);
+  const providerAccounts=parseJson<NativePlaidAccount[]>(connection.provider_accounts_json,[]);
+  const selected=selectVerifiedPlaidAccounts(providerAccounts,accountIds);
+  if(!selected)throw new ConnectionServiceError('account_not_verified','One or more selected accounts were not returned by the provider.',400);
+  const normalized=normalizeAccounts(selected);
+  if(normalized.length!==selected.length)throw new ConnectionServiceError('unsupported_accounts','Choose only registered currency accounts.');
+  return {providerAccounts,normalized};
+}
+function assertUpdatedItem(mode:string,previous:MobileConnectionRow|null,rawItemId:string) {
+  if(mode!=='update')return;
+  if(previous?.provider_item_id!==rawItemId)throw new ConnectionServiceError('provider_identity_mismatch','The provider item does not match the existing connection.',409);
+}
+function pendingCredential(connection:MobileConnectionRow) {
+  const ciphertext=connection.pending_access_token_ciphertext;const iv=connection.pending_access_token_iv;const providerItemId=connection.provider_item_id;
+  if(!ciphertext||!iv)throw new ConnectionServiceError('invalid_state','The pending provider credential is unavailable.',409);
+  if(!connection.item_id||!providerItemId)throw new ConnectionServiceError('invalid_state','The provider identity is unavailable.',409);
+  return {ciphertext,iv,providerItemId};
 }
 
 export function createPlaidProvider(env: ConnectionServiceEnv): PlaidProvider {
@@ -249,21 +303,24 @@ export function createPlaidProvider(env: ConnectionServiceEnv): PlaidProvider {
 
 export function createConnectionService(env: ConnectionServiceEnv, provider: PlaidProvider = createPlaidProvider(env)) {
   async function createLinkToken(owner: OwnerContext, input: { connectionId?: string; mode?: 'create' | 'update' } = {}): Promise<ConnectionOperation> {
+    owner=immutableFinancialContext(owner);
+    await assertFinancialAuthority(env.DB,owner,'connections:manage');
     const mode = input.mode ?? 'create';
     let accessToken: string | undefined;
     if (mode === 'update') {
       if (!input.connectionId) throw new ConnectionServiceError('invalid_request', 'An existing connection is required for update mode.');
       const connection = await ownedConnection(env, owner, input.connectionId);
       if (connection.state !== 'connected' || !connection.item_id) throw new ConnectionServiceError('invalid_state', 'The connection is not available for reconnect.', 409);
-      const item = await env.DB.prepare('SELECT access_token_ciphertext, access_token_iv FROM plaid_items WHERE item_id = ?').bind(connection.item_id).first<{ access_token_ciphertext: string; access_token_iv: string }>();
+      const item = await readStoredPlaidItem(env.DB,owner,connection.item_id);
       if (!item) throw new ConnectionServiceError('not_found', 'The provider connection was not found.', 404);
       accessToken = await decryptAccessToken({ ciphertext: item.access_token_ciphertext, iv: item.access_token_iv }, tokenKey(env));
     }
     let linkToken: string;
     try {
-      const response = await provider.createLinkToken(buildNativePlaidLinkTokenPayload(env, accessToken));
+      const response = await provider.createLinkToken(buildNativePlaidLinkTokenPayload(env, owner, accessToken));
       linkToken = bounded(response.link_token, 'provider link token', 4096);
     } catch (error) { return providerFailure(error); }
+    await assertFinancialAuthority(env.DB,owner,'connections:manage');
     return {
       operationId: crypto.randomUUID(),
       state: 'ready',
@@ -273,21 +330,27 @@ export function createConnectionService(env: ConnectionServiceEnv, provider: Pla
   }
 
   async function exchangePublicToken(owner: OwnerContext, input: { publicToken: string; idempotencyKey: string; mode?: 'create' | 'update'; connectionId?: string }) {
-    const replay = await operationReplay(env, owner, 'exchange', input.idempotencyKey);
+    owner=immutableFinancialContext(owner);
+    await assertFinancialAuthority(env.DB,owner,'connections:manage');
+    const digest=await requestDigest(input);
+    const replay = await operationReplay(env,owner,{kind:'exchange',key:input.idempotencyKey,digest});
     if (replay) return replay;
     const publicToken = bounded(input.publicToken, 'publicToken', 4096);
     const mode = input.mode ?? 'create';
     if (mode === 'update' && !input.connectionId) throw new ConnectionServiceError('invalid_request', 'An existing connection is required for update mode.');
-    if (input.connectionId) await ownedConnection(env, owner, input.connectionId);
+    const previous=input.connectionId?await ownedConnection(env,owner,input.connectionId):null;
     let exchange: { access_token: string; item_id: string };
     let item: { item?: { item_id: string; institution_id?: string | null; institution_name?: string | null } };
     let accounts: { accounts: NativePlaidAccount[] };
     try {
       exchange = await provider.exchangePublicToken(publicToken);
+      await assertFinancialAuthority(env.DB,owner,'connections:manage');
       item = await provider.getItem(exchange.access_token);
+      await assertFinancialAuthority(env.DB,owner,'connections:manage');
       accounts = await provider.getAccounts(exchange.access_token);
     } catch (error) { return providerFailure(error); }
-    if (!exchange.access_token || !exchange.item_id) throw new ConnectionServiceError('provider_invalid_response', 'The provider did not return a usable connection.', 502, true);
+    assertExchangedItem(exchange,item.item?.item_id);
+    assertUpdatedItem(mode,previous,exchange.item_id);
     const providerAccounts = accounts.accounts ?? [];
     const normalized = normalizeAccounts(providerAccounts);
     if (normalized.length === 0) {
@@ -305,55 +368,36 @@ export function createConnectionService(env: ConnectionServiceEnv, provider: Pla
       expiresAt,
       accounts: normalized,
     };
-    await env.DB.prepare(`INSERT INTO mobile_connections
-      (id, ledger_id, owner_subject_hash, provider, item_id, institution_name, mode, state, expires_at,
-       cleanup_state, pending_access_token_ciphertext, pending_access_token_iv, provider_accounts_json)
-      VALUES (?, 'personal', ?, 'plaid', ?, ?, ?, 'pending', ?, 'not_required', ?, ?, ?)`)
-      .bind(id, owner.subjectHash, exchange.item_id, response.institution, mode, expiresAt, sealed.ciphertext, sealed.iv, JSON.stringify(providerAccounts)).run();
-    return rememberOperation(env, owner, 'exchange', input.idempotencyKey, response, id);
+    const itemId=await plaidItemIdentifier(owner,exchange.item_id);
+    const statement=env.DB.prepare(`INSERT INTO mobile_connections
+      (id,ledger_id,owner_subject_hash,provider,item_id,provider_item_id,institution_name,mode,state,expires_at,
+       cleanup_state,pending_access_token_ciphertext,pending_access_token_iv,provider_accounts_json)
+      VALUES (?,?,?,'plaid',?,?,?,?,'pending',?,'not_required',?,?,?)`)
+      .bind(id,owner.ledgerId,owner.subjectHash,itemId,exchange.item_id,response.institution,mode,expiresAt,sealed.ciphertext,sealed.iv,JSON.stringify(providerAccounts));
+    return rememberOperation(env,owner,response,{kind:'exchange',key:input.idempotencyKey,digest,statements:[statement]});
   }
 
   async function selectPendingAccounts(owner: OwnerContext, input: { pendingConnectionId: string; accountIds: string[]; idempotencyKey: string }) {
-    const replay = await operationReplay(env, owner, 'account-selection', input.idempotencyKey);
+    owner=immutableFinancialContext(owner);
+    await assertFinancialAuthority(env.DB,owner,'connections:manage');
+    const digest=await requestDigest(input);
+    const replay = await operationReplay(env,owner,{kind:'account-selection',key:input.idempotencyKey,digest});
     if (replay) return replay;
     const connection = await ownedConnection(env, owner, input.pendingConnectionId);
     if (connection.state !== 'pending') throw new ConnectionServiceError('invalid_state', 'The pending connection is no longer selectable.', 409);
     const expiry = connection.expires_at ? Date.parse(connection.expires_at) : 0;
     if (!expiry || expiry <= now(env).getTime()) {
-      await cleanupPending(owner, connection);
+      const cleanup=await cleanupPending(owner,connection);
+      await env.DB.batch([financialAuthorityGuard(env.DB,owner,'connections:manage'),...cleanup.statements]);
       throw new ConnectionServiceError('expired', 'The pending connection has expired.', 409);
     }
-    if (!Array.isArray(input.accountIds) || input.accountIds.length < 1 || input.accountIds.length > 100 || new Set(input.accountIds).size !== input.accountIds.length) throw new ConnectionServiceError('invalid_request', 'At least one unique provider account is required.');
-    const providerAccounts = parseJson<NativePlaidAccount[]>(connection.provider_accounts_json, []);
-    const selected = selectVerifiedPlaidAccounts(providerAccounts, input.accountIds);
-    if (!selected) throw new ConnectionServiceError('account_not_verified', 'One or more selected accounts were not returned by the provider.', 400);
-    const normalized = normalizeAccounts(selected);
-    if (normalized.length !== selected.length) throw new ConnectionServiceError('unsupported_accounts', 'Choose only registered currency accounts.');
-    if (!connection.pending_access_token_ciphertext || !connection.pending_access_token_iv || !connection.item_id) throw new ConnectionServiceError('invalid_state', 'The pending provider credential is unavailable.', 409);
-    const statements: D1Statement[] = [
-      env.DB.prepare(`INSERT INTO plaid_items (item_id, access_token_ciphertext, access_token_iv, institution_id, institution_name)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(item_id) DO UPDATE SET access_token_ciphertext = excluded.access_token_ciphertext,
-          access_token_iv = excluded.access_token_iv, institution_name = excluded.institution_name, updated_at = CURRENT_TIMESTAMP`)
-        .bind(connection.item_id, connection.pending_access_token_ciphertext, connection.pending_access_token_iv, null, connection.institution_name),
-      env.DB.prepare(`INSERT INTO recurring_sync_state (item_id, lifecycle, scope_version) VALUES (?, 'active', 0)
-        ON CONFLICT(item_id) DO UPDATE SET lifecycle = 'active', updated_at = CURRENT_TIMESTAMP`).bind(connection.item_id),
-      env.DB.prepare('DELETE FROM plaid_accounts WHERE item_id = ?').bind(connection.item_id),
-    ];
-    for (const account of normalized) {
-      const localId = `plaid-${account.providerAccountId}`;
-      statements.push(env.DB.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status, last_synced_at)
-        VALUES (?, ?, ?, ?, 'single', ?, 'connected', NULL)
-        ON CONFLICT(id) DO UPDATE SET name = excluded.name, institution = excluded.institution,
-          currency = excluded.currency, kind = excluded.kind, status = 'connected'`)
-        .bind(localId, account.name, connection.institution_name ?? 'Plaid institution', account.currency, account.kind));
-      statements.push(env.DB.prepare('INSERT OR IGNORE INTO account_currencies (account_id, currency) VALUES (?, ?)').bind(localId, account.currency));
-      statements.push(env.DB.prepare(`INSERT INTO plaid_accounts (plaid_account_id, item_id, account_id, name, mask, subtype)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(plaid_account_id) DO UPDATE SET item_id = excluded.item_id, account_id = excluded.account_id,
-          name = excluded.name, mask = excluded.mask, subtype = excluded.subtype, updated_at = CURRENT_TIMESTAMP`)
-        .bind(account.providerAccountId, connection.item_id, localId, account.name, account.mask, account.subtype));
-    }
+    const {providerAccounts,normalized}=selectedConnectionAccounts(connection,input.accountIds);
+    const credential=pendingCredential(connection);
+    const publication=await connectionPublicationStatements(env.DB,owner,{
+      ...credential,institution:connection.institution_name??'Plaid institution',
+      accounts:normalized,
+    });
+    const statements=[pendingGuard(env,owner,connection),...publication.statements];
     const response: ConnectionOperation = {
       operationId: crypto.randomUUID(),
       state: 'connected',
@@ -363,100 +407,99 @@ export function createConnectionService(env: ConnectionServiceEnv, provider: Pla
     };
     statements.push(env.DB.prepare(`UPDATE mobile_connections SET state = 'connected', expires_at = NULL,
       selected_account_ids_json = ?, pending_access_token_ciphertext = NULL, pending_access_token_iv = NULL,
-      provider_accounts_json = ?, cleanup_state = 'not_required', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-      .bind(JSON.stringify(input.accountIds), JSON.stringify(providerAccounts), connection.id));
-    await env.DB.batch(statements);
-    return rememberOperation(env, owner, 'account-selection', input.idempotencyKey, response, connection.id);
+      provider_accounts_json = ?, cleanup_state = 'not_required', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND ledger_id = ?`)
+      .bind(JSON.stringify(input.accountIds), JSON.stringify(providerAccounts), connection.id,owner.ledgerId));
+    return rememberOperation(env,owner,response,{kind:'account-selection',key:input.idempotencyKey,digest,statements});
   }
 
-  async function cleanupPending(owner: OwnerContext, connection: MobileConnectionRow) {
-    if (!connection.pending_access_token_ciphertext || !connection.pending_access_token_iv) return 'succeeded' as const;
-    let token: string;
+  async function cleanupPending(owner:OwnerContext,connection:MobileConnectionRow) {
+    await env.DB.batch([financialAuthorityGuard(env.DB,owner,'connections:manage'),
+      env.DB.prepare(`INSERT INTO ledger_preferences(ledger_id) SELECT CASE WHEN EXISTS
+        (SELECT 1 FROM mobile_connections WHERE id=? AND ledger_id=? AND state IN ('pending','canceled'))
+        THEN ? ELSE NULL END WHERE 1 ON CONFLICT(ledger_id) DO NOTHING`).bind(connection.id,owner.ledgerId,owner.ledgerId),
+      env.DB.prepare("UPDATE mobile_connections SET state='canceled',cleanup_state='pending' WHERE id=? AND ledger_id=?").bind(connection.id,owner.ledgerId)]);
     try {
-      token = await decryptAccessToken({ ciphertext: connection.pending_access_token_ciphertext, iv: connection.pending_access_token_iv }, tokenKey(env));
-      await provider.removeItem(token);
-    } catch (error) {
-      await env.DB.prepare(`UPDATE mobile_connections SET state = 'canceled', cleanup_state = 'uncertain', cleanup_attempts = cleanup_attempts + 1,
-        last_cleanup_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_subject_hash = ?`)
-        .bind(error instanceof Error ? error.message.slice(0, 200) : 'Provider cleanup failed.', connection.id, owner.subjectHash).run();
-      return 'uncertain' as const;
+      if(connection.pending_access_token_ciphertext && connection.pending_access_token_iv){
+        const token=await decryptAccessToken({ciphertext:connection.pending_access_token_ciphertext,iv:connection.pending_access_token_iv},tokenKey(env));
+        await assertFinancialAuthority(env.DB,owner,'connections:manage');await provider.removeItem(token);
+      }
+    } catch {
+      return {cleanupState:'uncertain' as const,statements:[env.DB.prepare(`UPDATE mobile_connections
+        SET cleanup_state='uncertain',cleanup_attempts=cleanup_attempts+1,last_cleanup_error='Provider cleanup failed.',updated_at=CURRENT_TIMESTAMP
+        WHERE id=? AND ledger_id=? AND state='canceled'`).bind(connection.id,owner.ledgerId)]};
     }
-    await env.DB.prepare(`DELETE FROM mobile_connections WHERE id = ? AND owner_subject_hash = ?`).bind(connection.id, owner.subjectHash).run();
-    return 'succeeded' as const;
+    return {cleanupState:'succeeded' as const,statements:[env.DB.prepare("DELETE FROM mobile_connections WHERE id=? AND ledger_id=? AND state='canceled'").bind(connection.id,owner.ledgerId)]};
   }
 
   async function cancelPending(owner: OwnerContext, pendingConnectionId: string, idempotencyKey: string) {
-    const replay = await operationReplay(env, owner, 'cancel', idempotencyKey);
+    owner=immutableFinancialContext(owner);
+    await assertFinancialAuthority(env.DB,owner,'connections:manage');
+    const digest=await requestDigest({pendingConnectionId});
+    const replay = await operationReplay(env,owner,{kind:'cancel',key:idempotencyKey,digest});
     if (replay) return replay;
     const connection = await ownedConnection(env, owner, pendingConnectionId);
     if (connection.state === 'connected') throw new ConnectionServiceError('invalid_state', 'A confirmed connection cannot be canceled as pending.', 409);
-    const cleanupState = await cleanupPending(owner, connection);
+    const {cleanupState,statements} = await cleanupPending(owner, connection);
     const response: ConnectionOperation = { operationId: crypto.randomUUID(), state: 'canceled', pendingConnectionId, cleanupState };
-    return rememberOperation(env, owner, 'cancel', idempotencyKey, response, pendingConnectionId);
+    return rememberOperation(env,owner,response,{kind:'cancel',key:idempotencyKey,digest,statements});
   }
 
-  async function requestSync(owner: OwnerContext, idempotencyKey: string) {
-    const replay = await operationReplay(env, owner, 'sync', idempotencyKey);
-    if (replay) return replay;
-    const rows = await env.DB.prepare(`SELECT id, item_id FROM mobile_connections WHERE ledger_id = 'personal' AND owner_subject_hash = ? AND state = 'connected' ORDER BY created_at`)
-      .bind(owner.subjectHash).all<{ id: string; item_id: string | null }>();
-    for (const row of rows.results) {
-      if (!row.item_id) continue;
-      await env.DB.prepare(`UPDATE mobile_connections SET state = 'syncing', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
-      if (env.SYNC_QUEUE) await env.SYNC_QUEUE.send({ type: 'plaid-sync', itemId: row.item_id });
-    }
-    const response: ConnectionOperation = { operationId: crypto.randomUUID(), state: rows.results.length > 0 ? 'syncing' : 'ready', queued: Boolean(env.SYNC_QUEUE) };
-    return rememberOperation(env, owner, 'sync', idempotencyKey, response);
+  async function requestSync(owner:OwnerContext,idempotencyKey:string) {
+    owner=immutableFinancialContext(owner);
+    const digest=await requestDigest({});
+    const replay=await operationReplay(env,owner,{kind:'sync',key:idempotencyKey,digest});if(replay)return replay;
+    const rows=await env.DB.prepare(`SELECT DISTINCT p.item_id FROM plaid_items p JOIN sync_state s
+      ON s.connection_id='plaid:'||p.item_id AND s.ledger_id=p.ledger_id WHERE p.ledger_id=? AND s.lifecycle='active'`)
+      .bind(owner.ledgerId).all<{item_id:string}>();
+    let queued=false;
+    for(const row of rows.results)queued=await requestPlaidSync(env.DB,owner,env.SYNC_QUEUE,row.item_id)||queued;
+    const response:ConnectionOperation={operationId:crypto.randomUUID(),state:rows.results.length?'syncing':'ready',queued};
+    return rememberOperation(env,owner,response,{kind:'sync',key:idempotencyKey,digest});
   }
 
   async function disconnect(owner: OwnerContext, connectionId: string, idempotencyKey: string, confirmed: boolean) {
-    const replay = await operationReplay(env, owner, 'disconnect', idempotencyKey);
+    owner=immutableFinancialContext(owner);
+    await assertFinancialAuthority(env.DB,owner,'connections:manage');
+    const digest=await requestDigest({connectionId,confirmed});
+    const replay = await operationReplay(env,owner,{kind:'disconnect',key:idempotencyKey,digest});
     if (replay) return replay;
     if (!confirmed) throw new ConnectionServiceError('confirmation_required', 'Explicit native disconnect confirmation is required.', 400);
-    const family = await env.DB.prepare('SELECT created_at FROM owner_session_families WHERE id = ? AND ledger_id = \'personal\' AND subject_hash = ?')
-      .bind(owner.familyId, owner.subjectHash).first<{ created_at: string }>();
+    const family = await env.DB.prepare('SELECT created_at FROM owner_session_families WHERE id = ? AND ledger_id = ? AND subject_hash = ?')
+      .bind(owner.familyId, owner.ledgerId, owner.subjectHash).first<{ created_at: string }>();
     if (!family) throw new ConnectionServiceError('recent_approval_required', 'A recent owner approval is required.', 403);
-    const approvedAt = Date.parse(family.created_at);
-    if (!Number.isFinite(approvedAt) || now(env).getTime() - approvedAt > RECENT_APPROVAL_TTL_MS) throw new ConnectionServiceError('recent_approval_required', 'A recent owner approval is required.', 403);
     requireRecentOwnerApproval(family.created_at, { now: () => now(env) });
     const connection = await ownedConnection(env, owner, connectionId);
     if (connection.state === 'canceled') return { operationId: crypto.randomUUID(), state: 'canceled', connectionId } satisfies ConnectionOperation;
     if (!connection.item_id) throw new ConnectionServiceError('invalid_state', 'The connection has no provider Item.', 409);
-    const item = await env.DB.prepare('SELECT access_token_ciphertext, access_token_iv FROM plaid_items WHERE item_id = ?').bind(connection.item_id).first<{ access_token_ciphertext: string; access_token_iv: string }>();
-    if (!item) throw new ConnectionServiceError('not_found', 'The provider credential was not found.', 404);
-    await env.DB.prepare(`UPDATE mobile_connections SET state = 'disconnecting', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(connection.id).run();
+    const item=await readStoredPlaidItem(env.DB,owner,connection.item_id);
+    if(!item)throw new ConnectionServiceError('not_found','The provider credential was not found.',404);
+    const fence=await beginPlaidDisconnect(env.DB,owner,connection.item_id);
+    if(!fence)throw new ConnectionServiceError('not_found','The provider connection was not found.',404);
     let token: string;
     try {
       token = await decryptAccessToken({ ciphertext: item.access_token_ciphertext, iv: item.access_token_iv }, tokenKey(env));
+      await assertFinancialAuthority(env.DB,owner,'connections:manage');
       await provider.removeItem(token);
     } catch (error) {
       throw new ConnectionServiceError('provider_revoke_failed', error instanceof Error ? error.message.slice(0, 200) : 'Provider revocation failed.', 502, true);
     }
-    const mappings = await env.DB.prepare('SELECT account_id FROM plaid_accounts WHERE item_id = ?').bind(connection.item_id).all<{ account_id: string }>();
-    const statements: D1Statement[] = [
-      env.DB.prepare('DELETE FROM sync_state WHERE connection_id = ?').bind(`${SYNC_CONNECTION_PREFIX}${connection.item_id}`),
-      env.DB.prepare('DELETE FROM recurring_sync_state WHERE item_id = ?').bind(connection.item_id),
-      env.DB.prepare('DELETE FROM plaid_accounts WHERE item_id = ?').bind(connection.item_id),
-      env.DB.prepare('DELETE FROM plaid_items WHERE item_id = ?').bind(connection.item_id),
-      env.DB.prepare(`UPDATE mobile_connections SET state = 'canceled', cleanup_state = 'succeeded', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(connection.id),
-    ];
-    for (const mapping of mappings.results) statements.push(env.DB.prepare(`UPDATE accounts SET status = 'import_only', last_synced_at = NULL
-      WHERE id = ? AND NOT EXISTS (SELECT 1 FROM plaid_accounts WHERE account_id = ? AND item_id != ?)`)
-      .bind(mapping.account_id, mapping.account_id, connection.item_id));
-    await env.DB.batch(statements);
-    const response: ConnectionOperation = { operationId: crypto.randomUUID(), state: 'canceled', connectionId };
-    return rememberOperation(env, owner, 'disconnect', idempotencyKey, response, connectionId);
+    const statements=disconnectPublicationStatements(env.DB,owner,connection.item_id,fence.revision);
+    const response:ConnectionOperation={operationId:crypto.randomUUID(),state:'canceled',connectionId};
+    return rememberOperation(env,owner,response,{kind:'disconnect',key:idempotencyKey,digest,statements});
   }
 
   async function readConnections(owner: OwnerContext) {
+    owner=immutableFinancialContext(owner);
+    await assertFinancialAuthority(env.DB,owner,'connections:manage');
     const rows = await env.DB.prepare(`SELECT c.id, c.item_id, c.institution_name, c.state, c.expires_at, c.cleanup_state,
       c.last_cleanup_error, s.last_success_at, s.last_error
-      FROM mobile_connections c LEFT JOIN sync_state s ON s.connection_id = ? || c.item_id
-      WHERE c.ledger_id = 'personal' AND c.owner_subject_hash = ? AND c.state != 'canceled' ORDER BY c.created_at`)
-      .bind(SYNC_CONNECTION_PREFIX, owner.subjectHash).all<{
+      FROM mobile_connections c LEFT JOIN sync_state s ON s.connection_id = ? || c.item_id AND s.ledger_id=c.ledger_id
+      WHERE c.ledger_id = ? AND c.state != 'canceled' ORDER BY c.created_at`)
+      .bind(SYNC_CONNECTION_PREFIX, owner.ledgerId).all<{
         id: string; item_id: string | null; institution_name: string | null; state: MobileConnectionRow['state']; expires_at: string | null;
         cleanup_state: MobileConnectionRow['cleanup_state']; last_cleanup_error: string | null; last_success_at: string | null; last_error: string | null;
       }>();
+    await assertFinancialAuthority(env.DB,owner,'connections:manage');
     return rows.results.map((row) => ({
       connectionId: row.id,
       itemId: row.item_id,
@@ -469,14 +512,17 @@ export function createConnectionService(env: ConnectionServiceEnv, provider: Pla
     }));
   }
 
-  async function listAccounts(limit = 50, cursor?: string) {
+  async function listAccounts(owner:OwnerContext,limit = 50, cursor?: string) {
+    owner=immutableFinancialContext(owner);
+    await assertFinancialAuthority(env.DB,owner,'ledger:read');
     const boundedLimit = Math.min(Math.max(limit, 1), 100);
     const rows = await env.DB.prepare(`SELECT a.id, a.name, a.institution, a.kind, a.status, a.currency AS default_currency,
       a.last_synced_at, GROUP_CONCAT(DISTINCT ac.currency) AS allowed_currencies
-      FROM accounts a LEFT JOIN account_currencies ac ON ac.account_id = a.id
-      WHERE a.id > COALESCE(?, '') GROUP BY a.id ORDER BY a.id LIMIT ?`).bind(cursor ?? null, boundedLimit + 1).all<{
+      FROM accounts a LEFT JOIN account_currencies ac ON ac.account_id = a.id AND ac.ledger_id=a.ledger_id
+      WHERE a.ledger_id=? AND a.id > COALESCE(?, '') GROUP BY a.id ORDER BY a.id LIMIT ?`).bind(owner.ledgerId,cursor ?? null, boundedLimit + 1).all<{
         id: string; name: string; institution: string; kind: string; status: string; default_currency: CurrencyCode; last_synced_at: string | null; allowed_currencies: string | null;
       }>();
+    await assertFinancialAuthority(env.DB,owner,'ledger:read');
     const page = rows.results.slice(0, boundedLimit);
     return {
       accounts: page.map((row) => ({ id: row.id, name: row.name, institution: row.institution, kind: row.kind, status: row.status, defaultCurrency: row.default_currency, allowedCurrencies: (row.allowed_currencies ?? row.default_currency).split(','), lastSyncedAt: row.last_synced_at })),

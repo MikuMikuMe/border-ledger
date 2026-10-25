@@ -176,6 +176,10 @@ describe('mobile alert ingestion', () => {
 
   it('matches a hinted capture scope exactly and rechecks the same tuple in SQL', async () => {
     const fixture = await createAlertFixture({ migrationNames: task18MigrationNames });
+    await fixture.db.batch([
+      fixture.db.prepare("INSERT INTO source_profile_hints(id,source_profile_id,hint_kind,hint_value) VALUES ('capture-hint-1111','source-boc','card_suffix','1111')"),
+      fixture.db.prepare("INSERT INTO source_account_mappings(id,source_profile_id,hint_kind,hint_value,account_id,approval_status,approved_at) VALUES ('capture-mapping-1111','source-boc','card_suffix','1111','account-boc','approved',CURRENT_TIMESTAMP)"),
+    ]);
     await fixture.db.prepare(`UPDATE device_source_scopes SET instrument_hint_kind = 'card_suffix', instrument_hint_value = '1111'
       WHERE id = 'capture-scope-cad'`).run();
 

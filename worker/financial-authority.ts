@@ -3,7 +3,7 @@ import type { OwnerContext } from './mobile-auth';
 import { LedgerAccessError, type LedgerContext } from './tenant-context';
 
 export type FinancialContext = LedgerContext | OwnerContext;
-type FinancialScope = 'imports:write' | 'exports:read';
+type FinancialScope = 'devices:manage' | 'ledger:review' | 'ledger:read' | 'imports:write' | 'exports:read' | 'recurring:classify' | 'connections:manage';
 
 function validAuthorityString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
@@ -42,4 +42,19 @@ export async function assertFinancialAuthority(db: D1Database, context: Financia
   const authority = financialAuthorityPredicate(context, scope);
   const active = await db.prepare(`SELECT 1 AS active WHERE ${authority.sql}`).bind(...authority.bindings).first();
   if (!active) throw new LedgerAccessError();
+}
+
+export function immutableFinancialContext<T extends FinancialContext>(context: T): T;
+export function immutableFinancialContext(context: OwnerContext): OwnerContext;
+export function immutableFinancialContext(context: LedgerContext): LedgerContext;
+export function immutableFinancialContext(context: FinancialContext): FinancialContext {
+  if ('scopes' in context) return Object.freeze({...context,scopes:Object.freeze([...context.scopes])});
+  return Object.freeze({...context});
+}
+
+export function financialAuthorityGuard(db: D1Database, context: FinancialContext, scope: FinancialScope) {
+  const authority = financialAuthorityPredicate(context, scope);
+  return db.prepare(`INSERT INTO ledger_preferences(ledger_id) VALUES
+    (CASE WHEN ${authority.sql} THEN ? ELSE NULL END) ON CONFLICT(ledger_id) DO NOTHING`)
+    .bind(...authority.bindings, context.ledgerId);
 }

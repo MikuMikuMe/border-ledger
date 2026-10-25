@@ -1,3 +1,4 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   MAX_PLAID_SYNC_PAGES,
@@ -10,7 +11,7 @@ import {
   upsertPlaidTransaction,
 } from '../worker/plaid';
 import { buildPlaidLinkTokenPayload } from '../worker/index';
-import { createD1Fixture, task18MigrationNames } from './helpers/d1';
+import { createD1Fixture, task23MigrationNames } from './helpers/d1';
 
 const key = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -129,7 +130,7 @@ describe('Plaid integration primitives', () => {
   });
 
   it('locks a Plaid row on its pending date and preserves that lock when the posted date changes', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task23MigrationNames);
     fixtures.push(fixture);
     await fixture.db.batch([
       fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
@@ -137,6 +138,7 @@ describe('Plaid integration primitives', () => {
       fixture.db.prepare(`INSERT INTO plaid_items (item_id, access_token_ciphertext, access_token_iv)
         VALUES ('item-rbc', 'ciphertext-fixture', 'iv-fixture')`),
     ]);
+    await fixture.db.prepare("INSERT INTO plaid_accounts(plaid_account_id,item_id,account_id,name) VALUES ('plaid-account-rbc','item-rbc','account-rbc','Bank')").run();
     await fixture.db.prepare('DROP TRIGGER transactions_fx_lock_date_default').run();
 
     const pending = mapPlaidTransaction({
@@ -163,8 +165,8 @@ describe('Plaid integration primitives', () => {
     expect(pending).not.toBeNull();
     expect(posted).not.toBeNull();
 
-    await upsertPlaidTransaction(fixture.db, pending!);
-    await upsertPlaidTransaction(fixture.db, posted!);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, pending!);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, posted!);
 
     await expect(fixture.db.prepare(`SELECT date, fx_lock_date, status, COUNT(*) AS count
       FROM transactions WHERE id = ?`).bind(pending!.id).all()).resolves.toMatchObject({
@@ -232,7 +234,7 @@ describe('Plaid integration primitives', () => {
       PLAID_CLIENT_USER_ID: 'owner-1',
       LEDGER_APP_ORIGIN: 'https://pf.example.com',
       PLAID_WEBHOOK_URL: 'https://pf.example.com/api/webhooks/plaid',
-    })).toMatchObject({
+    },OWNER_LEDGER)).toMatchObject({
       user: { client_user_id: 'owner-1' },
       products: ['transactions'],
       transactions: { days_requested: 730 },
@@ -251,6 +253,6 @@ describe('production Plaid configuration', () => {
       PLAID_ENV: 'production',
       PLAID_CLIENT_USER_ID: 'production-owner',
       LEDGER_APP_ORIGIN: 'http://localhost:8787',
-    })).toThrow('Plaid webhook URL is not configured.');
+    },OWNER_LEDGER)).toThrow('Plaid webhook URL is not configured.');
   });
 });

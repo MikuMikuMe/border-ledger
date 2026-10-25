@@ -1,4 +1,7 @@
-import type { AlertEventRelation, AlertEventState, AlertProjectionProvenanceInput, CurrencyCode, D1Database, LedgerId } from './db-types';
+import type { AlertEventRelation, AlertEventState, AlertProjectionProvenanceInput, CurrencyCode, D1Database } from './db-types';
+import { assertFinancialAuthority, financialAuthorityGuard, immutableFinancialContext, type FinancialContext } from './financial-authority';
+import { ledgerScopedIdentifier } from './ledger-identifiers';
+import { resolveAlertEventId } from './alert-identifiers';
 
 export const MAX_ALERT_BATCH_SIZE = 50;
 export const MAX_ALERT_BATCH_BYTES = 128 * 1024;
@@ -11,7 +14,6 @@ type FeeTreatment = 'included' | 'separate' | 'unknown';
 
 export interface AlertEventStorageInput {
   id: string;
-  ledgerId: LedgerId;
   eventId: string;
   observationId: string;
   sourceProfileId: string;
@@ -41,7 +43,6 @@ export interface AlertEventStorageInput {
 
 export interface AlertProjectionStorageInput {
   id: string;
-  ledgerId?: LedgerId;
   eventId: string;
   transactionId?: string | null;
   state: AlertEventState;
@@ -54,7 +55,6 @@ export interface AlertProjectionStorageInput {
 
 export interface AlertEventLinkStorageInput {
   id: string;
-  ledgerId?: LedgerId;
   fromEventId: string;
   toEventId?: string | null;
   toTransactionId?: string | null;
@@ -69,7 +69,6 @@ export type TransactionSourceKind = 'plaid' | 'statement' | 'alert' | 'manual' |
 
 export interface TransactionSourceRecordInput {
   id: string;
-  ledgerId?: LedgerId;
   sourceKind: TransactionSourceKind;
   transactionId: string;
   accountId: string;
@@ -152,17 +151,17 @@ function validateEvent(event: AlertEventStorageInput) {
   requiredText(event.payloadDigest, 'payload digest', 256);
 }
 
-function eventStatement(db: D1Database, event: AlertEventStorageInput) {
+function eventStatement(db: D1Database, context: FinancialContext, event: AlertEventStorageInput, internalId: string) {
   return db.prepare(`INSERT INTO alert_events
     (id, ledger_id, event_id, observation_id, source_profile_id, parser_version, notification_posted_at, captured_at,
      event_time_basis, event_type, direction, instrument_hint_kind, instrument_hint_value, account_id,
      event_money_currency, event_money_amount_minor, primary_money_role, amounts_json, fee_treatment, bank_reference,
      bank_displayed_time, bank_displayed_zone, bank_displayed_precision, bank_year_provenance, merchant, completeness_json,
-     payload_digest)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-    event.id,
-    event.ledgerId,
-    event.eventId,
+     payload_digest, raw_event_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    internalId,
+    context.ledgerId,
+    internalId,
     event.observationId,
     event.sourceProfileId,
     event.parserVersion,
@@ -187,24 +186,33 @@ function eventStatement(db: D1Database, event: AlertEventStorageInput) {
     event.merchant ?? null,
     event.completenessJson,
     event.payloadDigest,
+    event.eventId,
   );
 }
 
-export async function appendAlertEventBatch(db: D1Database, events: readonly AlertEventStorageInput[]) {
+export async function appendAlertEventBatch(db: D1Database, authority: FinancialContext, events: readonly AlertEventStorageInput[]) {
+  const context = immutableFinancialContext(authority);
+  await assertFinancialAuthority(db, context, 'ledger:review');
   if (events.length < 1 || events.length > MAX_ALERT_BATCH_SIZE) throw new RangeError(`Alert batches are limited to ${MAX_ALERT_BATCH_SIZE} events.`);
   const encoded = JSON.stringify(events);
   if (new TextEncoder().encode(encoded).byteLength > MAX_ALERT_BATCH_BYTES) throw new RangeError('Alert batch exceeds 128 KiB.');
   events.forEach(validateEvent);
-  const statements = events.flatMap((event) => [
-    eventStatement(db, event),
-    db.prepare(`INSERT INTO alert_event_digests (event_id, algorithm, digest)
-      VALUES (?, 'payload-sha256', ?)`).bind(event.id, event.payloadDigest),
-  ]);
-  await db.batch(statements);
+  const statements = [];
+  for (const event of events) {
+    const internalId = await ledgerScopedIdentifier(context, 'alert-event', event.eventId);
+    statements.push(eventStatement(db, context, event, internalId),
+      db.prepare(`INSERT INTO alert_event_digests (ledger_id, event_id, algorithm, digest)
+        VALUES (?, ?, 'payload-sha256', ?)`).bind(context.ledgerId, internalId, event.payloadDigest));
+  }
+  await publishStoreStatements(db, context, statements);
   return { acceptedEventIds: events.map((event) => event.eventId) };
 }
 
-export async function appendAlertProjection(db: D1Database, input: AlertProjectionStorageInput) {
+export async function appendAlertProjection(db: D1Database, authority: FinancialContext, input: AlertProjectionStorageInput) {
+  const context = immutableFinancialContext(authority);
+  await assertFinancialAuthority(db, context, 'ledger:review');
+  const eventId = await resolveAlertEventId(db, context, input.eventId);
+  const id = await ledgerScopedIdentifier(context, 'alert-projection', input.id);
   if (!ALERT_STATES.has(input.state)) throw new RangeError('Unsupported alert projection state.');
   requiredText(input.id, 'projection id', 256);
   requiredText(input.eventId, 'projection event id', 256);
@@ -215,9 +223,9 @@ export async function appendAlertProjection(db: D1Database, input: AlertProjecti
   const statements = [db.prepare(`INSERT INTO alert_projections
     (id, ledger_id, event_id, transaction_id, state, reason_codes_json, counted_currency, counted_amount_minor, revision)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-    input.id,
-    input.ledgerId ?? 'personal',
-    input.eventId,
+    id,
+    context.ledgerId,
+    eventId,
     input.transactionId ?? null,
     input.state,
     reasonCodesJson,
@@ -225,60 +233,44 @@ export async function appendAlertProjection(db: D1Database, input: AlertProjecti
     input.countedAmountMinor ?? null,
     input.revision,
   )];
-  for (const provenance of input.provenance ?? []) {
-    const sourceKind = requiredText(provenance.sourceKind, 'provenance source kind', 64);
-    const sourceId = requiredText(provenance.sourceId, 'provenance source id', 256);
-    statements.push(db.prepare(`INSERT INTO alert_projection_provenance
-      (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(
-      `${input.id}:${sourceKind}:${sourceId}:${input.revision}`.slice(0, 512),
-      input.ledgerId ?? 'personal',
-      input.id,
-      sourceKind,
-      sourceId,
-      provenance.basis,
-      input.revision,
-    ));
-  }
-  await db.batch(statements);
+  statements.push(...await projectionProvenanceStatements(db, context, {id, revision:input.revision, provenance:input.provenance}));
+  await publishStoreStatements(db, context, statements);
 }
 
-export async function appendAlertEventLink(db: D1Database, input: AlertEventLinkStorageInput) {
-  if (!LINK_RELATIONS.has(input.relation)) throw new RangeError('Unsupported alert link relation.');
-  requiredText(input.id, 'link id', 256);
-  requiredText(input.fromEventId, 'link source event', 256);
-  const hasEventTarget = Boolean(input.toEventId);
-  const hasTransactionTarget = Boolean(input.toTransactionId);
-  if (hasEventTarget === hasTransactionTarget) throw new RangeError('Alert links need exactly one target.');
-  if (input.toEventId === input.fromEventId) throw new RangeError('Alert event links cannot self-reference.');
-  if (!Number.isInteger(input.revision) || input.revision < 1) throw new RangeError('Link revision must be positive.');
-  safeMinor(input.allocatedAmountMinor, 'allocated amount');
+export async function appendAlertEventLink(db: D1Database, authority: FinancialContext, input: AlertEventLinkStorageInput) {
+  const context = immutableFinancialContext(authority);
+  await assertFinancialAuthority(db, context, 'ledger:review');
+  const fromEventId = await resolveAlertEventId(db, context, input.fromEventId);
+  const toEventId = input.toEventId ? await resolveAlertEventId(db, context, input.toEventId) : null;
+  const id = await ledgerScopedIdentifier(context, 'alert-link', input.id);
+  validateLink(input);
 
   if (input.toEventId) {
     const cycle = await db.prepare(`WITH RECURSIVE reachable(id) AS (
       SELECT ?
       UNION ALL
-      SELECT l.to_event_id FROM alert_event_links l JOIN reachable r ON l.from_event_id = r.id WHERE l.to_event_id IS NOT NULL
-    ) SELECT id FROM reachable WHERE id = ? LIMIT 1`).bind(input.toEventId, input.fromEventId).all<{ id: string }>();
+      SELECT l.to_event_id FROM alert_event_links l JOIN reachable r ON l.from_event_id = r.id WHERE l.ledger_id = ? AND l.to_event_id IS NOT NULL
+    ) SELECT id FROM reachable WHERE id = ? LIMIT 1`).bind(toEventId, context.ledgerId, fromEventId).all<{ id: string }>();
     if (cycle.results.length > 0) throw new Error('Alert event link would create a cycle.');
   }
-  await db.prepare(`INSERT INTO alert_event_links
+  const statement = db.prepare(`INSERT INTO alert_event_links
     (id, ledger_id, from_event_id, to_event_id, to_transaction_id, relation, allocated_currency, allocated_amount_minor, evidence_basis, revision)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-    input.id,
-    input.ledgerId ?? 'personal',
-    input.fromEventId,
-    input.toEventId ?? null,
+    id,
+    context.ledgerId,
+    fromEventId,
+    toEventId,
     input.toTransactionId ?? null,
     input.relation,
     input.allocatedCurrency ?? null,
     input.allocatedAmountMinor ?? null,
     input.evidenceBasis,
     input.revision,
-  ).run();
+  );
+  await publishStoreStatements(db, context, [statement]);
 }
 
-function sourceIdentity(input: TransactionSourceRecordInput) {
+function sourceIdentity(context: FinancialContext, input: TransactionSourceRecordInput) {
   if (input.sourceKind === 'plaid') {
     if (!input.providerItemId || (!input.providerTransactionId && !input.providerPendingTransactionId)) throw new RangeError('Plaid source records need Item and transaction identity.');
     return `plaid:${input.providerItemId}:${input.providerTransactionId ?? `pending:${input.providerPendingTransactionId}`}`;
@@ -289,9 +281,8 @@ function sourceIdentity(input: TransactionSourceRecordInput) {
     throw new RangeError('Statement source records need a bank row or file row identity.');
   }
   if (input.sourceKind === 'alert') {
-    if (input.ledgerId !== undefined && input.ledgerId !== 'personal') throw new RangeError('Alert source records use the personal ledger.');
     if (!input.eventId) throw new RangeError('Alert source records need an event identity.');
-    return `alert:personal:${input.eventId}`;
+    return `alert:${context.ledgerId}:${input.eventId}`;
   }
   if (input.sourceKind === 'manual') {
     if (!input.manualId) throw new RangeError('Manual source records need a random identity.');
@@ -300,8 +291,102 @@ function sourceIdentity(input: TransactionSourceRecordInput) {
   return `legacy:${input.transactionId}`;
 }
 
-export async function appendTransactionSourceRecord(db: D1Database, input: TransactionSourceRecordInput) {
-  const identityKey = sourceIdentity(input);
+export async function appendTransactionSourceRecord(db: D1Database, authority: FinancialContext, input: TransactionSourceRecordInput) {
+  const context = immutableFinancialContext(authority);
+  await assertFinancialAuthority(db, context, 'ledger:review');
+  const eventId = input.eventId ? await resolveAlertEventId(db, context, input.eventId) : null;
+  const id = await ledgerScopedIdentifier(context, 'transaction-source', input.id);
+  const identityKey = sourceIdentity(context, {...input, eventId});
+  validateSourceRecord(input);
+  const transaction = await db.prepare('SELECT account_id FROM transactions WHERE ledger_id = ? AND id = ? LIMIT 1').bind(context.ledgerId, input.transactionId).all<{ account_id: string }>();
+  if (transaction.results[0]?.account_id !== input.accountId) throw new RangeError('Source record account must match its transaction.');
+  const statement = db.prepare(`INSERT INTO transaction_source_records
+    (id, ledger_id, source_kind, identity_key, transaction_id, account_id, provider_item_id, provider_transaction_id,
+     provider_pending_transaction_id, bank_source_id, bank_row_id, file_sha256, row_index, event_id, manual_id, content_digest)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    id,
+    context.ledgerId,
+    input.sourceKind,
+    identityKey,
+    input.transactionId,
+    input.accountId,
+    input.providerItemId ?? null,
+    input.providerTransactionId ?? null,
+    input.providerPendingTransactionId ?? null,
+    input.bankSourceId ?? null,
+    input.bankRowId ?? null,
+    input.fileSha256 ?? null,
+    input.rowIndex ?? null,
+    eventId,
+    input.manualId ?? null,
+    input.contentDigest,
+  );
+  await publishStoreStatements(db, context, [statement]);
+}
+
+async function publishStoreStatements(db: D1Database, context: FinancialContext, statements: Parameters<D1Database['batch']>[0]) {
+  try {
+    await db.batch([financialAuthorityGuard(db, context, 'ledger:review'), ...statements]);
+  } catch (error) {
+    await assertFinancialAuthority(db, context, 'ledger:review');
+    throw error;
+  }
+  await assertFinancialAuthority(db, context, 'ledger:review');
+}
+
+function storeReferenceGuard(db: D1Database, context: FinancialContext, predicate: string, bindings: readonly unknown[]) {
+  return db.prepare(`INSERT INTO ledger_preferences(ledger_id) VALUES (CASE WHEN ${predicate} THEN ? ELSE NULL END)
+    ON CONFLICT(ledger_id) DO NOTHING`).bind(...bindings, context.ledgerId);
+}
+
+async function provenanceSourceId(db: D1Database, context: FinancialContext, kind: string, rawId: string) {
+  if (kind === 'alert') return resolveAlertEventId(db, context, rawId);
+  if (kind === 'review') return ledgerScopedIdentifier(context, 'alert-review', rawId);
+  const source = await db.prepare('SELECT id FROM transaction_source_records WHERE ledger_id=? AND id=? AND source_kind=?')
+    .bind(context.ledgerId, rawId, kind).first<{id:string}>();
+  if (!source) throw new RangeError('Provenance source is not available in this ledger.');
+  return source.id;
+}
+
+async function projectionProvenanceStatements(db: D1Database, context: FinancialContext, input: Pick<AlertProjectionStorageInput,'id'|'revision'|'provenance'>) {
+  const id = input.id;
+  const statements = [];
+  for (const provenance of input.provenance ?? []) {
+    const sourceKind = requiredText(provenance.sourceKind, 'provenance source kind', 64);
+    const rawSourceId = requiredText(provenance.sourceId, 'provenance source id', 256);
+    const sourceId = await provenanceSourceId(db, context, sourceKind, rawSourceId);
+    if (sourceKind !== 'alert' && sourceKind !== 'review') statements.push(storeReferenceGuard(db, context,
+      'EXISTS (SELECT 1 FROM transaction_source_records WHERE ledger_id=? AND id=? AND source_kind=?)',
+      [context.ledgerId, sourceId, sourceKind]));
+    statements.push(db.prepare(`INSERT INTO alert_projection_provenance
+      (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(
+      `${id}:${sourceKind}:${sourceId}:${input.revision}`.slice(0, 512),
+      context.ledgerId,
+      id,
+      sourceKind,
+      sourceId,
+      provenance.basis,
+      input.revision,
+    ));
+  }
+  return statements;
+}
+
+function validateLink(input: AlertEventLinkStorageInput) {
+  if (!LINK_RELATIONS.has(input.relation)) throw new RangeError('Unsupported alert link relation.');
+  requiredText(input.id, 'link id', 256);
+  requiredText(input.fromEventId, 'link source event', 256);
+  const hasEventTarget = Boolean(input.toEventId);
+  const hasTransactionTarget = Boolean(input.toTransactionId);
+  if (hasEventTarget === hasTransactionTarget) throw new RangeError('Alert links need exactly one target.');
+  if (input.toEventId === input.fromEventId) throw new RangeError('Alert event links cannot self-reference.');
+  if (!Number.isInteger(input.revision) || input.revision < 1) throw new RangeError('Link revision must be positive.');
+  safeMinor(input.allocatedAmountMinor, 'allocated amount');
+
+}
+
+function validateSourceRecord(input: TransactionSourceRecordInput) {
   requiredText(input.id, 'source record id', 256);
   requiredText(input.transactionId, 'source transaction id', 256);
   requiredText(input.accountId, 'source account id', 256);
@@ -315,27 +400,4 @@ export async function appendTransactionSourceRecord(db: D1Database, input: Trans
   boundedText(input.eventId, 'source event id', 256);
   boundedText(input.manualId, 'manual source id', 256);
   if (input.rowIndex !== null && input.rowIndex !== undefined && (!Number.isInteger(input.rowIndex) || input.rowIndex < 0)) throw new RangeError('Source row index is not valid.');
-  const transaction = await db.prepare('SELECT account_id FROM transactions WHERE id = ? LIMIT 1').bind(input.transactionId).all<{ account_id: string }>();
-  if (transaction.results[0]?.account_id !== input.accountId) throw new RangeError('Source record account must match its transaction.');
-  await db.prepare(`INSERT INTO transaction_source_records
-    (id, ledger_id, source_kind, identity_key, transaction_id, account_id, provider_item_id, provider_transaction_id,
-     provider_pending_transaction_id, bank_source_id, bank_row_id, file_sha256, row_index, event_id, manual_id, content_digest)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-    input.id,
-    input.ledgerId ?? 'personal',
-    input.sourceKind,
-    identityKey,
-    input.transactionId,
-    input.accountId,
-    input.providerItemId ?? null,
-    input.providerTransactionId ?? null,
-    input.providerPendingTransactionId ?? null,
-    input.bankSourceId ?? null,
-    input.bankRowId ?? null,
-    input.fileSha256 ?? null,
-    input.rowIndex ?? null,
-    input.eventId ?? null,
-    input.manualId ?? null,
-    input.contentDigest,
-  ).run();
 }

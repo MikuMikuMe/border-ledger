@@ -1,5 +1,6 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyMigrations, createD1Fixture, task18MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task23MigrationNames } from './helpers/d1';
 import { mapPlaidTransaction, upsertPlaidTransaction } from '../worker/plaid';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -12,7 +13,7 @@ describe('Task 3 provider and candidate identity', () => {
   it('upserts by provider identity and writes source provenance idempotently', async () => {
     const fixture = await createD1Fixture();
     fixtures.push(fixture);
-    await applyMigrations(fixture.db, task18MigrationNames);
+    await applyMigrations(fixture.db, task23MigrationNames);
     await fixture.db.batch([
       fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)')
         .bind('account-rbc', 'Synthetic RBC', 'RBC', 'CAD', 'chequing', 'connected'),
@@ -20,6 +21,7 @@ describe('Task 3 provider and candidate identity', () => {
         .bind('item-rbc', 'ciphertext-fixture', 'iv-fixture'),
     ]);
 
+    await fixture.db.prepare("INSERT INTO plaid_accounts(plaid_account_id,item_id,account_id,name) VALUES ('plaid-account-rbc','item-rbc','account-rbc','Bank')").run();
     const first = mapPlaidTransaction({
       transaction_id: 'provider-1',
       account_id: 'plaid-account-rbc',
@@ -31,15 +33,15 @@ describe('Task 3 provider and candidate identity', () => {
       pending: false,
     }, 'account-rbc', 'item-rbc');
     expect(first).not.toBeNull();
-    await upsertPlaidTransaction(fixture.db, first!);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, first!);
 
     const equalPurchase = {
       ...first!,
       id: 'plaid-account-rbc-provider-2',
       providerTransactionId: 'provider-2',
     };
-    await upsertPlaidTransaction(fixture.db, equalPurchase);
-    await upsertPlaidTransaction(fixture.db, { ...first!, amountMinor: -1300, merchant: 'Synthetic Cafe updated' });
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, equalPurchase);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, { ...first!, amountMinor: -1300, merchant: 'Synthetic Cafe updated' });
 
     await expect(fixture.db.prepare(`SELECT id, amount_minor, merchant, provider_transaction_id
       FROM transactions ORDER BY provider_transaction_id`).all()).resolves.toMatchObject({
@@ -60,7 +62,7 @@ describe('Task 3 provider and candidate identity', () => {
   it('retains pending and current provider lineage when later payloads omit one side', async () => {
     const fixture = await createD1Fixture();
     fixtures.push(fixture);
-    await applyMigrations(fixture.db, task18MigrationNames);
+    await applyMigrations(fixture.db, task23MigrationNames);
     await fixture.db.batch([
       fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)')
         .bind('account-rbc', 'Synthetic RBC', 'RBC', 'CAD', 'chequing', 'connected'),
@@ -68,6 +70,7 @@ describe('Task 3 provider and candidate identity', () => {
         .bind('item-rbc', 'ciphertext-fixture', 'iv-fixture'),
     ]);
 
+    await fixture.db.prepare("INSERT INTO plaid_accounts(plaid_account_id,item_id,account_id,name) VALUES ('plaid-account-rbc','item-rbc','account-rbc','Bank')").run();
     const pending = mapPlaidTransaction({
       transaction_id: 'pending-1',
       account_id: 'plaid-account-rbc',
@@ -102,9 +105,9 @@ describe('Task 3 provider and candidate identity', () => {
     expect(pending).not.toBeNull();
     expect(posted).not.toBeNull();
     expect(modified).not.toBeNull();
-    await upsertPlaidTransaction(fixture.db, pending!);
-    await upsertPlaidTransaction(fixture.db, posted!);
-    await upsertPlaidTransaction(fixture.db, modified!);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, pending!);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, posted!);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, modified!);
 
     await expect(fixture.db.prepare(`SELECT id, amount_minor, provider_transaction_id, provider_pending_transaction_id
       FROM transactions`).all()).resolves.toMatchObject({
@@ -138,7 +141,7 @@ describe('Task 3 provider and candidate identity', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind('provider-b', 'account-rbc', '2026-10-12', 'Synthetic Cafe', -1200, 'CAD', 'Food', 'expense', 'confirmed', 'plaid', 'legacy-candidate-b', 'item-rbc', 'provider-b', 'pending-b'),
     ]);
-    await applyMigrations(fixture.db, task18MigrationNames);
+    await applyMigrations(fixture.db, task23MigrationNames);
 
     await fixture.db.prepare('UPDATE transactions SET fingerprint = ? WHERE id = ?').bind('same-candidate', 'provider-b').run();
 
@@ -202,7 +205,7 @@ describe('Task 3 provider and candidate identity', () => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       'legacy-transaction', 'legacy-account', '2026-10-11', 'Synthetic legacy merchant', -900, 'CNY', 'Other', 'expense', 'confirmed', 'statement', 'legacy-fingerprint',
     ).run();
-    await applyMigrations(fixture.db, task18MigrationNames);
+    await applyMigrations(fixture.db, task23MigrationNames);
 
     const row = await fixture.db.prepare(`SELECT t.id, t.note, r.identity_key
       FROM transactions t JOIN transaction_source_records r ON r.transaction_id = t.id

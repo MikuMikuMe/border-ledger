@@ -1,7 +1,7 @@
 import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyAlertReview, commitStatementRows, type StatementCommitRow } from '../worker/reconciliation-store';
-import { applyMigrations, createD1Fixture, task10MigrationNames, task10PreUniquenessMigrationNames, task18MigrationNames, task22MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task10MigrationNames, task10PreUniquenessMigrationNames, task18MigrationNames, task24MigrationNames } from './helpers/d1';
 import { createAlertFixture, event, postAlerts } from './helpers/alerts';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -9,7 +9,7 @@ const task10PreUniquenessWithFx = [...task10PreUniquenessMigrationNames, '0018-f
 
 async function seededFixture(migrationNames: readonly string[] = task18MigrationNames) {
   const fixture = await createD1Fixture(migrationNames);
-  await applyMigrations(fixture.db, task22MigrationNames);
+  await applyMigrations(fixture.db, task24MigrationNames);
   fixtures.push(fixture);
   await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
     VALUES ('statement-account', 'Synthetic BOC card', 'Bank of China', 'CNY', 'multi', 'credit', 'import_only')`).run();
@@ -232,7 +232,11 @@ describe('durable statement reconciliation', () => {
       fileSha256: 'e'.repeat(64),
       rows: [row({ id: 'statement-tx', sourceIdentity: { accountId: 'statement-account', fileSha256: 'e'.repeat(64), rowIndex: 0 } })],
     });
-    const result = await applyAlertReview(fixture.db, {
+    await fixture.db.prepare(`INSERT INTO statement_reconciliation_candidates
+      (id, ledger_id, source_record_id, statement_transaction_id, candidate_transaction_id, score, evidence_basis)
+      SELECT 'confirm-candidate', 'personal', id, transaction_id, 'alert-tx', 100, 'user_review'
+      FROM transaction_source_records WHERE ledger_id='personal' AND transaction_id='statement-tx' AND source_kind='statement'`).run();
+    const result = await applyAlertReview(fixture.db, OWNER_LEDGER, {
       id: 'review-link-1',
       alertEventId: 'alert-1',
       candidateTransactionId: 'alert-tx',
@@ -428,7 +432,7 @@ describe('durable statement reconciliation', () => {
     expect(await response.json()).toMatchObject({ acks: [{ status: 'accepted', projectionState: 'provisional' }] });
     await expect(fixture.db.prepare('SELECT status FROM statement_reconciliation_candidates WHERE statement_transaction_id = ? AND candidate_transaction_id = ?').bind('statement-review-row', '00000000-0000-4000-8000-000000000001').all()).resolves.toMatchObject({ results: [{ status: 'open' }] });
 
-    const result = await applyAlertReview(fixture.db, {
+    const result = await applyAlertReview(fixture.db, OWNER_LEDGER, {
       id: 'explicit-review-before-alert',
       alertEventId: '00000000-0000-4000-8000-000000000001',
       statementTransactionId: 'statement-review-row',
@@ -454,7 +458,7 @@ describe('durable statement reconciliation', () => {
       results: [{ date: '2026-10-13', fx_lock_date: '2026-10-13', amount_minor: -1234 }],
     });
 
-    await applyAlertReview(fixture.db, {
+    await applyAlertReview(fixture.db, OWNER_LEDGER, {
       id: 'partial-event-cancellation',
       alertEventId: reversalId,
       targetAlertEventId: purchaseId,

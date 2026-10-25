@@ -1,7 +1,6 @@
 import { classifyTransaction } from '../src/domain/ledger';
 import { getCurrencyMeta } from '../src/domain/currencies';
 import type { Currency, Transaction, TransactionKind, TransactionStatus } from '../src/domain/types';
-import type { D1Database } from './db-types';
 
 export type PlaidEnvironment = 'sandbox' | 'development' | 'production';
 
@@ -149,139 +148,7 @@ export function mapPlaidTransaction(transaction: PlaidTransaction, accountId: st
   };
 }
 
-function plaidSourceIdentity(mapped: MappedPlaidTransaction) {
-  if (!mapped.plaidItemId) return null;
-  const providerIdentity = mapped.providerTransactionId
-    ?? (mapped.providerPendingTransactionId ? `pending:${mapped.providerPendingTransactionId}` : null);
-  if (!providerIdentity) return null;
-  return `plaid:${mapped.plaidItemId}:${providerIdentity}`;
-}
-
-function plaidSourceContentDigest(mapped: MappedPlaidTransaction) {
-  return [
-    mapped.accountId,
-    mapped.date,
-    mapped.merchant,
-    mapped.amountMinor,
-    mapped.currency,
-    mapped.category,
-    mapped.kind,
-    mapped.status,
-    mapped.fingerprint,
-    mapped.plaidItemId,
-    mapped.providerTransactionId,
-    mapped.providerPendingTransactionId,
-  ].map((value) => value ?? '').join('|');
-}
-
-async function hasTransactionSourceRecords(db: D1Database) {
-  const result = await db.prepare(`SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name = 'transaction_source_records' LIMIT 1`).all<{ name: string }>();
-  return result.results.length > 0;
-}
-
-async function existingPlaidTransactionId(db: D1Database, mapped: MappedPlaidTransaction, sourceRecordsAvailable: boolean) {
-  if (mapped.plaidItemId && mapped.providerTransactionId) {
-    const current = await db.prepare(`SELECT id FROM transactions
-      WHERE plaid_item_id = ? AND provider_transaction_id = ? LIMIT 1`)
-      .bind(mapped.plaidItemId, mapped.providerTransactionId).all<{ id: string }>();
-    if (current.results[0]?.id) return current.results[0].id;
-  }
-  if (mapped.plaidItemId && mapped.providerPendingTransactionId) {
-    const pending = await db.prepare(`SELECT id FROM transactions
-      WHERE plaid_item_id = ? AND provider_pending_transaction_id = ? LIMIT 1`)
-      .bind(mapped.plaidItemId, mapped.providerPendingTransactionId).all<{ id: string }>();
-    if (pending.results[0]?.id) return pending.results[0].id;
-  }
-  const identityKey = plaidSourceIdentity(mapped);
-  if (sourceRecordsAvailable && identityKey) {
-    const source = await db.prepare(`SELECT transaction_id FROM transaction_source_records
-      WHERE ledger_id = 'personal' AND source_kind = 'plaid' AND identity_key = ? LIMIT 1`)
-      .bind(identityKey).all<{ transaction_id: string }>();
-    return source.results[0]?.transaction_id ?? null;
-  }
-  return null;
-}
-
-export async function upsertPlaidTransaction(db: D1Database, mapped: MappedPlaidTransaction) {
-  const identityKey = plaidSourceIdentity(mapped);
-  const sourceRecordsAvailable = identityKey ? await hasTransactionSourceRecords(db) : false;
-  const existingId = await existingPlaidTransactionId(db, mapped, sourceRecordsAvailable);
-  const localId = existingId ?? mapped.id;
-  const values = [
-    mapped.accountId,
-    mapped.date,
-    mapped.merchant,
-    mapped.amountMinor,
-    mapped.currency,
-    mapped.category,
-    mapped.kind,
-    mapped.status,
-    mapped.source,
-    mapped.fingerprint,
-    mapped.note ?? null,
-    mapped.plaidItemId,
-    mapped.providerTransactionId,
-    mapped.providerPendingTransactionId,
-  ];
-  const transactionStatement = existingId
-    ? db.prepare(`UPDATE transactions SET
-      account_id = ?, date = ?, merchant = ?, amount_minor = ?, currency = ?, category = ?, kind = ?, status = ?, source = ?, fingerprint = ?, note = ?,
-      plaid_item_id = ?, provider_transaction_id = COALESCE(?, provider_transaction_id), provider_pending_transaction_id = COALESCE(?, provider_pending_transaction_id), updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?`).bind(...values, existingId)
-    : db.prepare(`INSERT INTO transactions
-    (id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint, note,
-     plaid_item_id, provider_transaction_id, provider_pending_transaction_id, fx_lock_date)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      account_id = excluded.account_id,
-      date = excluded.date,
-      merchant = excluded.merchant,
-      amount_minor = excluded.amount_minor,
-      currency = excluded.currency,
-      category = excluded.category,
-      kind = excluded.kind,
-      status = excluded.status,
-      source = excluded.source,
-      note = excluded.note,
-      plaid_item_id = excluded.plaid_item_id,
-       provider_transaction_id = COALESCE(excluded.provider_transaction_id, transactions.provider_transaction_id),
-       provider_pending_transaction_id = COALESCE(excluded.provider_pending_transaction_id, transactions.provider_pending_transaction_id),
-      updated_at = CURRENT_TIMESTAMP`).bind(localId, ...values, mapped.date);
-  const statements = [transactionStatement];
-  if (sourceRecordsAvailable && identityKey) {
-    statements.push(db.prepare(`INSERT INTO transaction_source_records
-      (id, ledger_id, source_kind, identity_key, transaction_id, account_id, provider_item_id,
-       provider_transaction_id, provider_pending_transaction_id, content_digest)
-      VALUES (?, 'personal', 'plaid', ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(ledger_id, source_kind, identity_key) DO UPDATE SET
-        transaction_id = excluded.transaction_id,
-        account_id = excluded.account_id,
-        provider_item_id = excluded.provider_item_id,
-        provider_transaction_id = COALESCE(excluded.provider_transaction_id, transaction_source_records.provider_transaction_id),
-        provider_pending_transaction_id = COALESCE(excluded.provider_pending_transaction_id, transaction_source_records.provider_pending_transaction_id),
-        content_digest = excluded.content_digest`).bind(
-      `source-record:${identityKey}`,
-      identityKey,
-      localId,
-      mapped.accountId,
-      mapped.plaidItemId,
-      mapped.providerTransactionId,
-      mapped.providerPendingTransactionId,
-      plaidSourceContentDigest(mapped),
-    ));
-  }
-  await db.batch(statements);
-  return localId;
-}
-
-export async function removePlaidTransaction(db: D1Database, itemId: string, providerTransactionId: string) {
-  await db.prepare(`DELETE FROM transactions
-    WHERE plaid_item_id = ? AND (
-      provider_transaction_id = ?
-      OR (provider_transaction_id IS NULL AND provider_pending_transaction_id = ?)
-    )`).bind(itemId, providerTransactionId, providerTransactionId).run();
-}
+export { upsertPlaidTransaction, removePlaidTransaction } from './plaid-transactions';
 
 export async function fetchAllPlaidTransactions<T extends { transaction_id: string }>(
   fetchPage: (cursor: string) => Promise<PlaidSyncPage<T>>,

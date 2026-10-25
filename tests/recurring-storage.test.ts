@@ -1,5 +1,6 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createD1Fixture, task18MigrationNames } from './helpers/d1';
+import { createD1Fixture, task23MigrationNames } from './helpers/d1';
 import { mapPlaidTransaction, removePlaidTransaction, upsertPlaidTransaction } from '../worker/plaid';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -32,18 +33,18 @@ async function seedLedger(db: Awaited<ReturnType<typeof createD1Fixture>>['db'])
 
 describe('Plaid transaction storage identity', () => {
   it('keeps one local row across pending, posted, modified, and removal events', async () => {
-    const fixture = await createD1Fixture(task18MigrationNames);
+    const fixture = await createD1Fixture(task23MigrationNames);
     fixtures.push(fixture);
     await seedLedger(fixture.db);
 
     const pending = mapPlaidTransaction(plaidTransaction(), 'account-rbc', 'item-1');
     expect(pending).not.toBeNull();
-    await upsertPlaidTransaction(fixture.db, pending!);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, pending!);
 
     const posted = mapPlaidTransaction(plaidTransaction({ transaction_id: 'posted-1', pending_transaction_id: 'pending-1', pending: false }), 'account-rbc', 'item-1');
     expect(posted).not.toBeNull();
-    await upsertPlaidTransaction(fixture.db, posted!);
-    await removePlaidTransaction(fixture.db, 'item-1', 'pending-1');
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, posted!);
+    await removePlaidTransaction(fixture.db,OWNER_LEDGER, 'item-1', 'pending-1');
 
     const afterPendingRemoval = await fixture.db.prepare('SELECT id, amount_minor, status, provider_transaction_id, provider_pending_transaction_id FROM transactions').all<Record<string, unknown>>();
     expect(afterPendingRemoval.results).toHaveLength(1);
@@ -51,12 +52,12 @@ describe('Plaid transaction storage identity', () => {
 
     const modified = mapPlaidTransaction(plaidTransaction({ transaction_id: 'posted-1', amount: 21, pending: false, pending_transaction_id: null }), 'account-rbc', 'item-1');
     expect(modified).not.toBeNull();
-    await upsertPlaidTransaction(fixture.db, modified!);
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, modified!);
 
     const afterModification = await fixture.db.prepare('SELECT id, amount_minor, provider_transaction_id FROM transactions').all<Record<string, unknown>>();
     expect(afterModification.results).toEqual([{ id: pending!.id, amount_minor: -2100, provider_transaction_id: 'posted-1' }]);
 
-    await removePlaidTransaction(fixture.db, 'item-1', 'posted-1');
+    await removePlaidTransaction(fixture.db,OWNER_LEDGER, 'item-1', 'posted-1');
     await expect(fixture.db.prepare('SELECT id FROM transactions').all()).resolves.toMatchObject({ results: [] });
   });
 

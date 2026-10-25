@@ -28,11 +28,11 @@ describe('closed-registration web authentication', () => {
     expect(await db.prepare('SELECT COUNT(*) FROM users').first('COUNT(*)')).toBe(1);
     expect(await db.prepare('SELECT COUNT(*) FROM user_identities').first('COUNT(*)')).toBe(1);
   });
-  it('fails closed for a second provisioned ledger while financial consumers await scoping', async () => {
+  it('serves only the second provisioned ledger after runtime scoping', async () => {
     const { db } = fixture();
     await db.batch([db.prepare("INSERT INTO users(id) VALUES ('second')"), db.prepare("INSERT INTO ledgers(id,user_id) VALUES ('second-ledger','second')"), db.prepare("INSERT INTO user_identities(issuer,subject,user_id) VALUES ('https://access.example.com','second','second')")]);
     const response = await worker.fetch(new Request('https://pf.example.com/api/accounts', { headers: { 'Cf-Access-Jwt-Assertion': 'second' } }), { ...env, DB: db } as never);
-    expect(response.status).toBe(503);
-    expect(await response.json()).not.toHaveProperty('accounts');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ accounts: [] });
   });
 });

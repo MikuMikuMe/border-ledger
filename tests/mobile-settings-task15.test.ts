@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import registeredCurrencies from '../contracts/currencies.json';
 import worker from '../worker/index';
-import { createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
-import { MAX_ALLOWED_CURRENCIES } from '../worker/mobile-device-service';
+import { authenticateOwner, createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
+import { MAX_ALLOWED_CURRENCIES, replaceDeviceSourceConfig } from '../worker/mobile-device-service';
 import { applyMigrations, createD1Fixture, task15CurrencyMigrationNames, task15MigrationNames, task22MigrationNames } from './helpers/d1';
 
 const ORIGIN = 'https://pf.example.com';
 const ENVIRONMENT = 'sandbox';
+const TEST_NOW = new Date().toISOString();
+const TEST_EXPIRES = new Date(Date.now()+60*60*1000).toISOString();
 const SESSION_KEY = 'task15-session-key-which-is-long-enough';
 const CONFIG = {
   canonicalOrigin: ORIGIN,
@@ -30,13 +32,13 @@ async function fixture(options: { oldApproval?: boolean } = {}, migrationNames: 
   const selfId = `task15-self-${suffix}`;
   const otherId = `task15-other-${suffix}`;
   const familyId = `task15-owner-family-${suffix}`;
-  const now = '2026-10-14T12:00:00.000Z';
-  const approval = options.oldApproval ? '2026-10-14T11:00:00.000Z' : now;
+  const now = TEST_NOW;
+  const approval = options.oldApproval ? new Date(Date.parse(now)-60*60*1000).toISOString() : now;
   const ownerToken = await createOpaqueCredential({
     kind: 'owner-access',
     familyId,
     generation: 1,
-    expiresAt: '2026-10-14T13:00:00.000Z',
+    expiresAt: TEST_EXPIRES,
     environmentHash: await hashSecret(ENVIRONMENT),
   }, CONFIG);
   await value.db.batch([
@@ -53,8 +55,8 @@ async function fixture(options: { oldApproval?: boolean } = {}, migrationNames: 
       VALUES (?, 'personal', 'Other phone', 'android', 'paired', '2027-01-12T12:00:00.000Z')`).bind(otherId),
     value.db.prepare(`INSERT INTO owner_session_families
       (id, ledger_id, subject_hash, device_id, access_generation, refresh_generation, access_expires_at, refresh_expires_at, scope_json, environment_hash, created_at)
-      VALUES (?, 'personal', 'task15-subject', ?, 1, 1, '2026-10-14T13:00:00.000Z', '2026-11-14T12:00:00.000Z', ?, ?, ?)`)
-      .bind(familyId, selfId,
+      VALUES (?, 'personal', 'task15-subject', ?, 1, 1, ?, '2099-01-01T00:00:00.000Z', ?, ?, ?)`)
+      .bind(familyId, selfId, TEST_EXPIRES,
       JSON.stringify(['ledger:read', 'preferences:write', 'devices:manage']), await hashSecret(ENVIRONMENT), approval),
   ]);
   fixtures.push(value);
@@ -70,7 +72,7 @@ function env(db: Awaited<ReturnType<typeof fixture>>['db']) {
     MOBILE_ACCESS_AUTHORIZATION_URL: CONFIG.accessAuthorizationUrl,
     MOBILE_CALLBACK_URL: CONFIG.callbackUrl,
     MOBILE_SESSION_ENCRYPTION_KEY: SESSION_KEY,
-    now: () => new Date('2026-10-14T12:00:00.000Z'),
+    now: () => new Date(TEST_NOW),
   };
 }
 
@@ -172,6 +174,7 @@ describe('Task 15 mobile preferences and device routes', () => {
   it('preserves two approved instrument hints on one account through source-config read-back', async () => {
     const value = await fixture();
     await value.db.batch([
+      ...['1111','2222'].map(hint=>value.db.prepare('INSERT INTO source_profile_hints(id,source_profile_id,hint_kind,hint_value) VALUES (?,?,?,?)').bind(`hint-${hint}-${value.accountId}`,value.sourceId,'card_suffix',hint)),
       value.db.prepare(`INSERT INTO source_account_mappings (id, ledger_id, source_profile_id, hint_kind, hint_value, account_id, approval_status, approved_at)
         VALUES (?, 'personal', ?, 'card_suffix', '1111', ?, 'approved', ?)`).bind(`mapping-1111-${value.accountId}`, value.sourceId, value.accountId, value.now),
       value.db.prepare(`INSERT INTO source_account_mappings (id, ledger_id, source_profile_id, hint_kind, hint_value, account_id, approval_status, approved_at)
@@ -217,3 +220,22 @@ describe('Task 15 mobile preferences and device routes', () => {
     expect(await rejected.json()).toMatchObject({ code: 'invalid_request' });
   }, 30_000);
 });
+
+it.each(['config','capture'] as const)('returns409 for a real D1 configuration guard race on the %s route',async operation=>{
+  const value=await fixture();
+  const owner=await authenticateOwner(value.ownerToken,value.db,CONFIG,'devices:manage');
+  const sourceConfig={expectedRevision:0,mappings:[{sourceProfileId:value.sourceId,accountId:value.accountId,allowedCurrencies:['CAD']}]};
+  let winningScopes:unknown;
+  const racing={prepare:(sql:string)=>value.db.prepare(sql),batch:async(statements:import('../worker/db-types').D1Statement[])=>{
+    await replaceDeviceSourceConfig(value.db,owner,value.selfId,sourceConfig);
+    winningScopes=(await value.db.prepare('SELECT * FROM device_source_scopes WHERE device_id=?').bind(value.selfId).all()).results;
+    return value.db.batch(statements);
+  }};
+  const path=operation==='config'?'source-config':'capture-authorization';
+  const body=operation==='config'?sourceConfig:{consent:true,credentialHash:'7'.repeat(64),sourceConfig};
+  const response=await worker.fetch(request(`/api/mobile/v1/devices/self/${path}`,value.ownerToken,{method:operation==='config'?'PUT':'POST',body:JSON.stringify(body)}),env(racing) as never);
+  expect(response.status).toBe(409);expect(await response.json()).toMatchObject({code:'revision_conflict',currentRevision:1,retryable:false});
+  expect((await value.db.prepare('SELECT * FROM device_source_scopes WHERE device_id=?').bind(value.selfId).all()).results).toEqual(winningScopes);
+  expect(await value.db.prepare('SELECT source_config_revision FROM mobile_devices WHERE id=?').bind(value.selfId).first()).toEqual({source_config_revision:1});
+  expect(await value.db.prepare('SELECT COUNT(*) AS n FROM capture_credentials').first()).toEqual({n:0});
+},30000);

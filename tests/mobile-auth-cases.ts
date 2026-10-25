@@ -1,3 +1,4 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import assert from 'node:assert/strict';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import {
@@ -31,7 +32,7 @@ import {
 } from '../worker/device-pairing';
 import { issueSecureCaptureCredential } from '../worker/device-store';
 
-const INITIAL_NOW = Date.parse('2026-10-13T12:00:00.000Z');
+const INITIAL_NOW = Date.now();
 const OWNER_SUBJECT = 'synthetic-owner-subject';
 const OWNER_VERIFIER = 'synthetic-owner-pkce-verifier-012345678901234567890123456789';
 const PAIR_VERIFIER = 'synthetic-pair-verifier-012345678901234567890123456789';
@@ -69,6 +70,8 @@ async function seedLedger(db: import('../worker/db-types').D1Database) {
     db.prepare('INSERT OR IGNORE INTO account_currencies (account_id, currency) VALUES (?, ?)').bind('account-boc', 'USD'),
     db.prepare('INSERT INTO source_profiles (id, ledger_id, provider, source_kind, display_name, parser_version, status, config_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind('source-boc', 'personal', 'boc', 'wechat', 'Synthetic BOC', 'task4', 'approved', '{}'),
+    db.prepare("INSERT INTO source_profile_hints (id,source_profile_id,hint_kind,hint_value) VALUES ('hint-boc-1234','source-boc','card_suffix','1234')"),
+    db.prepare("INSERT INTO source_profile_hints (id,source_profile_id,hint_kind,hint_value) VALUES ('hint-boc-5678','source-boc','card_suffix','5678')"),
     db.prepare('INSERT INTO source_account_mappings (id, ledger_id, source_profile_id, hint_kind, hint_value, account_id, approval_status, approved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind('mapping-boc', 'personal', 'source-boc', 'card_suffix', '1234', 'account-boc', 'approved', '2026-10-13T11:00:00.000Z'),
     db.prepare('INSERT INTO source_account_mappings (id, ledger_id, source_profile_id, hint_kind, hint_value, account_id, approval_status, approved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -147,11 +150,11 @@ export async function runTask4Cases() {
       .bind('owner-device', 'personal', 'Synthetic owner phone', 'android', 'paired').run();
 
     const ownerFlow = await beginAndApproveOwner(fixture.db, cfg);
-    assert.equal(ownerFlow.start.expiresAt, '2026-10-13T12:10:00.000Z');
+    assert.equal(ownerFlow.start.expiresAt, new Date(INITIAL_NOW + 10 * 60 * 1000).toISOString());
     const authorizationUrl = new URL(ownerFlow.start.authorizationUrl);
     assert.equal(authorizationUrl.searchParams.get('request_id'), ownerFlow.start.requestId);
     assert.equal(authorizationUrl.searchParams.get('state'), ownerFlow.state);
-    assert.equal(ownerFlow.approval.expiresAt, '2026-10-13T12:01:00.000Z');
+    assert.equal(ownerFlow.approval.expiresAt, new Date(INITIAL_NOW + 60 * 1000).toISOString());
 
     const duplicateApproval = await approveOwnerLogin(fixture.db, {
       requestId: ownerFlow.start.requestId,
@@ -410,7 +413,7 @@ export async function runTask4Cases() {
     const originalCaptureSecret = 'owner-device-4-capture-v1';
     const renewedCaptureSecret = 'owner-device-4-capture-v2';
     const captureIssuedAt = new Date(clock.value()).toISOString();
-    await issueSecureCaptureCredential(fixture.db, {
+    await issueSecureCaptureCredential(fixture.db, OWNER_LEDGER, {
       id: 'capture-owner-device-4-v1',
       deviceId: 'owner-device-4',
       credentialHash: await hashSecret(originalCaptureSecret),

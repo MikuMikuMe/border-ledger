@@ -1,5 +1,7 @@
 import type { LedgerContext } from './tenant-context';
 import type { D1Database } from './db-types';
+import { financialAuthorityGuard } from './financial-authority';
+import { reviewStateGuard, isReviewStateConflict } from './review-publication';
 import {
   OWNER_SCOPES,
   MobileAuthError,
@@ -389,15 +391,62 @@ async function readRefresh(db: D1Database, familyId: string, generation: number)
     FROM owner_refresh_generations WHERE family_id = ? AND generation = ?`).bind(familyId, generation).first<RefreshGenerationRow>();
 }
 
+function refreshPublicationGuard(db: D1Database, binding: { context: LedgerContext; family: SessionFamilyRow; tokenHash: string }) {
+  const { context, family, tokenHash } = binding;
+  return reviewStateGuard(db, context, `EXISTS (SELECT 1 FROM owner_session_families f
+    JOIN owner_refresh_generations r ON r.family_id=f.id AND r.ledger_id=f.ledger_id
+    WHERE f.id=? AND f.ledger_id=? AND f.subject_hash=? AND f.environment_hash=?
+      AND f.access_generation=? AND f.refresh_generation=? AND f.scope_json=?
+      AND f.access_expires_at=? AND f.refresh_expires_at=? AND f.stay_signed_in_until IS ?
+      AND COALESCE(f.installation_id,f.device_id) IS ?
+      AND f.revocation_generation=? AND f.revocation_capability_hash IS ?
+      AND f.revoked_at IS NULL AND julianday(f.refresh_expires_at)>julianday('now')
+      AND r.generation=? AND r.token_hash=? AND r.consumed_at IS NULL AND r.revoked_at IS NULL
+      AND julianday(r.expires_at)>julianday('now'))`, [
+    family.id, context.ledgerId, family.subject_hash, family.environment_hash,
+    family.access_generation, family.refresh_generation, family.scope_json,
+    family.access_expires_at, family.refresh_expires_at, family.stay_signed_in_until,
+    family.installation_id, family.revocation_generation, family.revocation_capability_hash,
+    family.refresh_generation, tokenHash,
+  ]);
+}
+
+function assertRefreshPolicyUnchanged(latest: SessionFamilyRow, family: SessionFamilyRow) {
+  const policyUnchanged = latest.environment_hash === family.environment_hash
+    && latest.scope_json === family.scope_json
+    && latest.refresh_expires_at === family.refresh_expires_at
+    && latest.stay_signed_in_until === family.stay_signed_in_until;
+  if (!policyUnchanged) throw new MobileAuthError('revoked', 'The refresh authority changed.', 401);
+}
+
+async function recoverRefreshPublication(db: D1Database, binding: { context: LedgerContext; family: SessionFamilyRow; digest: string }, config: MobileAuthConfig) {
+  const { context, family, digest } = binding;
+  const latest = await readFamily(db, family.id);
+  if (!latest || latest.revoked_at) throw new MobileAuthError('revoked', 'The owner session is not active.', 401);
+  assertRefreshPolicyUnchanged(latest, family);
+  const recovered = await readReplay<OwnerTokenResponse>(db, {
+    context, requestKind: 'owner-refresh', digest, at: current(config),
+  }, config);
+  if (recovered) return recovered;
+  if (latest.refresh_generation !== family.refresh_generation) return null;
+  throw new MobileAuthError('revoked', 'The refresh authority changed.', 401);
+}
+
 async function atomicRefresh(db: D1Database, family: SessionFamilyRow, input: OwnerRefreshInput, digest: string, oldGeneration: number, nextGeneration: number, nextAccessGeneration: number, accessExpiresAt: string, refreshExpiresAt: string, refreshHash: string, revocationHash: string, response: OwnerTokenResponse, config: MobileAuthConfig, at: Date, nextCapabilityExpiry: string) {
   const sealed = await encryptReplayResponse(response, config);
-  const results = await db.batch([
+  const tokenHash = await hashSecret(input.refreshToken);
+  const context = await activeMobileLedger(db, family.ledger_id);
+  const statements = [
+    financialAuthorityGuard(db, context, 'ledger:read'),
+    refreshPublicationGuard(db, { context, family, tokenHash }),
     db.prepare(`UPDATE owner_refresh_generations SET consumed_at = ?
-      WHERE family_id = ? AND generation = ? AND token_hash = ? AND consumed_at IS NULL AND revoked_at IS NULL`).bind(at.toISOString(), family.id, oldGeneration, await hashSecret(input.refreshToken)),
+      WHERE family_id = ? AND ledger_id = ? AND generation = ? AND token_hash = ? AND consumed_at IS NULL AND revoked_at IS NULL`)
+      .bind(at.toISOString(), family.id, context.ledgerId, oldGeneration, tokenHash),
     db.prepare(`UPDATE owner_session_families SET refresh_generation = ?, access_generation = ?, access_expires_at = ?,
        refresh_expires_at = ?, revocation_capability_hash = ?, revocation_generation = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND refresh_generation = ? AND revoked_at IS NULL AND refresh_expires_at >= ? AND changes() = 1`).bind(
-      nextGeneration, nextAccessGeneration, accessExpiresAt, refreshExpiresAt, revocationHash, nextGeneration, family.id, oldGeneration, at.toISOString(),
+      WHERE id = ? AND ledger_id = ? AND refresh_generation = ? AND revoked_at IS NULL AND julianday(refresh_expires_at)>julianday('now') AND changes() = 1`).bind(
+      nextGeneration, nextAccessGeneration, accessExpiresAt, refreshExpiresAt, revocationHash, nextGeneration,
+      family.id, context.ledgerId, oldGeneration,
     ),
     db.prepare(`INSERT INTO owner_refresh_generations (ledger_id, family_id, generation, token_hash, issued_at, expires_at)
       SELECT ?, ?, ?, ?, ?, ? WHERE changes() = 1`).bind(family.ledger_id, family.id, nextGeneration, refreshHash, at.toISOString(), refreshExpiresAt),
@@ -406,8 +455,17 @@ async function atomicRefresh(db: D1Database, family: SessionFamilyRow, input: Ow
       SELECT ?, ?, 'owner-refresh', ?, ?, ?, 60, ? WHERE changes() = 1`).bind(
       crypto.randomUUID(), family.ledger_id, digest, sealed.ciphertext, sealed.iv, isoAfter(at, REPLAY_TTL),
     ),
-  ]);
-  return (results[0]?.meta?.changes ?? 0) === 1;
+  ];
+  try {
+    const results = await db.batch(statements);
+    return results.slice(2).every(result => Number(result.meta?.changes ?? 0) === 1) ? response : null;
+  } catch (error) {
+    await activeMobileLedger(db, context.ledgerId);
+    if (isReviewStateConflict(error)) {
+      return recoverRefreshPublication(db, { context, family, digest }, config);
+    }
+    throw error;
+  }
 }
 
 export async function refreshOwnerSession(db: D1Database, input: OwnerRefreshInput, config: MobileAuthConfig): Promise<OwnerTokenResponse> {
@@ -439,8 +497,12 @@ export async function refreshOwnerSession(db: D1Database, input: OwnerRefreshInp
   const nextCapability = await revocationCapability(config, family.id, nextGeneration, refreshExpiresAt);
   const response = await ownerResponse(config, family.id, nextGeneration, family.subject_hash, family.installation_id, refreshExpiresAt, accessExpiresAt, nextCapability, nextAccessGeneration);
   const committed = await atomicRefresh(db, family, input, digest, payload.generation, nextGeneration, nextAccessGeneration, accessExpiresAt, refreshExpiresAt, await hashSecret(response.refreshToken), await hashSecret(nextCapability), response, config, at, refreshExpiresAt);
-  if (committed) return response;
-  const recovered = await readReplay<OwnerTokenResponse>(db, { context, requestKind: 'owner-refresh', digest, at }, config);
+  if (committed) {
+    const acknowledged = await authenticateOwner(committed.accessToken, db, config);
+    if (acknowledged.ledgerId !== context.ledgerId) throw new MobileAuthError('invalid_credential', 'The refresh binding changed.', 403);
+    return committed;
+  }
+  const recovered = await readReplay<OwnerTokenResponse>(db, { context, requestKind: 'owner-refresh', digest, at: current(config) }, config);
   if (recovered) return recovered;
   await db.prepare(`UPDATE owner_session_families SET revoked_at = COALESCE(revoked_at, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(at.toISOString(), family.id).run();
   throw new MobileAuthError('refresh_reuse', 'The refresh credential was reused.', 409);

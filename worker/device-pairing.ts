@@ -24,6 +24,11 @@ import {
   type PairVerifierContext,
 } from './mobile-auth';
 import { ownerContextForConsent } from './mobile-owner-auth';
+import { assertFinancialAuthority, financialAuthorityGuard, immutableFinancialContext } from './financial-authority';
+import { approvedSourceMapping, devicePublicationGuard } from './device-publication';
+import { isReviewStateConflict } from './review-publication';
+
+export type PairingApprovalOwner = (OwnerContext | (LedgerContext & { subjectHash: string; environmentHash: string })) & { consent: true };
 
 const PAIRING_LIFETIME = 10 * 60 * 1000;
 const CAPTURE_LIFETIME = 90 * 24 * 60 * 60 * 1000;
@@ -57,7 +62,7 @@ export interface PairingScopeInput extends CaptureScopeRecord {
 
 export interface PairingApprovalInput {
   pairingId: string;
-  owner: OwnerContext & { consent: true };
+  owner: PairingApprovalOwner;
   environment?: string;
   sourceScopes: readonly PairingScopeInput[];
 }
@@ -201,29 +206,50 @@ async function validateSourceScopes(db: D1Database, context: LedgerContext, scop
   }
 }
 
+async function publishPairingBatch(db: D1Database, statements: ReturnType<D1Database['prepare']>[], revalidate: () => Promise<unknown>) {
+  try {
+    const results = await db.batch(statements);
+    await revalidate();
+    return results;
+  } catch (error) {
+    await revalidate();
+    throw error;
+  }
+}
+
+function approvalExpiry(pairing: PairingRow, at: Date) {
+  const expiry = parseRfc3339Instant(pairing.expires_at);
+  if (!expiry) throw new MobileAuthError('expired', 'The pairing session has expired.', 409);
+  return new Date(Math.min(expiry.getTime(), at.getTime() + 10 * 60 * 1000)).toISOString();
+}
+
 export async function approvePairing(db: D1Database, input: PairingApprovalInput, config: MobileAuthConfig) {
   if (input.owner.consent !== true) throw new MobileAuthError('consent_required', 'Explicit capture consent is required.', 403);
-  const owner = ownerContextForConsent(input.owner);
+  const owner = immutableFinancialContext(input.owner);
+  await assertFinancialAuthority(db, owner, 'devices:manage');
   const environmentHash = await assertEnvironment(input.environment ?? config.environment, config);
   if (owner.environmentHash !== environmentHash) throw new MobileAuthError('environment_mismatch', 'The pairing environment is not valid.', 403);
   const normalizedScopes = input.sourceScopes.map((scope) => ({
     ...scope,
     instrumentHint: pairingInstrumentHint(scope),
   }));
-  const context = await activePairingOwner(db, owner);
+  const context = owner;
   await validateSourceScopes(db, context, normalizedScopes);
   const at = now(config);
   const pairing = await readPairing(db, bounded(input.pairingId, 'pairing id', 128));
   if (!pairing) throw new MobileAuthError('not_found', 'The pairing session was not found.', 404);
   await validatePairingApprovalState(db, pairing, owner, at);
   const scopesJson = JSON.stringify(normalizedScopes.map(({ sourceProfileId, accountId, currency, instrumentHint }) => ({ sourceProfileId, accountId, currency, instrumentHint })));
-  if (sameApprovedPairing(pairing, owner, scopesJson)) return;
-  const pairingExpiry = parseRfc3339Instant(pairing.expires_at);
-  if (!pairingExpiry) throw new MobileAuthError('expired', 'The pairing session has expired.', 409);
-  const approvalExpiresAt = new Date(Math.min(pairingExpiry.getTime(), at.getTime() + 10 * 60 * 1000)).toISOString();
+  if (sameApprovedPairing(pairing, owner, scopesJson)) {
+    await assertFinancialAuthority(db, owner, 'devices:manage');
+    return;
+  }
+  const approvalExpiresAt = approvalExpiry(pairing, at);
   const statements = [
     db.prepare(`UPDATE hosted_device_pairings SET ledger_id = ?, user_id = ?, status = 'approved', requested_scopes_json = ?, approved_at = ?, approved_subject_hash = ?, approved_family_id = ?, approval_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND ledger_id IS NULL AND status = 'pending' AND expires_at > ?`).bind(owner.ledgerId, owner.userId, scopesJson, at.toISOString(), owner.subjectHash, owner.familyId === 'access-approval' ? null : owner.familyId, approvalExpiresAt, pairing.id, at.toISOString()),
+      WHERE id = ? AND ledger_id IS NULL AND status = 'pending' AND julianday(expires_at)>julianday('now')`)
+      .bind(owner.ledgerId, owner.userId, scopesJson, at.toISOString(), owner.subjectHash,
+        'credentialType' in owner ? owner.familyId : null, approvalExpiresAt, pairing.id),
     db.prepare(`INSERT INTO mobile_devices (id, ledger_id, device_name, platform, status, paired_at, expires_at)
       SELECT ?, ?, ?, ?, 'paired', ?, ? WHERE changes() = 1`).bind(pairing.device_id, owner.ledgerId, pairing.device_name, pairing.platform, at.toISOString(), isoAfter(at, CAPTURE_LIFETIME)),
   ];
@@ -238,16 +264,47 @@ export async function approvePairing(db: D1Database, input: PairingApprovalInput
       scope.instrumentHint?.kind ?? 'none', scope.instrumentHint?.value ?? '', isoAfter(at, CAPTURE_LIFETIME), pairing.id, owner.ledgerId, owner.subjectHash, scopesJson,
     ));
   }
-  const committed = await db.batch(statements);
-  if (committed[0]?.meta?.changes !== 1) throw new MobileAuthError('approval_conflict', 'The pairing approval changed.', 409);
+  const guards = [financialAuthorityGuard(db, owner, 'devices:manage'), ...normalizedScopes.map(scope => {
+    const mapping = approvedSourceMapping(owner, { ...scope, allowedCurrencies: [scope.currency] }, scope.currency);
+    return devicePublicationGuard(db, owner, mapping.sql, mapping.bindings);
+  })];
+  const committed = await publishPairingBatch(db, [...guards, ...statements],
+    () => assertFinancialAuthority(db, owner, 'devices:manage'));
+  if (committed[guards.length]?.meta?.changes !== 1) throw new MobileAuthError('approval_conflict', 'The pairing approval changed.', 409);
 }
 
-async function claimReplay(db: D1Database, lookup: { context: LedgerContext; digest: string; at: Date }, config: MobileAuthConfig) {
+async function claimReplay(db: D1Database, lookup: { context: LedgerContext; digest: string; at: Date; pairingId: string }, config: MobileAuthConfig) {
   const { context, digest, at } = lookup;
   const row = await db.prepare(`SELECT response_ciphertext, response_iv, expires_at FROM owner_replay_records
     WHERE ledger_id = ? AND request_kind = 'pairing-claim' AND request_digest = ? AND expires_at > ?`).bind(context.ledgerId, digest, at.toISOString()).first<{ response_ciphertext: string; response_iv: string; expires_at: string }>();
   if (!row) return null;
-  return decryptReplayResponse<PairingClaimResult>({ ciphertext: row.response_ciphertext, iv: row.response_iv }, config);
+  const response = await decryptReplayResponse<PairingClaimResult>({ ciphertext: row.response_ciphertext, iv: row.response_iv }, config);
+  await validateClaimDisclosure(db, lookup.pairingId, config);
+  return response;
+}
+
+async function validateClaimDisclosure(db: D1Database, pairingId: string, config: MobileAuthConfig) {
+  const current = await readPairing(db, pairingId);
+  if (!current) throw new MobileAuthError('revoked', 'The pairing is no longer available.', 403);
+  return activePairingLedger(db, current, now(config));
+}
+
+function claimPublicationGuard(db: D1Database, context: LedgerContext, pairing: PairingRow) {
+  return devicePublicationGuard(db, context, `EXISTS (SELECT 1 FROM hosted_device_pairings p
+    JOIN mobile_devices d ON d.id=p.device_id AND d.ledger_id=p.ledger_id
+    WHERE p.id=? AND p.ledger_id=? AND p.user_id=? AND p.device_id=?
+      AND p.approved_subject_hash=? AND p.approved_family_id IS ? AND p.environment_hash=?
+      AND p.status='approved' AND p.credential_hash IS NULL
+      AND julianday(p.expires_at)>julianday('now') AND julianday(p.approval_expires_at)>julianday('now')
+      AND d.status='paired' AND d.revoked_at IS NULL
+      AND (p.approved_family_id IS NULL OR EXISTS (SELECT 1 FROM owner_session_families f
+        WHERE f.id=p.approved_family_id AND f.ledger_id=p.ledger_id AND f.subject_hash=p.approved_subject_hash
+          AND f.environment_hash=p.environment_hash AND f.revoked_at IS NULL
+          AND julianday(f.access_expires_at)>julianday('now')
+          AND EXISTS (SELECT 1 FROM json_each(f.scope_json) WHERE value='devices:manage'))))`, [
+    pairing.id, context.ledgerId, context.userId, pairing.device_id,
+    pairing.approved_subject_hash, pairing.approved_family_id, pairing.environment_hash,
+  ]);
 }
 
 async function captureRevocationCapability(config: MobileAuthConfig, credentialId: string, generation: number, expiresAt: string) {
@@ -261,6 +318,10 @@ export async function authenticatePairVerifier(credential: string, db: D1Databas
   if (verifierHash !== pairing.device_verifier_hash) throw new MobileAuthError('unauthorized', 'The pairing verifier is not valid.');
   if (isExpired(pairing.expires_at, now(config))) throw new MobileAuthError('expired', 'The pairing session has expired.', 409);
   return { credentialType: 'pair-verifier', pairingId: pairing.id, deviceId: pairing.device_id, expiresAt: pairing.expires_at, environmentHash: pairing.environment_hash ?? await hashSecret(config.environment) };
+}
+
+function claimPublicationSucceeded(results: D1Result[]) {
+  return results.length === 5 && results.slice(2).every(result => Number(result.meta?.changes ?? 0) === 1);
 }
 
 export async function claimPairing(db: D1Database, input: PairingClaimInput, config: MobileAuthConfig): Promise<PairingClaimResult> {
@@ -278,13 +339,15 @@ export async function claimPairing(db: D1Database, input: PairingClaimInput, con
   }
   if (pairing.status === 'pending') return { state: 'pending', deviceId: null, credentialExpiresAt: null };
   const context = await activePairingLedger(db, pairing, at);
-  const replay = await claimReplay(db, { context, digest, at }, config);
+  const replay = await claimReplay(db, { context, digest, at, pairingId: pairing.id }, config);
   if (replay) return replay;
   if (pairing.status === 'revoked') throw new MobileAuthError('revoked', 'The pairing session is revoked.', 409);
   if (pairing.status === 'claimed') {
     if (pairing.credential_hash !== input.credentialHash) throw new MobileAuthError('claim_conflict', 'The pairing claim conflicts with an existing credential.', 409);
-    const existing = await db.prepare(`SELECT id, expires_at FROM capture_credentials WHERE device_id = ? AND credential_hash = ?`).bind(pairing.device_id, input.credentialHash).first<{ id: string; expires_at: string }>();
+    const existing = await db.prepare(`SELECT id, expires_at FROM capture_credentials WHERE ledger_id = ? AND device_id = ? AND credential_hash = ?`)
+      .bind(context.ledgerId, pairing.device_id, input.credentialHash).first<{ id: string; expires_at: string }>();
     if (!existing) throw new MobileAuthError('claim_conflict', 'The pairing credential is not available.', 409);
+    await validateClaimDisclosure(db, pairing.id, config);
     return { state: 'claimed', deviceId: pairing.device_id, credentialExpiresAt: existing.expires_at };
   }
   if (pairing.status !== 'approved' || !pairing.approved_subject_hash) throw new MobileAuthError('not_approved', 'The pairing is awaiting explicit owner approval.', 202);
@@ -292,26 +355,31 @@ export async function claimPairing(db: D1Database, input: PairingClaimInput, con
   const credentialExpiresAt = isoAfter(at, CAPTURE_LIFETIME);
   const revocation = await captureRevocationCapability(config, credentialId, 1, credentialExpiresAt);
   const sealed = await encryptReplayResponse({ state: 'claimed', deviceId: pairing.device_id, credentialExpiresAt, revocationCapability: revocation }, config);
-  const results = await db.batch([
+  const results = await publishPairingBatch(db, [
+    financialAuthorityGuard(db, context, 'devices:manage'),
+    claimPublicationGuard(db, context, pairing),
     db.prepare(`UPDATE hosted_device_pairings SET status = 'claimed', credential_hash = ?, claimed_at = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND status = 'approved' AND expires_at > ? AND credential_hash IS NULL`).bind(input.credentialHash, at.toISOString(), pairing.id, at.toISOString()),
+      WHERE id = ? AND ledger_id = ? AND status = 'approved' AND julianday(expires_at)>julianday('now') AND credential_hash IS NULL`)
+      .bind(input.credentialHash, at.toISOString(), pairing.id, context.ledgerId),
     db.prepare(`INSERT INTO capture_credentials (id, ledger_id, device_id, credential_hash, credential_type, scope, generation, issued_at, expires_at, environment_hash, revocation_capability_hash)
       SELECT ?, ?, ?, ?, 'capture', ?, 1, ?, ?, ?, ? WHERE changes() = 1`).bind(credentialId, context.ledgerId, pairing.device_id, input.credentialHash, CAPTURE_SCOPE, at.toISOString(), credentialExpiresAt, await hashSecret(config.environment), await hashSecret(revocation)),
     db.prepare(`INSERT INTO owner_replay_records (id, ledger_id, request_kind, request_digest, response_ciphertext, response_iv, ttl_seconds, expires_at)
       SELECT ?, ?, 'pairing-claim', ?, ?, ?, 60, ? WHERE changes() = 1`).bind(crypto.randomUUID(), context.ledgerId, digest, sealed.ciphertext, sealed.iv, isoAfter(at, REPLAY_LIFETIME)),
-  ]);
-  if ((results[0]?.meta?.changes ?? 0) === 1) return { state: 'claimed', deviceId: pairing.device_id, credentialExpiresAt, revocationCapability: revocation };
-  const recovered = await claimReplay(db, { context, digest, at }, config);
+  ], () => validateClaimDisclosure(db, pairing.id, config)).catch(error => {
+    if (!isReviewStateConflict(error)) throw error;
+    return [];
+  });
+  if (claimPublicationSucceeded(results)) return { state: 'claimed', deviceId: pairing.device_id, credentialExpiresAt, revocationCapability: revocation };
+  const recovered = await claimReplay(db, { context, digest, at: now(config), pairingId: pairing.id }, config);
   if (recovered) return recovered;
-  const after = await readPairing(db, pairing.id);
-  if (after?.status === 'claimed' && after.credential_hash === input.credentialHash) return { state: 'claimed', deviceId: pairing.device_id, credentialExpiresAt: credentialExpiresAt };
   throw new MobileAuthError('claim_conflict', 'The pairing claim conflicts with an existing credential.', 409);
 }
 
 export async function renewCaptureCredential(db: D1Database, input: { owner: OwnerContext & { consent: true }; deviceId: string; credentialHash: string; environment?: string }, config: MobileAuthConfig): Promise<PairingClaimResult> {
   validateCredentialHash(input.credentialHash);
   if (input.owner.consent !== true) throw new MobileAuthError('consent_required', 'Explicit capture consent is required.', 403);
-  const owner = ownerContextForConsent(input.owner);
+  const owner = immutableFinancialContext(ownerContextForConsent(input.owner));
+  await assertFinancialAuthority(db, owner, 'devices:manage');
   const environmentHash = await assertEnvironment(input.environment ?? config.environment, config);
   if (owner.environmentHash !== environmentHash) throw new MobileAuthError('environment_mismatch', 'The capture environment is not valid.', 403);
   await activePairingOwner(db, owner);
@@ -321,7 +389,8 @@ export async function renewCaptureCredential(db: D1Database, input: { owner: Own
   const generation = current.generation + 1;
   const expiresAt = isoAfter(at, CAPTURE_LIFETIME);
   const revocation = await captureRevocationCapability(config, id, generation, expiresAt);
-  const results = await db.batch([
+  const results = await publishPairingBatch(db, [
+    financialAuthorityGuard(db, owner, 'devices:manage'),
     db.prepare(`UPDATE capture_credentials SET revoked_at = ?
       WHERE id = ? AND ledger_id = ? AND device_id = ? AND generation = ? AND revoked_at IS NULL
         AND EXISTS (SELECT 1 FROM owner_session_families f JOIN ledgers l ON l.id = f.ledger_id JOIN users u ON u.id = l.user_id
@@ -334,8 +403,10 @@ export async function renewCaptureCredential(db: D1Database, input: { owner: Own
         owner.familyId, owner.ledgerId, owner.userId, owner.subjectHash, owner.accessGeneration, environmentHash, at.toISOString(), input.deviceId, owner.ledgerId),
     db.prepare(`INSERT INTO capture_credentials (id, ledger_id, device_id, credential_hash, credential_type, scope, generation, issued_at, expires_at, environment_hash, revocation_capability_hash)
       SELECT ?, ?, ?, ?, 'capture', ?, ?, ?, ?, ?, ? WHERE changes() = 1`).bind(id, owner.ledgerId, input.deviceId, input.credentialHash, CAPTURE_SCOPE, generation, at.toISOString(), expiresAt, environmentHash, await hashSecret(revocation)),
-  ]);
-  requireRenewalPublished(results[0]);
+  ], () => assertFinancialAuthority(db, owner, 'devices:manage'));
+  requireRenewalPublished(results[1]);
+  const acknowledged = await currentCaptureCredential(db, owner, input.deviceId);
+  if (acknowledged.id !== id) throw new MobileAuthError('revoked', 'The capture grant changed.', 403);
   return { state: 'claimed', deviceId: input.deviceId, credentialExpiresAt: expiresAt, revocationCapability: revocation };
 }
 
@@ -372,10 +443,15 @@ async function requireActiveApprovingFamily(db: D1Database, pairing: PairingRow)
   if (!family) throw new MobileAuthError('revoked', 'The approving session is revoked.', 403);
 }
 
+function requirePairingBinding(context: LedgerContext, pairing: PairingRow) {
+  if (context.userId !== pairing.user_id) throw new MobileAuthError('revoked', 'The pairing binding changed.', 403);
+}
+
 async function activePairingLedger(db: D1Database, pairing: PairingRow, at: Date) {
   if (!pairing.ledger_id) throw new MobileAuthError('not_approved', 'The pairing is awaiting approval.', 403);
   if (pairing.status === 'revoked') throw new MobileAuthError('revoked', 'The pairing is revoked.', 403);
   const context = await activeMobileLedger(db, pairing.ledger_id);
+  requirePairingBinding(context, pairing);
   await requireActivePairingCredential(db, pairing, at);
   await requireActiveApprovingFamily(db, pairing);
   const device = await db.prepare(`SELECT id FROM mobile_devices WHERE id = ? AND ledger_id = ? AND status = 'paired'`)
@@ -384,7 +460,7 @@ async function activePairingLedger(db: D1Database, pairing: PairingRow, at: Date
   return context;
 }
 
-async function validatePairingApprovalState(db: D1Database, pairing: PairingRow, owner: OwnerContext, at: Date) {
+async function validatePairingApprovalState(db: D1Database, pairing: PairingRow, owner: PairingApprovalOwner, at: Date) {
   if (isExpired(pairing.expires_at, at)) {
     await db.prepare(`UPDATE hosted_device_pairings SET status = 'expired', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('pending', 'approved')`).bind(pairing.id).run();
     throw new MobileAuthError('expired', 'The pairing session has expired.', 409);
@@ -395,7 +471,7 @@ async function validatePairingApprovalState(db: D1Database, pairing: PairingRow,
   if (reason) throw new MobileAuthError(pairing.status, reason, 409);
 }
 
-function sameApprovedPairing(pairing: PairingRow, owner: OwnerContext, scopesJson: string) {
+function sameApprovedPairing(pairing: PairingRow, owner: PairingApprovalOwner, scopesJson: string) {
   if (pairing.status !== 'approved') return false;
   if (pairing.approved_subject_hash !== owner.subjectHash) throw new MobileAuthError('approval_conflict', 'The pairing approval changed.', 409);
   if (pairing.requested_scopes_json !== scopesJson) throw new MobileAuthError('approval_conflict', 'The pairing approval changed.', 409);

@@ -265,6 +265,11 @@ CREATE TABLE IF NOT EXISTS imports (
 );
 
 CREATE TABLE IF NOT EXISTS sync_state (
+  connection_revision INTEGER NOT NULL DEFAULT 1,
+  requested_generation INTEGER NOT NULL DEFAULT 0,
+  completed_generation INTEGER NOT NULL DEFAULT 0,
+  recurring_enqueued_generation INTEGER NOT NULL DEFAULT 0,
+  lifecycle TEXT NOT NULL DEFAULT 'active',
   connection_id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,
   cursor TEXT,
@@ -275,6 +280,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 );
 
 CREATE TABLE IF NOT EXISTS plaid_items (
+  provider_item_id TEXT,
   item_id TEXT PRIMARY KEY,
   access_token_ciphertext TEXT NOT NULL,
   access_token_iv TEXT NOT NULL,
@@ -286,6 +292,7 @@ CREATE TABLE IF NOT EXISTS plaid_items (
 );
 
 CREATE TABLE IF NOT EXISTS plaid_accounts (
+  provider_account_id TEXT,
   plaid_account_id TEXT PRIMARY KEY,
   item_id TEXT NOT NULL REFERENCES plaid_items(item_id) ON DELETE CASCADE,
   account_id TEXT NOT NULL REFERENCES accounts(id),
@@ -320,6 +327,7 @@ CREATE TABLE IF NOT EXISTS lunchflow_accounts (
 CREATE INDEX IF NOT EXISTS lunchflow_accounts_ledger_idx ON lunchflow_accounts(ledger_id, enabled, provider_account_id);
 
 CREATE TABLE IF NOT EXISTS mobile_connections (
+  provider_item_id TEXT,
   id TEXT PRIMARY KEY,
   ledger_id TEXT NOT NULL DEFAULT 'personal' REFERENCES ledgers(id),
   owner_subject_hash TEXT NOT NULL,
@@ -344,6 +352,7 @@ CREATE INDEX IF NOT EXISTS mobile_connections_owner_idx ON mobile_connections(le
 CREATE INDEX IF NOT EXISTS mobile_connections_expiry_idx ON mobile_connections(state, expires_at, cleanup_state);
 
 CREATE TABLE IF NOT EXISTS mobile_connection_operations (
+  request_digest TEXT,
   id TEXT PRIMARY KEY,
   ledger_id TEXT NOT NULL DEFAULT 'personal' REFERENCES ledgers(id),
   owner_subject_hash TEXT NOT NULL,
@@ -675,6 +684,7 @@ CREATE TABLE IF NOT EXISTS alert_events (
   completeness_json TEXT NOT NULL DEFAULT '{}',
   payload_digest TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  raw_event_id TEXT CHECK (raw_event_id IS NULL OR length(trim(raw_event_id)) > 0),
   CHECK (id = event_id),
   UNIQUE (ledger_id, event_id)
 );
@@ -1274,3 +1284,44 @@ WHEN NEW.id IS NOT OLD.id OR NEW.device_id IS NOT OLD.device_id OR NEW.user_code
   OR (NEW.ledger_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ledgers l JOIN users u ON u.id = l.user_id WHERE l.id = NEW.ledger_id AND u.id = NEW.user_id AND u.status = 'active'))
   OR (NEW.approved_family_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM owner_session_families f WHERE f.id = NEW.approved_family_id AND f.ledger_id = NEW.ledger_id AND f.revoked_at IS NULL))
 BEGIN SELECT RAISE(ABORT, 'Invalid or reassigned pairing binding'); END;
+
+CREATE INDEX IF NOT EXISTS plaid_items_raw_idx ON plaid_items(provider_item_id,ledger_id);
+CREATE UNIQUE INDEX IF NOT EXISTS plaid_accounts_raw_idx ON plaid_accounts(ledger_id,item_id,provider_account_id);
+CREATE TRIGGER IF NOT EXISTS plaid_item_initial_state AFTER INSERT ON plaid_items BEGIN
+ INSERT OR IGNORE INTO sync_state(connection_id,provider,ledger_id) VALUES ('plaid:' || NEW.item_id,'plaid',NEW.ledger_id);
+ UPDATE plaid_items SET provider_item_id=NEW.item_id WHERE item_id=NEW.item_id AND provider_item_id IS NULL AND ledger_id='personal';
+END;
+CREATE TRIGGER IF NOT EXISTS plaid_account_legacy_raw AFTER INSERT ON plaid_accounts
+ WHEN NEW.provider_account_id IS NULL AND NEW.ledger_id='personal' BEGIN
+ UPDATE plaid_accounts SET provider_account_id=NEW.plaid_account_id WHERE plaid_account_id=NEW.plaid_account_id;
+END;
+CREATE TRIGGER IF NOT EXISTS mobile_connection_active_item_insert BEFORE INSERT ON mobile_connections
+ WHEN NEW.state IN ('connected','syncing','disconnecting') AND NOT EXISTS
+ (SELECT 1 FROM plaid_items p WHERE p.item_id=NEW.item_id AND p.ledger_id=NEW.ledger_id)
+ BEGIN SELECT RAISE(ABORT,'mobile connection item ownership mismatch'); END;
+CREATE TRIGGER IF NOT EXISTS mobile_connection_active_item_update BEFORE UPDATE ON mobile_connections
+ WHEN NEW.state IN ('connected','syncing','disconnecting') AND NOT EXISTS
+ (SELECT 1 FROM plaid_items p WHERE p.item_id=NEW.item_id AND p.ledger_id=NEW.ledger_id)
+ BEGIN SELECT RAISE(ABORT,'mobile connection item ownership mismatch'); END;
+
+CREATE TABLE IF NOT EXISTS plaid_account_ownership (
+ account_id TEXT PRIMARY KEY REFERENCES accounts(id), ledger_id TEXT NOT NULL REFERENCES ledgers(id),
+ item_id TEXT NOT NULL, provider_account_id TEXT NOT NULL,
+ UNIQUE(ledger_id,item_id,provider_account_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS plaid_ownership_insert BEFORE INSERT ON plaid_account_ownership BEGIN
+ SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM accounts WHERE id=NEW.account_id AND ledger_id=NEW.ledger_id)
+ OR EXISTS(SELECT 1 FROM plaid_account_ownership WHERE account_id=NEW.account_id AND
+   (ledger_id<>NEW.ledger_id OR item_id<>NEW.item_id OR provider_account_id<>NEW.provider_account_id))
+ OR EXISTS(SELECT 1 FROM plaid_account_ownership WHERE ledger_id=NEW.ledger_id AND item_id=NEW.item_id
+   AND provider_account_id=NEW.provider_account_id AND account_id<>NEW.account_id)
+ THEN RAISE(ABORT,'immutable Plaid account ownership') END;
+END;
+CREATE TRIGGER IF NOT EXISTS plaid_ownership_update BEFORE UPDATE ON plaid_account_ownership
+ WHEN NEW.account_id<>OLD.account_id OR NEW.ledger_id<>OLD.ledger_id OR NEW.item_id<>OLD.item_id OR NEW.provider_account_id<>OLD.provider_account_id
+ BEGIN SELECT RAISE(ABORT,'immutable Plaid account ownership'); END;
+
+CREATE UNIQUE INDEX alert_events_raw_identity ON alert_events(ledger_id, COALESCE(raw_event_id,event_id));
+CREATE TRIGGER alert_events_replace_guard BEFORE INSERT ON alert_events BEGIN SELECT RAISE(ABORT, 'alert event identity collision') WHERE EXISTS (SELECT 1 FROM alert_events e WHERE e.id=NEW.id OR (e.ledger_id=NEW.ledger_id AND COALESCE(e.raw_event_id,e.event_id)=COALESCE(NEW.raw_event_id,NEW.event_id))); END;
+CREATE TRIGGER alert_event_digests_replace_guard BEFORE INSERT ON alert_event_digests BEGIN SELECT RAISE(ABORT, 'alert digest identity collision') WHERE EXISTS (SELECT 1 FROM alert_event_digests d WHERE d.event_id=NEW.event_id AND d.algorithm=NEW.algorithm); END;

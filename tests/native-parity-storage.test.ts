@@ -112,10 +112,11 @@ describe('Task 3 native-parity stores', () => {
 
   it('updates shared preferences by revision and appends immutable annotation revisions', async () => {
     const fixture = await setup();
+    await applyMigrations(fixture.db, task22MigrationNames);
     await expect(readPreferences(fixture.db, OWNER_LEDGER)).resolves.toMatchObject({ ledgerId: 'personal', reportingTimezone: 'America/Toronto', weekStart: 1, revision: 0 });
     await expect(updatePreferences(fixture.db, OWNER_LEDGER, 0, { reportingTimezone: 'Asia/Shanghai', weekStart: 0, preferredCurrency: 'CNY' })).resolves.toMatchObject({ reportingTimezone: 'Asia/Shanghai', weekStart: 0, preferredCurrency: 'CNY', revision: 1 });
     await expect(updatePreferences(fixture.db, OWNER_LEDGER, 0, { reportingTimezone: 'UTC', weekStart: 1, preferredCurrency: null })).rejects.toThrow(/revision/i);
-    await appendAnnotationRevision(fixture.db, { id: 'annotation-1', transactionId: 'tx-1', authorSubjectHash: 'hash-owner', revision: 1, category: 'Travel', note: 'Synthetic note' });
-    await expect(appendAnnotationRevision(fixture.db, { id: 'annotation-2', transactionId: 'tx-1', authorSubjectHash: 'hash-owner', revision: 1, category: 'Other', note: 'Stale' })).rejects.toThrow();
+    await appendAnnotationRevision(fixture.db, OWNER_LEDGER, { id: 'annotation-1', transactionId: 'tx-1', authorSubjectHash: 'hash-owner', revision: 1, category: 'Travel', note: 'Synthetic note' });
+    await expect(appendAnnotationRevision(fixture.db, OWNER_LEDGER, { id: 'annotation-2', transactionId: 'tx-1', authorSubjectHash: 'hash-owner', revision: 1, category: 'Other', note: 'Stale' })).rejects.toThrow();
   });
 });

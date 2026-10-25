@@ -103,7 +103,11 @@ describe('hosted users migration', () => {
     const fixture = await createD1Fixture([...existingMigrations, migration]);
     const fresh = createSqliteD1Fixture();
     try {
-      await applyMigrations(fixture.db, ['0022-unbound-auth.sql']);
+      await applyMigrations(fixture.db, [
+        '0022-unbound-auth.sql',
+        '0023-plaid-tenant-connections.sql',
+        '0024-alert-raw-identities.sql',
+      ]);
       const tables = (await fresh.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all<{name:string}>()).results;
       for (const {name} of tables) {
         const columns = (db: D1Database) => db.prepare(`PRAGMA table_info(${name})`).all();

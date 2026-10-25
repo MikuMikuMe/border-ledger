@@ -1,3 +1,9 @@
+import { assertFinancialAuthority, financialAuthorityPredicate, type FinancialContext } from './financial-authority';
+import { readRecurringJobBinding } from './recurring-jobs';
+import { publishRecurringClassification } from './recurring-classification';
+import { ledgerScopedIdentifier } from './ledger-identifiers';
+import { recurringPublicationGuard } from './recurring-publication';
+import { assertActiveLedgerContext, type LedgerContext } from './tenant-context';
 import type {
   RecurringClassification,
   RecurringDetailPage,
@@ -83,9 +89,9 @@ function classificationOrDefault(value: string | null | undefined): RecurringCla
   return value === 'subscription' || value === 'bill' || value === 'other' || value === 'excluded' ? value : 'unclassified';
 }
 
-async function syncState(db: D1Database, itemId: string) {
+async function syncState(db: D1Database, context: LedgerContext, itemId: string) {
   const result = await db.prepare(`SELECT item_id, requested_generation, completed_generation, source_updated_at, lifecycle, scope_version
-    FROM recurring_sync_state WHERE item_id = ?`).bind(itemId).all<RecurringSyncState>();
+    FROM recurring_sync_state WHERE ledger_id = ? AND item_id = ?`).bind(context.ledgerId, itemId).all<RecurringSyncState>();
   return result.results[0] ?? null;
 }
 
@@ -143,13 +149,13 @@ function mapStream(row: RecurringStreamRow, memberships: RecurringMembership[] =
   };
 }
 
-async function attachClassificationRevisions(db: D1Database, rows: RecurringStreamRow[]) {
+async function attachClassificationRevisions(db: D1Database, context: LedgerContext, rows: RecurringStreamRow[]) {
   if (rows.length === 0) return rows;
   const revisions = new Map<string, number>();
   try {
     const result = await db.prepare(`SELECT recurring_stream_id, revision
-      FROM recurring_classifications WHERE recurring_stream_id IN (${rows.map(() => '?').join(', ')})`)
-      .bind(...rows.map((row) => row.id)).all<{ recurring_stream_id: string; revision: number }>();
+      FROM recurring_classifications WHERE ledger_id = ? AND recurring_stream_id IN (${rows.map(() => '?').join(', ')})`)
+      .bind(context.ledgerId, ...rows.map((row) => row.id)).all<{ recurring_stream_id: string; revision: number }>();
     for (const row of result.results) revisions.set(row.recurring_stream_id, Number.isSafeInteger(row.revision) ? row.revision : 0);
   } catch {
     // Keep databases created before the classification revision migration readable during rollout.
@@ -180,9 +186,9 @@ function parseWarnings(value: string | null | undefined) {
   }
 }
 
-async function syncMetadata(db: D1Database) {
+async function syncMetadata(db: D1Database, context: LedgerContext) {
   const result = await db.prepare(`SELECT item_id, history_complete, source_updated_at, last_success_at, last_attempt_at, last_error,
-      coverage_warnings, lifecycle FROM recurring_sync_state ORDER BY updated_at DESC`).all<RecurringSyncState>();
+      coverage_warnings, lifecycle FROM recurring_sync_state WHERE ledger_id = ? ORDER BY updated_at DESC`).bind(context.ledgerId).all<RecurringSyncState>();
   const rows = result.results;
   const checkedAt = rows.map((row) => row.last_success_at).filter((value): value is string => Boolean(value)).sort().at(-1) ?? null;
   const sourceUpdatedAt = rows.map((row) => row.source_updated_at).filter((value): value is string => Boolean(value)).sort().at(-1) ?? null;
@@ -226,9 +232,10 @@ function streamFilter(clauses: string[], bindings: unknown[], query: RecurringQu
   }
 }
 
-async function readStreamRows(db: D1Database, query: RecurringSummaryQuery | RecurringQuery, limit?: number, cursor?: CursorValue | null) {
-  const clauses: string[] = [];
-  const bindings: unknown[] = [];
+async function readStreamRows(db: D1Database, context: LedgerContext, query: RecurringSummaryQuery | RecurringQuery, page: {limit?: number;cursor?: CursorValue | null} = {}) {
+  const {limit,cursor} = page;
+  const clauses: string[] = ['s.ledger_id = ?'];
+  const bindings: unknown[] = [context.ledgerId];
   streamFilter(clauses, bindings, query);
   if (cursor) {
     clauses.push("(COALESCE(s.predicted_next_date, '9999-12-31') > ? OR (COALESCE(s.predicted_next_date, '9999-12-31') = ? AND s.id > ?))");
@@ -242,15 +249,15 @@ async function readStreamRows(db: D1Database, query: RecurringSummaryQuery | Rec
       COALESCE(c.classification, 'unclassified') AS classification,
       COALESCE(s.predicted_next_date, '9999-12-31') AS sort_date
     FROM recurring_streams s
-    LEFT JOIN recurring_classifications c ON c.recurring_stream_id = s.id
+    LEFT JOIN recurring_classifications c ON c.recurring_stream_id = s.id AND c.ledger_id = s.ledger_id
     ${where}
     ORDER BY sort_date ASC, s.id ASC${suffix}`).bind(...bindings).all<RecurringStreamRow>();
-  return attachClassificationRevisions(db, result.results);
+  return attachClassificationRevisions(db, context, result.results);
 }
 
-async function readMembershipRows(db: D1Database, streamIds?: readonly string[]) {
-  const clauses = ['rt.present_in_latest_snapshot = 1'];
-  const bindings: unknown[] = [];
+async function readMembershipRows(db: D1Database, context: LedgerContext, streamIds?: readonly string[]) {
+  const clauses = ['rt.ledger_id = ?', 'rt.present_in_latest_snapshot = 1'];
+  const bindings: unknown[] = [context.ledgerId];
   if (streamIds && streamIds.length > 0) {
     clauses.push(`rt.recurring_stream_id IN (${streamIds.map(() => '?').join(', ')})`);
     bindings.push(...streamIds);
@@ -260,7 +267,7 @@ async function readMembershipRows(db: D1Database, streamIds?: readonly string[])
       rt.date, rt.amount_minor, rt.currency, COALESCE(t.kind, rt.kind) AS kind,
       t.status AS transaction_status, rt.transaction_id
     FROM recurring_stream_transactions rt
-    LEFT JOIN transactions t ON t.id = rt.transaction_id
+    LEFT JOIN transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
     WHERE ${clauses.join(' AND ')}
     ORDER BY rt.date DESC, rt.provider_transaction_id DESC`).bind(...bindings).all<RecurringMembershipRow>();
   const grouped = new Map<string, RecurringMembership[]>();
@@ -272,13 +279,13 @@ async function readMembershipRows(db: D1Database, streamIds?: readonly string[])
   return grouped;
 }
 
-export async function readRecurringPage(db: D1Database, query: RecurringQuery = {}): Promise<RecurringPage> {
+export async function readRecurringPage(db: D1Database, context: LedgerContext, query: RecurringQuery = {}): Promise<RecurringPage> {
   const limit = boundedLimit(query.limit);
   const cursor = decodeCursor(query.cursor);
-  const rows = await readStreamRows(db, query, limit, cursor);
+  const rows = await readStreamRows(db, context, query, { limit: limit, cursor: cursor });
   const hasMore = rows.length > limit;
   const visibleRows = hasMore ? rows.slice(0, limit) : rows;
-  const metadata = await syncMetadata(db);
+  const metadata = await syncMetadata(db, context);
   const streams = visibleRows.map((row) => mapStream(row));
   const last = visibleRows.at(-1);
   return {
@@ -292,21 +299,22 @@ export async function readRecurringPage(db: D1Database, query: RecurringQuery = 
   };
 }
 
-export async function readRecurringDetail(db: D1Database, id: string, cursor?: string, requestedLimit?: number): Promise<RecurringDetailPage | null> {
+export async function readRecurringDetail(db: D1Database, context: LedgerContext, id: string, page: {cursor?: string;limit?: number} = {}): Promise<RecurringDetailPage | null> {
+  const {cursor,limit:requestedLimit} = page;
   const streamResult = await db.prepare(`SELECT s.id, s.item_id, s.stream_id, s.account_id, s.merchant_name, s.merchant_entity_id,
       s.currency, s.source_status, s.source_frequency, s.frequency, s.is_outflow, s.first_date, s.last_date,
       s.predicted_next_date, s.average_amount_minor, s.last_amount_minor, s.predicted_amount_minor, s.source_updated_at,
       COALESCE(c.classification, 'unclassified') AS classification
     FROM recurring_streams s
-    LEFT JOIN recurring_classifications c ON c.recurring_stream_id = s.id
-    WHERE s.id = ? AND s.present_in_latest_snapshot = 1`).bind(id).all<RecurringStreamRow>();
+    LEFT JOIN recurring_classifications c ON c.recurring_stream_id = s.id AND c.ledger_id = s.ledger_id
+    WHERE s.ledger_id = ? AND s.id = ? AND s.present_in_latest_snapshot = 1`).bind(context.ledgerId, id).all<RecurringStreamRow>();
   const row = streamResult.results[0];
   if (!row) return null;
-  const [rowWithRevision] = await attachClassificationRevisions(db, [row]);
+  const [rowWithRevision] = await attachClassificationRevisions(db, context, [row]);
   const limit = boundedLimit(requestedLimit);
   const decoded = decodeCursor(cursor);
-  const clauses = ['rt.recurring_stream_id = ?', 'rt.present_in_latest_snapshot = 1'];
-  const bindings: unknown[] = [id];
+  const clauses = ['rt.ledger_id = ?', 'rt.recurring_stream_id = ?', 'rt.present_in_latest_snapshot = 1'];
+  const bindings: unknown[] = [context.ledgerId, id];
   if (decoded) {
     clauses.push('(rt.date < ? OR (rt.date = ? AND rt.provider_transaction_id < ?))');
     bindings.push(decoded.date, decoded.date, decoded.id);
@@ -315,7 +323,7 @@ export async function readRecurringDetail(db: D1Database, id: string, cursor?: s
       rt.date, rt.amount_minor, rt.currency, COALESCE(t.kind, rt.kind) AS kind,
       t.status AS transaction_status, rt.transaction_id
     FROM recurring_stream_transactions rt
-    LEFT JOIN transactions t ON t.id = rt.transaction_id
+    LEFT JOIN transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
     WHERE ${clauses.join(' AND ')}
       ORDER BY rt.date DESC, rt.provider_transaction_id DESC LIMIT ${limit + 1}`).bind(...bindings).all<RecurringMembershipRow>();
   const hasMore = historyResult.results.length > limit;
@@ -329,16 +337,17 @@ export async function readRecurringDetail(db: D1Database, id: string, cursor?: s
   };
 }
 
-export async function readRecurringSummary(db: D1Database, query: RecurringSummaryQuery): Promise<RecurringSummary> {
+export async function readRecurringSummary(db: D1Database, context: LedgerContext, query: RecurringSummaryQuery): Promise<RecurringSummary> {
   if (query.startDate > query.endDate) throw new Error('Recurring summary date range is not valid.');
-  const rows = await readStreamRows(db, query);
+  const rows = await readStreamRows(db, context, query);
   const streamIds = rows.map((row) => row.id);
-  const memberships = await readMembershipRows(db, streamIds);
+  const memberships = await readMembershipRows(db, context, streamIds);
   const streams = rows.map((row) => mapStream(row, memberships.get(row.id) ?? []));
   const estimates = analyzeRecurring(streams, query.today);
   const actualCostByCurrency = emptyCurrencyTotals() as Record<Currency, number>;
   if (streamIds.length > 0) {
     const clauses: string[] = [
+      'rt.ledger_id = ?',
       'rt.present_in_latest_snapshot = 1',
       't.status = \'confirmed\'',
       "t.kind IN ('expense', 'refund', 'fee')",
@@ -348,7 +357,7 @@ export async function readRecurringSummary(db: D1Database, query: RecurringSumma
       "COALESCE(c.classification, 'unclassified') <> 'excluded'",
       `rt.recurring_stream_id IN (${streamIds.map(() => '?').join(', ')})`,
     ];
-    const bindings: unknown[] = [query.startDate, query.endDate, ...streamIds];
+    const bindings: unknown[] = [context.ledgerId, query.startDate, query.endDate, ...streamIds];
     if (query.accountId) {
       clauses.push('s.account_id = ?');
       bindings.push(query.accountId);
@@ -359,14 +368,14 @@ export async function readRecurringSummary(db: D1Database, query: RecurringSumma
     }
     const actual = await db.prepare(`SELECT t.id, t.currency, t.amount_minor
       FROM recurring_stream_transactions rt
-      JOIN recurring_streams s ON s.id = rt.recurring_stream_id
-      LEFT JOIN recurring_classifications c ON c.recurring_stream_id = s.id
-      JOIN transactions t ON t.id = rt.transaction_id
+      JOIN recurring_streams s ON s.id = rt.recurring_stream_id AND s.ledger_id = rt.ledger_id
+      LEFT JOIN recurring_classifications c ON c.recurring_stream_id = s.id AND c.ledger_id = s.ledger_id
+      JOIN transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
       WHERE ${clauses.join(' AND ')}
       GROUP BY t.id, t.currency, t.amount_minor`).bind(...bindings).all<{ id: string; currency: Currency; amount_minor: number }>();
     for (const row of actual.results) actualCostByCurrency[row.currency] -= row.amount_minor;
   }
-  const metadata = await syncMetadata(db);
+  const metadata = await syncMetadata(db, context);
   return {
     ...estimates,
     actualCostByCurrency,
@@ -379,30 +388,31 @@ export async function readRecurringSummary(db: D1Database, query: RecurringSumma
   };
 }
 
-export async function requestRecurringSync(db: D1Database, queue: RecurringQueue, itemId: string) {
-  let state = await syncState(db, itemId);
-  if (!state) {
-    const item = await db.prepare('SELECT item_id FROM plaid_items WHERE item_id = ?').bind(itemId).all<{ item_id: string }>();
-    if (item.results.length === 0) throw new Error('Recurring Item is not active.');
-    await db.prepare(`INSERT INTO recurring_sync_state (item_id, lifecycle, scope_version)
-      VALUES (?, 'active', 0) ON CONFLICT(item_id) DO NOTHING`).bind(itemId).run();
-    state = await syncState(db, itemId);
-  }
-  if (!state || state.lifecycle !== 'active') throw new Error('Recurring Item is not active.');
-  const generation = state.requested_generation + 1;
-  await db.prepare(`UPDATE recurring_sync_state SET requested_generation = ?, updated_at = CURRENT_TIMESTAMP WHERE item_id = ? AND lifecycle = 'active'`)
-    .bind(generation, itemId).run();
-  await queue.send({ type: 'plaid-recurring-sync', itemId, generation });
-  return generation;
+export async function requestRecurringSync(db:D1Database,context:FinancialContext,queue:RecurringQueue,itemId:string) {
+  await assertFinancialAuthority(db,context,'connections:manage');
+  const binding=await readRecurringJobBinding(db,itemId);
+  if(!binding)throw new Error('Recurring Item is not active.');
+  if(binding.ledgerId!==context.ledgerId)throw new Error('Recurring Item is not active.');
+  if(binding.userId!==context.userId)throw new Error('Recurring Item is not active.');
+  const authority=financialAuthorityPredicate(context,'connections:manage');
+  const demand=await db.prepare(`UPDATE recurring_sync_state SET requested_generation=requested_generation+1,updated_at=CURRENT_TIMESTAMP
+    WHERE item_id=? AND ledger_id=? AND lifecycle='active' AND ${authority.sql}
+    AND EXISTS(SELECT 1 FROM sync_state c WHERE c.connection_id=? AND c.ledger_id=? AND c.lifecycle='active' AND c.connection_revision=?)
+    RETURNING requested_generation AS generation,scope_version AS scopeVersion`)
+    .bind(itemId,context.ledgerId,...authority.bindings,`plaid:${itemId}`,context.ledgerId,binding.connectionRevision).first<{generation:number;scopeVersion:number}>();
+  if(!demand)throw new Error('Recurring Item is not active.');
+  await assertFinancialAuthority(db,context,'connections:manage');
+  await queue.send({type:'plaid-recurring-sync',userId:context.userId,ledgerId:context.ledgerId,itemId,...demand,connectionRevision:binding.connectionRevision});
+  return demand.generation;
 }
 
-function streamStatements(db: D1Database, itemId: string, stream: RecurringStream): D1Statement[] {
+function streamStatements(db: D1Database, context: LedgerContext, itemId: string, stream: RecurringStream): D1Statement[] {
   const statements: D1Statement[] = [
     db.prepare(`INSERT INTO recurring_streams
-      (id, item_id, stream_id, account_id, merchant_name, merchant_entity_id, currency, source_status, source_frequency, frequency, is_outflow,
+      (id, ledger_id, item_id, stream_id, account_id, merchant_name, merchant_entity_id, currency, source_status, source_frequency, frequency, is_outflow,
        first_date, last_date, predicted_next_date, average_amount_minor, last_amount_minor, predicted_amount_minor,
        source_updated_at, present_in_latest_snapshot)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(id) DO UPDATE SET
         item_id = excluded.item_id,
         stream_id = excluded.stream_id,
@@ -425,6 +435,7 @@ function streamStatements(db: D1Database, itemId: string, stream: RecurringStrea
         updated_at = CURRENT_TIMESTAMP`)
       .bind(
         stream.id,
+        context.ledgerId,
         itemId,
         stream.streamId,
         stream.accountId,
@@ -443,25 +454,33 @@ function streamStatements(db: D1Database, itemId: string, stream: RecurringStrea
         stream.predictedAmountMinor,
         stream.sourceUpdatedAt,
       ),
-    db.prepare(`INSERT INTO recurring_classifications (recurring_stream_id, classification)
-      VALUES (?, 'unclassified') ON CONFLICT(recurring_stream_id) DO NOTHING`).bind(stream.id),
-    db.prepare('DELETE FROM recurring_stream_transactions WHERE recurring_stream_id = ?').bind(stream.id),
+    db.prepare(`INSERT INTO recurring_classifications (recurring_stream_id, ledger_id, classification)
+      VALUES (?, ?, 'unclassified') ON CONFLICT(recurring_stream_id) DO NOTHING`).bind(stream.id, context.ledgerId),
+    db.prepare('DELETE FROM recurring_stream_transactions WHERE recurring_stream_id = ? AND ledger_id = ?').bind(stream.id, context.ledgerId),
   ];
-  for (const membership of stream.memberships) {
-    statements.push(db.prepare(`INSERT INTO recurring_stream_transactions
-      (recurring_stream_id, item_id, provider_transaction_id, provider_pending_transaction_id, transaction_id, account_id,
+  statements.push(...membershipStatements(db, context, itemId, stream));
+  return statements;
+}
+
+function membershipStatements(db: D1Database, context: LedgerContext, itemId: string, stream: RecurringStream) {
+  return stream.memberships.map(membership => {
+    return db.prepare(`INSERT INTO recurring_stream_transactions
+      (recurring_stream_id, ledger_id, item_id, provider_transaction_id, provider_pending_transaction_id, transaction_id, account_id,
        date, amount_minor, currency, kind, is_outflow, membership_id, present_in_latest_snapshot)
-      VALUES (?, ?, ?, ?, COALESCE(
-        (SELECT id FROM transactions WHERE plaid_item_id = ? AND provider_transaction_id = ? LIMIT 1),
-        (SELECT id FROM transactions WHERE plaid_item_id = ? AND provider_pending_transaction_id = ? LIMIT 1)
+      VALUES (?, ?, ?, ?, ?, COALESCE(
+        (SELECT id FROM transactions WHERE ledger_id = ? AND plaid_item_id = ? AND provider_transaction_id = ? LIMIT 1),
+        (SELECT id FROM transactions WHERE ledger_id = ? AND plaid_item_id = ? AND provider_pending_transaction_id = ? LIMIT 1)
       ), ?, ?, ?, ?, ?, ?, ?, 1)`)
       .bind(
         stream.id,
+        context.ledgerId,
         itemId,
         membership.providerTransactionId,
         membership.pendingProviderTransactionId,
+        context.ledgerId,
         itemId,
         membership.providerTransactionId,
+        context.ledgerId,
         itemId,
         membership.pendingProviderTransactionId,
         stream.accountId,
@@ -471,35 +490,37 @@ function streamStatements(db: D1Database, itemId: string, stream: RecurringStrea
         stream.isOutflow ? 'expense' : 'income',
         stream.isOutflow ? 1 : 0,
         membership.providerTransactionId,
-      ));
-  }
-  return statements;
+      );
+  });
 }
 
 export async function publishRecurringSnapshot(
   db: D1Database,
-  itemId: string,
-  generation: number,
-  scopeVersion: number,
-  snapshot: NormalizedRecurringSnapshot,
-  checkedAt: string,
+  context: LedgerContext,
+  publication: {itemId:string;generation:number;scopeVersion:number;connectionRevision:number;snapshot:NormalizedRecurringSnapshot;checkedAt:string},
 ): Promise<RecurringPublicationResult> {
+  const {itemId,generation,scopeVersion,connectionRevision,snapshot,checkedAt} = publication;
   if (snapshot.itemId !== itemId) throw new Error('Recurring snapshot Item does not match the requested Item.');
   if (!snapshot.sourceUpdatedAt) throw new Error('Recurring source timestamp is required before publication.');
-  const state = await syncState(db, itemId);
+  await assertActiveLedgerContext(db, context);
+  const state = await syncState(db, context, itemId);
   if (!state || state.lifecycle !== 'active') return 'disconnected';
-  if (state.scope_version !== scopeVersion || generation < state.requested_generation || generation < state.completed_generation) return 'superseded';
+  if (state.scope_version !== scopeVersion || generation !== state.requested_generation || generation < state.completed_generation) return 'superseded';
   if (state.source_updated_at && state.source_updated_at > snapshot.sourceUpdatedAt) return 'superseded';
 
   const statements: D1Statement[] = [
-    db.prepare(`UPDATE recurring_streams SET present_in_latest_snapshot = 0, updated_at = CURRENT_TIMESTAMP WHERE item_id = ?`).bind(itemId),
-    db.prepare('DELETE FROM recurring_stream_transactions WHERE item_id = ?').bind(itemId),
+    recurringPublicationGuard(db, context, { itemId: itemId, generation: generation, scopeVersion: scopeVersion, connectionRevision, sourceUpdatedAt: snapshot.sourceUpdatedAt }),
+    db.prepare(`UPDATE recurring_streams SET present_in_latest_snapshot = 0, updated_at = CURRENT_TIMESTAMP WHERE item_id = ? AND ledger_id = ?`).bind(itemId, context.ledgerId),
+    db.prepare('DELETE FROM recurring_stream_transactions WHERE item_id = ? AND ledger_id = ?').bind(itemId, context.ledgerId),
   ];
-  for (const stream of snapshot.streams) statements.push(...streamStatements(db, itemId, stream));
+  for (const stream of snapshot.streams) {
+    const id = await ledgerScopedIdentifier(context, 'recurring-stream', stream.id);
+    statements.push(...streamStatements(db, context, itemId, { ...stream, id }));
+  }
   statements.push(db.prepare(`UPDATE recurring_sync_state SET
     history_complete = ?, completed_generation = ?, source_updated_at = ?, last_success_at = ?, last_attempt_at = ?, last_error = NULL, coverage_warnings = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE item_id = ? AND lifecycle = 'active' AND scope_version = ? AND requested_generation <= ?`)
-    .bind(snapshot.historyComplete === true ? 1 : 0, generation, snapshot.sourceUpdatedAt, checkedAt, checkedAt, JSON.stringify(snapshot.coverageWarnings.slice(0, 20)), itemId, scopeVersion, generation));
+    WHERE item_id = ? AND ledger_id = ? AND lifecycle = 'active' AND scope_version = ? AND requested_generation <= ?`)
+    .bind(snapshot.historyComplete === true ? 1 : 0, generation, snapshot.sourceUpdatedAt, checkedAt, checkedAt, JSON.stringify(snapshot.coverageWarnings.slice(0, 20)), itemId, context.ledgerId, scopeVersion, generation));
   await db.batch(statements);
   return 'published';
 }
@@ -511,8 +532,8 @@ export interface RecurringClassificationUpdateResult {
   updatedAt: string | null;
 }
 
-async function recurringClassificationRevision(db: D1Database, id: string) {
-  const row = await db.prepare('SELECT revision FROM recurring_classifications WHERE recurring_stream_id = ?').bind(id).first<{ revision: number }>();
+async function recurringClassificationRevision(db: D1Database, context: LedgerContext, id: string) {
+  const row = await db.prepare('SELECT revision FROM recurring_classifications WHERE recurring_stream_id = ? AND ledger_id = ?').bind(id, context.ledgerId).first<{ revision: number }>();
   if (!row) return 0;
   if (!Number.isSafeInteger(row.revision) || row.revision < 0) throw new Error('Recurring classification revision is unavailable.');
   return row.revision;
@@ -520,48 +541,32 @@ async function recurringClassificationRevision(db: D1Database, id: string) {
 
 export async function updateRecurringClassification(
   db: D1Database,
+  context: LedgerContext,
   id: string,
-  classification: RecurringClassification,
-  expectedRevision: number,
+  input: {classification:RecurringClassification;expectedRevision:number},
 ): Promise<RecurringClassificationUpdateResult> {
+  const {classification,expectedRevision} = input;
+  await assertActiveLedgerContext(db, context);
   if (!RECURRING_CLASSIFICATIONS.includes(classification)) return { kind: 'not_found', id, revision: 0, updatedAt: null };
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error('Recurring classification revision is not valid.');
-  const existing = await db.prepare('SELECT id FROM recurring_streams WHERE id = ? AND present_in_latest_snapshot = 1').bind(id).first<{ id: string }>();
+  const existing = await db.prepare('SELECT id FROM recurring_streams WHERE id = ? AND ledger_id = ? AND present_in_latest_snapshot = 1').bind(id, context.ledgerId).first<{ id: string }>();
   if (!existing) return { kind: 'not_found', id, revision: 0, updatedAt: null };
   const normalized = classificationOrDefault(classification);
-  const currentRevision = await recurringClassificationRevision(db, id);
+  const currentRevision = await recurringClassificationRevision(db, context, id);
   if (expectedRevision !== currentRevision) return { kind: 'conflict', id, revision: currentRevision, updatedAt: null };
-  const inserted = await db.prepare(`INSERT INTO recurring_classifications (recurring_stream_id, classification, revision, updated_at)
-      VALUES (?, 'unclassified', 0, CURRENT_TIMESTAMP) ON CONFLICT(recurring_stream_id) DO NOTHING`).bind(id).run();
-  if (inserted.success === false) throw new Error('Recurring classification initialization failed.');
-  const result = await db.prepare(`UPDATE recurring_classifications
-      SET classification = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
-      WHERE recurring_stream_id = ? AND revision = ?`).bind(normalized, id, expectedRevision).run();
-  if (result.success === false) throw new Error('Recurring classification update failed.');
-  if ((result.meta?.changes ?? 0) !== 1) {
-    const revision = await recurringClassificationRevision(db, id);
+  const changed=await publishRecurringClassification(db,context,{id,classification:normalized,expectedRevision});
+  if (!changed) {
+    const revision = await recurringClassificationRevision(db, context, id);
     return { kind: 'conflict', id, revision, updatedAt: null };
   }
-  const updated = await db.prepare('SELECT updated_at FROM recurring_classifications WHERE recurring_stream_id = ?').bind(id).first<{ updated_at: string | null }>();
+  const updated = await db.prepare('SELECT updated_at FROM recurring_classifications WHERE recurring_stream_id = ? AND ledger_id = ?').bind(id, context.ledgerId).first<{ updated_at: string | null }>();
   if (!updated?.updated_at) throw new Error('Recurring classification acknowledgement is unavailable.');
   return { kind: 'updated', id, revision: currentRevision + 1, updatedAt: updated.updated_at };
 }
 
-export async function setRecurringClassification(db: D1Database, id: string, classification: RecurringClassification) {
+export async function setRecurringClassification(db: D1Database, context: LedgerContext, id: string, classification: RecurringClassification) {
   if (!RECURRING_CLASSIFICATIONS.includes(classification)) return false;
-  const existing = await db.prepare('SELECT id FROM recurring_streams WHERE id = ? AND present_in_latest_snapshot = 1').bind(id).first<{ id: string }>();
-  if (!existing) return false;
-  try {
-    const currentRevision = await recurringClassificationRevision(db, id);
-    const result = await updateRecurringClassification(db, id, classification, currentRevision);
-    return result.kind === 'updated';
-  } catch (error) {
-    if (!(error instanceof Error) || !/no such column:\s*revision/i.test(error.message)) throw error;
-    const result = await db.prepare(`INSERT INTO recurring_classifications (recurring_stream_id, classification, updated_at)
-      VALUES (?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(recurring_stream_id) DO UPDATE SET classification = excluded.classification, updated_at = CURRENT_TIMESTAMP`)
-      .bind(id, classification).run();
-    if (result.success === false) throw new Error('Recurring legacy classification update failed.');
-    return true;
-  }
+  const currentRevision = await recurringClassificationRevision(db, context, id);
+  const result = await updateRecurringClassification(db, context, id, { classification: classification, expectedRevision: currentRevision });
+  return result.kind === 'updated';
 }

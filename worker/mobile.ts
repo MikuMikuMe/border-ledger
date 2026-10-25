@@ -1,3 +1,4 @@
+import { PlaidOwnershipConflictError } from './plaid-connection-store';
 import { LedgerAccessError } from './tenant-context';
 import type { D1Database } from './db-types';
 import {
@@ -200,9 +201,9 @@ function requestId() {
 }
 
 function typedServiceErrorResponse(error: unknown, id: string) {
-  const supported = [ConnectionServiceError, LunchFlowError, LedgerAccessError].some(type => error instanceof type);
+  const supported = [ConnectionServiceError, LunchFlowError, LedgerAccessError, PlaidOwnershipConflictError].some(type => error instanceof type);
   if (!supported) return null;
-  const serviceError = error as ConnectionServiceError | LunchFlowError | LedgerAccessError;
+  const serviceError = error as ConnectionServiceError | LunchFlowError | LedgerAccessError | PlaidOwnershipConflictError;
   return json({ code: serviceError.code, message: serviceError.message, requestId: id, retryable: serviceError.retryable }, { status: serviceError.status });
 }
 
@@ -299,15 +300,16 @@ async function lunchFlowAccountsResponse(service: ReturnType<typeof createLunchF
 async function handleLunchFlowMobileRequest(request: Request, env: MobileRouteEnv, config: MobileAuthConfig): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/mobile/v1/lunchflow/')) return null;
-  const service = createLunchFlowService(env);
   if (request.method === 'GET' && url.pathname === '/api/mobile/v1/lunchflow/accounts') {
     const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
     authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    const service = createLunchFlowService(env, owner);
     return lunchFlowAccountsResponse(service, url);
   }
   if (request.method === 'POST' && url.pathname === '/api/mobile/v1/lunchflow/account-selection') {
     const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
     authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    const service = createLunchFlowService(env, owner);
     const body = lunchFlowSelectionBody(await readJsonBody<unknown>(request, 32 * 1024));
     return json(await service.selectAccounts({
       accounts: body,
@@ -318,6 +320,7 @@ async function handleLunchFlowMobileRequest(request: Request, env: MobileRouteEn
   if (request.method === 'POST' && url.pathname === '/api/mobile/v1/lunchflow/sync') {
     const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
     authorizeMobileRoute(owner, url.pathname, 'connections:manage');
+    const service = createLunchFlowService(env, owner);
     return json(await service.requestSync(owner.subjectHash, requiredIdempotencyKey(request)), { status: 202 });
   }
   return null;
@@ -446,7 +449,7 @@ async function handleAccountsList(context: ConnectionRouteContext) {
   const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
   authorizeMobileRoute(owner, url.pathname, 'ledger:read');
   const limit = accountListLimit(url.searchParams.get('limit'));
-  return json(await service.listAccounts(limit, url.searchParams.get('cursor') ?? undefined), { status: 200, headers: { 'cache-control': 'no-store' } });
+  return json(await service.listAccounts(owner,limit, url.searchParams.get('cursor') ?? undefined), { status: 200, headers: { 'cache-control': 'no-store' } });
 }
 
 async function handleConnectionsList(context: ConnectionRouteContext) {
@@ -512,14 +515,8 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
       const body = bodyRecord(await readJsonBody<unknown>(request, 32 * 1024));
       const subjectHash = await accessSubjectHash(accessIdentity);
       const owner = {
-        credentialType: 'owner' as const,
         ...await resolveMobileIdentity(env.DB, accessIdentity, config),
-        familyId: 'access-approval',
         subjectHash,
-        deviceId: null,
-        accessGeneration: 1,
-        scopes: [...OWNER_SCOPES],
-        expiresAt: new Date().toISOString(),
         environmentHash: await hashSecret(config.environment),
         consent: true as const,
       };
@@ -603,13 +600,13 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/devices') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'devices:manage');
       authorizeMobileRoute(owner, url.pathname, 'devices:manage');
-      return json({ devices: await readDevices(env.DB) }, { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json({ devices: await readDevices(env.DB, owner) }, { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     const deviceMatch = url.pathname.match(/^\/api\/mobile\/v1\/devices\/([^/]+)$/);
     if (request.method === 'GET' && deviceMatch) {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'devices:manage');
       authorizeMobileRoute(owner, url.pathname, 'devices:manage');
-      return json(await readDevice(env.DB, pathId(deviceMatch[1], 'deviceId')), { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json(await readDevice(env.DB, owner, pathId(deviceMatch[1], 'deviceId')), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     if (request.method === 'DELETE' && deviceMatch) {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'devices:manage');
@@ -621,7 +618,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'devices:manage');
       authorizeMobileRoute(owner, url.pathname, 'devices:manage');
       if (!owner.deviceId) throw new MobileDeviceError('device_required', 'The owner session is not bound to a device.', 403);
-      return json(await replaceDeviceSourceConfig(env.DB, owner.deviceId, await readJsonBody<unknown>(request, 32 * 1024)), { status: 200 });
+      return json(await replaceDeviceSourceConfig(env.DB, owner, owner.deviceId, await readJsonBody<unknown>(request, 32 * 1024)), { status: 200 });
     }
     if (request.method === 'POST' && url.pathname === '/api/mobile/v1/devices/self/capture-authorization') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'devices:manage');
@@ -746,25 +743,25 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/recurring') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
-      return json(await readMobileRecurringPage(env.DB, url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json(await readMobileRecurringPage(env.DB, owner, url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/recurring/summary') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
-      return json(await readMobileRecurringSummary(env.DB, url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json(await readMobileRecurringSummary(env.DB, owner, url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     const recurringClassificationMatch = url.pathname.match(/^\/api\/mobile\/v1\/recurring\/([^/]+)\/classification$/);
     if (request.method === 'PATCH' && recurringClassificationMatch) {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'recurring:classify');
       authorizeMobileRoute(owner, url.pathname, 'recurring:classify');
       const body = await readJsonBody<unknown>(request, 16 * 1024);
-      return json(await classifyMobileRecurring(env.DB, pathId(recurringClassificationMatch[1], 'recurringId'), body), { status: 200 });
+      return json(await classifyMobileRecurring(env.DB, owner, pathId(recurringClassificationMatch[1], 'recurringId'), body), { status: 200 });
     }
     const recurringDetailMatch = url.pathname.match(/^\/api\/mobile\/v1\/recurring\/([^/]+)$/);
     if (request.method === 'GET' && recurringDetailMatch) {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
-      return json(await readMobileRecurringDetail(env.DB, pathId(recurringDetailMatch[1], 'recurringId'), url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json(await readMobileRecurringDetail(env.DB, owner, pathId(recurringDetailMatch[1], 'recurringId'), url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/reports/summary') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
@@ -803,21 +800,21 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/alerts') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
-      return json(await readMobileAlertPage(env.DB, url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
+      return json(await readMobileAlertPage(env.DB, owner, url.searchParams), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
     const mobileAlertReviewMatch = url.pathname.match(/^\/api\/mobile\/v1\/alerts\/([^/]+)\/review$/);
     if (request.method === 'PATCH' && mobileAlertReviewMatch) {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:review');
       authorizeMobileRoute(owner, url.pathname, 'ledger:review');
       const body = await readJsonBody<unknown>(request, 16 * 1024);
-      return json(await applyMobileAlertReview(env.DB, pathId(mobileAlertReviewMatch[1], 'eventId'), body), { status: 200 });
+      return json(await applyMobileAlertReview(env.DB, owner, pathId(mobileAlertReviewMatch[1], 'eventId'), body), { status: 200 });
     }
     const mobileAnnotationMatch = url.pathname.match(/^\/api\/mobile\/v1\/transactions\/([^/]+)\/annotation$/);
     if (request.method === 'PATCH' && mobileAnnotationMatch) {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:review');
       authorizeMobileRoute(owner, url.pathname, 'ledger:review');
       const body = await readJsonBody<unknown>(request, 16 * 1024);
-      return json(await annotateMobileTransaction(env.DB, pathId(mobileAnnotationMatch[1], 'transactionId'), body, owner.subjectHash), { status: 200 });
+      return json(await annotateMobileTransaction(env.DB, owner, pathId(mobileAnnotationMatch[1], 'transactionId'), body), { status: 200 });
     }
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/status') {
       const capture = await authenticateCapture(bearer(request), env.DB, config);
