@@ -68,7 +68,7 @@ it('keeps stored background connection authority independent of logout and omits
   const {db,owner,env,messages}=await setup();
   const provider={listAccounts:async()=>[account],listTransactions:async()=>[]};
   await createLunchFlowService(env,owner,provider).selectAccounts({accounts:[{providerAccountId:'bank',currency:'CAD',kind:'chequing'}]});
-  expect(messages).toEqual([{type:'lunchflow-sync',userId:'owner',ledgerId:'personal',accounts:[{providerAccountId:'bank',revision:1}]}]);
+  expect(messages).toEqual([{type:'lunchflow-sync',connectionId:'lunchflow-personal-owner',generation:1,userId:'owner',ledgerId:'personal',accounts:[{providerAccountId:'bank',revision:1}]}]);
   await invalidate(db,'revoked');
   expect(await createLunchFlowService(env,OWNER_LEDGER,provider).sync()).toEqual({accounts:1});
 });

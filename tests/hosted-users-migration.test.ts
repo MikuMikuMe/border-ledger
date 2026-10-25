@@ -43,7 +43,7 @@ async function snapshot(db: D1Database) {
   return result;
 }
 
-async function checkOwnership(db: D1Database) {
+async function checkOwnership(db: D1Database, options:{currentSchema?:boolean}={}) {
   await db.prepare("INSERT INTO users (id) VALUES ('second')").run();
   await db.prepare("INSERT INTO ledgers (id,user_id) VALUES ('second-ledger','second')").run();
   await db.prepare("INSERT INTO accounts (id,ledger_id,name,institution,currency,kind,status) VALUES ('second-account','second-ledger','Second','Bank','CAD','savings','connected')").run();
@@ -51,7 +51,12 @@ async function checkOwnership(db: D1Database) {
   await expect(db.prepare("UPDATE accounts SET ledger_id='second-ledger' WHERE id='old-account'").run()).rejects.toThrow();
   await expect(db.prepare("DELETE FROM ledgers WHERE id='second-ledger'").run()).rejects.toThrow();
   await expect(db.prepare("INSERT INTO import_previews (id,ledger_id,account_id,filename,file_sha256,preview_digest,row_count,expires_at) VALUES ('bad-preview','second-ledger','old-account','x.csv','x','x',0,'2099-01-01')").run()).rejects.toThrow();
+  if(options.currentSchema){
+    await db.prepare("INSERT INTO lunchflow_connections(id,user_id,ledger_id,adapter,app_client_id) VALUES ('second-platform','second','second-ledger','platform','test-client')").run();
+    await db.prepare("INSERT INTO lunchflow_accounts(provider_account_id,ledger_id,connection_id,name,institution) VALUES ('old-lunch-account','second-ledger','second-platform','Second','Bank')").run();
+  }else{
   await db.prepare("INSERT INTO lunchflow_accounts (provider_account_id,ledger_id,name,institution) VALUES ('old-lunch-account','second-ledger','Second','Bank')").run();
+  }
   await expect(db.prepare("INSERT INTO ledgers (id,user_id) VALUES ('third-ledger','second')").run()).rejects.toThrow();
   await expect(db.prepare("INSERT INTO ledgers (id,user_id) VALUES ('orphan','absent')").run()).rejects.toThrow();
 }
@@ -79,7 +84,7 @@ describe('hosted users migration', () => {
 
   it('enforces the same ownership boundary on fresh-schema databases', async () => {
     const fixture = createSqliteD1Fixture();
-    try { await seedOwnerHistory(fixture.db); await checkOwnership(fixture.db); }
+    try { await seedOwnerHistory(fixture.db); await checkOwnership(fixture.db,{currentSchema:true}); }
     finally { fixture.close(); }
   });
 
@@ -107,6 +112,7 @@ describe('hosted users migration', () => {
         '0022-unbound-auth.sql',
         '0023-plaid-tenant-connections.sql',
         '0024-alert-raw-identities.sql',
+        '0025-lunchflow-platform.sql', '0026-lunchflow-connection-mappings.sql',
       ]);
       const tables = (await fresh.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all<{name:string}>()).results;
       for (const {name} of tables) {

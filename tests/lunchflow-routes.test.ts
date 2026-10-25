@@ -214,9 +214,9 @@ describe('Lunch Flow web route boundaries', () => {
     expect(response.status).toBe(200);
     const body = await response.json() as Record<string, unknown>;
     expect(body).toEqual({
-      configured: true,
+      configured: true,connectionId:'lunchflow-personal-owner',generation:1,
       accounts: [{
-        providerAccountId: 'rbc-chequing',
+        providerAccountId: 'rbc-chequing',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
         name: 'Chequing',
         institution: 'RBC Royal Bank',
         currencies: ['CAD'],
@@ -243,10 +243,10 @@ describe('Lunch Flow web route boundaries', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      configured: true,
+      configured: true,connectionId:'lunchflow-personal-owner',generation:1,
       accounts: [
         {
-          providerAccountId: 'local-route-enabled',
+          providerAccountId: 'local-route-enabled',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
           name: 'Enabled route account',
           institution: 'Synthetic Bank',
           currencies: ['CAD'],
@@ -259,7 +259,7 @@ describe('Lunch Flow web route boundaries', () => {
            lastAttemptAt: expect.any(String),
         },
         {
-          providerAccountId: 'local-route-disabled',
+          providerAccountId: 'local-route-disabled',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
           name: 'Disabled route account',
           institution: 'Synthetic Bank',
           currencies: ['CAD'],
@@ -346,7 +346,7 @@ describe('Lunch Flow mobile route boundaries', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      configured: true,
+      configured: true,connectionId:'lunchflow-personal-owner',generation:1,
       accounts: [
         { providerAccountId: 'local-route-enabled', selected: true, lastError: 'Provider unavailable.' },
         { providerAccountId: 'local-route-disabled', selected: false, lastError: null },

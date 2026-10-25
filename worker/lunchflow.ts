@@ -14,6 +14,7 @@ export interface LunchFlowApiEnv {
 }
 
 export interface LunchFlowAccount {
+  bankConnectionId?: string;
   id: string;
   name: string;
   institutionName: string;
@@ -194,7 +195,7 @@ async function boundedResponseText(response: Response, maxBytes: number) {
   return readUnstreamedResponse(response, maxBytes);
 }
 
-async function boundedJson(response: Response, maxBytes: number) {
+export async function boundedJson(response: Response, maxBytes: number) {
   const text = await boundedResponseText(response, maxBytes);
   try {
     return JSON.parse(text) as unknown;
@@ -361,7 +362,7 @@ function parseTransaction(value: unknown, providerAccountId: string, ids: Set<st
   } satisfies LunchFlowTransaction;
 }
 
-function parseTransactions(payload: unknown, providerAccountId: string) {
+export function parseTransactions(payload: unknown, providerAccountId: string) {
   const object = objectValue(payload, { message: 'Lunch Flow returned an invalid transactions response.' });
   const transactions = snapshotRows(object, 'transactions', LUNCHFLOW_MAX_TRANSACTIONS);
   requireTransactionTotal(object, transactions);

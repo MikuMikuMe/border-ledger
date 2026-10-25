@@ -1,11 +1,13 @@
-import type { LedgerContext } from './tenant-context';
-import { assertFinancialAuthority, financialAuthorityPredicate, type FinancialContext } from './financial-authority';
+import { connectionBinding, lunchFlowIdentity, lunchFlowScopePredicate, assertLunchFlowScope, type LunchFlowBinding as LedgerContext } from './lunchflow-scope';
+import { type FinancialContext } from './financial-authority';
 import { ledgerScopedIdentifier } from './ledger-identifiers';
 import type { D1Database, D1Result, D1Statement } from './db-types';
 import { LunchFlowError, type MappedLunchFlowTransaction } from './lunchflow';
 
 export interface LunchFlowMapping {
   providerAccountId: string;
+  connectionId?: string;
+  providerBankConnectionId?: string | null;
   accountId: string | null;
   ledgerId: string;
   name: string;
@@ -21,6 +23,8 @@ export interface LunchFlowMapping {
 
 export interface LunchFlowSelectionRecord {
   providerAccountId: string;
+  connectionId?: string;
+  providerBankConnectionId?: string | null;
   accountId: string;
   name: string;
   institution: string;
@@ -71,6 +75,8 @@ export class LunchFlowOperationConflictError extends LunchFlowError {
 
 interface LunchFlowMappingRow {
   provider_account_id: string;
+  connection_id: string;
+  provider_bank_connection_id: string | null;
   account_id: string | null;
   ledger_id: string;
   name: string;
@@ -93,6 +99,8 @@ function mapKind(value: string | null): LunchFlowMapping['kind'] {
 function mapRow(row: LunchFlowMappingRow): LunchFlowMapping {
   return {
     providerAccountId: row.provider_account_id,
+    connectionId:row.connection_id,
+    providerBankConnectionId:row.provider_bank_connection_id,
     accountId: row.account_id,
     ledgerId: row.ledger_id,
     name: row.name,
@@ -108,18 +116,18 @@ function mapRow(row: LunchFlowMappingRow): LunchFlowMapping {
 }
 
 export async function readLunchFlowMappings(db: D1Database, ledger: LedgerContext, enabledOnly = false) {
-  const result = await db.prepare(`SELECT provider_account_id, account_id, ledger_id, name, institution, currency, kind,
+  const result = await db.prepare(`SELECT provider_account_id, connection_id, provider_bank_connection_id, account_id, ledger_id, name, institution, currency, kind,
       enabled, revision, last_synced_at, last_error, updated_at
     FROM lunchflow_accounts
-    WHERE ledger_id = ?${enabledOnly ? ' AND enabled = 1' : ''}
-    ORDER BY provider_account_id`).bind(ledger.ledgerId).all<LunchFlowMappingRow>();
+    WHERE ledger_id = ? AND connection_id = ?${enabledOnly ? ' AND enabled = 1' : ''}
+    ORDER BY provider_account_id`).bind(ledger.ledgerId,connectionBinding(ledger).id).all<LunchFlowMappingRow>();
   return result.results.map(mapRow);
 }
 
 export async function readLunchFlowMapping(db: D1Database, ledger: LedgerContext, providerAccountId: string) {
-  const result = await db.prepare(`SELECT provider_account_id, account_id, ledger_id, name, institution, currency, kind,
+  const result = await db.prepare(`SELECT provider_account_id, connection_id, provider_bank_connection_id, account_id, ledger_id, name, institution, currency, kind,
       enabled, revision, last_synced_at, last_error, updated_at
-    FROM lunchflow_accounts WHERE ledger_id = ? AND provider_account_id = ? LIMIT 1`).bind(ledger.ledgerId, providerAccountId).first<LunchFlowMappingRow>();
+    FROM lunchflow_accounts WHERE ledger_id = ? AND connection_id = ? AND provider_account_id = ? LIMIT 1`).bind(ledger.ledgerId,connectionBinding(ledger).id, providerAccountId).first<LunchFlowMappingRow>();
   return result ? mapRow(result) : null;
 }
 
@@ -129,7 +137,7 @@ async function sha256(value: string) {
 }
 
 export async function lunchFlowLedgerAccountId(ledger: LedgerContext, providerAccountId: string) {
-  return ledgerScopedIdentifier(ledger, 'lunchflow-account', `lunchflow-${await sha256(providerAccountId)}`);
+  return ledgerScopedIdentifier(ledger, 'lunchflow-account', `lunchflow-${await sha256(lunchFlowIdentity(ledger,providerAccountId))}`);
 }
 
 function operationResponseJson(response: Record<string, unknown>, requestDigest?: string, revisions: readonly LunchFlowRevision[] = []) {
@@ -137,7 +145,9 @@ function operationResponseJson(response: Record<string, unknown>, requestDigest?
 }
 
 async function operationId(ledger: LedgerContext, identity: LunchFlowOperationIdentity) {
-  return ledgerScopedIdentifier(ledger, 'lunchflow-operation', `lunchflow-operation-${await sha256(`${identity.ownerSubjectHash}\u0000${identity.operationKind}\u0000${identity.idempotencyKey}`)}`);
+  const binding=connectionBinding(ledger);
+  const namespace=binding.adapter==='personal'&&binding.generation===1?'':JSON.stringify([binding.id,binding.generation]);
+  return ledgerScopedIdentifier(ledger, 'lunchflow-operation', `lunchflow-operation-${await sha256(`${namespace}${identity.ownerSubjectHash}\u0000${identity.operationKind}\u0000${identity.idempotencyKey}`)}`);
 }
 
 function operationRevisions(value: unknown) {
@@ -212,10 +222,10 @@ function selectionSqlContext(ledger: LedgerContext, selection: readonly LunchFlo
 function selectionClaimStatement(db: D1Database, ledger: LedgerContext, operation: LunchFlowSelectionOperation, publication: {operationIdValue:string;selectionJson:string}) {
   const {operationIdValue,selectionJson} = publication;
   return db.prepare(`INSERT INTO lunchflow_operations
-    (id, ledger_id, owner_subject_hash, operation_kind, idempotency_key, response_json)
-    VALUES (?, ?, ?, ?, ?, json_object('state', 'pending', 'requestDigest', ?, 'selection', json(?)))
-    ON CONFLICT(ledger_id, owner_subject_hash, operation_kind, idempotency_key) DO NOTHING`)
-    .bind(operationIdValue, ledger.ledgerId, operation.ownerSubjectHash, operation.operationKind, operation.idempotencyKey, operation.requestDigest, selectionJson);
+    (id, ledger_id, connection_id, connection_generation, owner_subject_hash, operation_kind, idempotency_key, response_json)
+    SELECT ?, ?, ?, ?, ?, ?, ?, json_object('state', 'pending', 'requestDigest', ?, 'selection', json(?))
+    WHERE NOT EXISTS (SELECT 1 FROM lunchflow_operations WHERE id=?)`)
+    .bind(operationIdValue, ledger.ledgerId,connectionBinding(ledger).id,connectionBinding(ledger).generation, operation.ownerSubjectHash, operation.operationKind, operation.idempotencyKey, operation.requestDigest, selectionJson,operationIdValue);
 }
 
 function selectionReplacementStatements(db: D1Database, ledger: LedgerContext, context: SelectionSqlContext) {
@@ -223,10 +233,10 @@ function selectionReplacementStatements(db: D1Database, ledger: LedgerContext, c
   return [
     db.prepare(`UPDATE lunchflow_accounts
       SET enabled = 0, revision = revision + 1, updated_at = ?
-      WHERE ledger_id = ? AND enabled = 1
+      WHERE ledger_id = ? AND connection_id = ? AND enabled = 1
         AND NOT EXISTS (SELECT 1 FROM json_each(?) AS selected
           WHERE json_extract(selected.value, '$.providerAccountId') = lunchflow_accounts.provider_account_id)
-        AND ${operationGate}`).bind(updatedAt, ledger.ledgerId, selectionJson, ...operationGateValues),
+        AND ${operationGate}`).bind(updatedAt, ledger.ledgerId,connectionBinding(ledger).id, selectionJson, ...operationGateValues),
     db.prepare(`INSERT INTO accounts (id, ledger_id, name, institution, currency, currency_mode, kind, status, last_synced_at)
       SELECT json_extract(selected.value, '$.accountId'), ?, json_extract(selected.value, '$.name'),
         json_extract(selected.value, '$.institution'), json_extract(selected.value, '$.currency'),
@@ -245,24 +255,24 @@ function selectionReplacementStatements(db: D1Database, ledger: LedgerContext, c
         WHERE json_extract(selected.value, '$.accountId') = accounts.id
           AND json_extract(selected.value, '$.currency') <> accounts.currency)
         AND ${operationGate}`).bind(selectionJson, ledger.ledgerId, selectionJson, ...operationGateValues),
+    db.prepare(`UPDATE lunchflow_accounts SET
+      account_id=(SELECT json_extract(value,'$.accountId') FROM json_each(?) WHERE json_extract(value,'$.providerAccountId')=provider_account_id),
+      name=(SELECT json_extract(value,'$.name') FROM json_each(?) WHERE json_extract(value,'$.providerAccountId')=provider_account_id),
+      institution=(SELECT json_extract(value,'$.institution') FROM json_each(?) WHERE json_extract(value,'$.providerAccountId')=provider_account_id),
+      currency=(SELECT json_extract(value,'$.currency') FROM json_each(?) WHERE json_extract(value,'$.providerAccountId')=provider_account_id),
+      kind=(SELECT json_extract(value,'$.kind') FROM json_each(?) WHERE json_extract(value,'$.providerAccountId')=provider_account_id),
+      provider_bank_connection_id=(SELECT json_extract(value,'$.providerBankConnectionId') FROM json_each(?) WHERE json_extract(value,'$.providerAccountId')=provider_account_id),
+      enabled=1,revision=revision+1,last_error=NULL,updated_at=?
+      WHERE ledger_id=? AND connection_id=? AND provider_account_id IN (SELECT json_extract(value,'$.providerAccountId') FROM json_each(?))
+      AND ${operationGate}`).bind(selectionJson,selectionJson,selectionJson,selectionJson,selectionJson,selectionJson,updatedAt,ledger.ledgerId,connectionBinding(ledger).id,selectionJson,...operationGateValues),
     db.prepare(`INSERT INTO lunchflow_accounts
-      (provider_account_id, account_id, ledger_id, name, institution, currency, kind, enabled, revision, last_error, updated_at)
+      (provider_account_id, account_id, ledger_id, connection_id, provider_bank_connection_id, name, institution, currency, kind, enabled, revision, last_error, updated_at)
       SELECT json_extract(selected.value, '$.providerAccountId'), json_extract(selected.value, '$.accountId'),
-        ?, json_extract(selected.value, '$.name'), json_extract(selected.value, '$.institution'),
+        ?, ?, json_extract(selected.value, '$.providerBankConnectionId'), json_extract(selected.value, '$.name'), json_extract(selected.value, '$.institution'),
         json_extract(selected.value, '$.currency'), json_extract(selected.value, '$.kind'), 1, 1, NULL, ?
       FROM json_each(?) AS selected
       WHERE ${operationGate}
-      ON CONFLICT(ledger_id, provider_account_id) DO UPDATE SET
-        account_id = excluded.account_id,
-        ledger_id = excluded.ledger_id,
-        name = excluded.name,
-        institution = excluded.institution,
-        currency = excluded.currency,
-        kind = excluded.kind,
-        enabled = 1,
-        revision = lunchflow_accounts.revision + 1,
-        last_error = NULL,
-        updated_at = excluded.updated_at`).bind(ledger.ledgerId, updatedAt, selectionJson, ...operationGateValues),
+      AND NOT EXISTS (SELECT 1 FROM lunchflow_accounts existing WHERE existing.ledger_id=? AND existing.connection_id=? AND existing.provider_account_id=json_extract(selected.value,'$.providerAccountId'))`).bind(ledger.ledgerId,connectionBinding(ledger).id, updatedAt, selectionJson, ...operationGateValues,ledger.ledgerId,connectionBinding(ledger).id),
   ];
 }
 
@@ -278,21 +288,21 @@ function selectionReceiptStatement(
       'requestDigest', ?,
       'revisions', json(COALESCE((SELECT json_group_array(json_object('providerAccountId', provider_account_id, 'revision', revision))
         FROM (SELECT provider_account_id, revision FROM lunchflow_accounts
-          WHERE ledger_id = ? AND provider_account_id IN
+          WHERE ledger_id = ? AND connection_id = ? AND provider_account_id IN
             (SELECT json_extract(selected.value, '$.providerAccountId') FROM json_each(?) AS selected)
           ORDER BY provider_account_id)), '[]')))
     WHERE id = ? AND ledger_id = ?
       AND json_extract(response_json, '$.state') = 'pending'
       AND json_extract(response_json, '$.requestDigest') = ?`)
-    .bind(JSON.stringify(operation.response), operation.requestDigest, ledger.ledgerId, selectionJson, operationIdValue, ledger.ledgerId, operation.requestDigest);
+    .bind(JSON.stringify(operation.response), operation.requestDigest, ledger.ledgerId,connectionBinding(ledger).id, selectionJson, operationIdValue, ledger.ledgerId, operation.requestDigest);
 }
 
 function selectionRevisionStatement(db: D1Database, ledger: LedgerContext, selectionJson: string) {
   return db.prepare(`SELECT provider_account_id, revision FROM lunchflow_accounts
-    WHERE ledger_id = ?
+    WHERE ledger_id = ? AND connection_id = ?
       AND enabled = 1
       AND provider_account_id IN (SELECT json_extract(selected.value, '$.providerAccountId') FROM json_each(?) AS selected)
-    ORDER BY provider_account_id`).bind(ledger.ledgerId, selectionJson);
+    ORDER BY provider_account_id`).bind(ledger.ledgerId,connectionBinding(ledger).id, selectionJson);
 }
 
 function parseSelectionRevisions(value: unknown): LunchFlowRevision[] {
@@ -335,7 +345,7 @@ export async function publishLunchFlowSelection(
   selection: readonly LunchFlowSelectionRecord[],
   operation?: LunchFlowSelectionOperation,
 ) : Promise<LunchFlowSelectionPublication> {
-  await assertFinancialAuthority(db, ledger, 'connections:manage');
+  await assertLunchFlowScope(db, ledger);
   const operationIdValue = operation ? await operationId(ledger, operation) : null;
   const context = selectionSqlContext(ledger, selection, operation, operationIdValue);
   const statements: D1Statement[] = [activeLunchFlowGuard(db, ledger)];
@@ -354,8 +364,8 @@ export async function readLunchFlowOperationRecord(
   requestDigest?: string,
 ) {
   const row = await db.prepare(`SELECT response_json FROM lunchflow_operations
-    WHERE ledger_id = ? AND owner_subject_hash = ? AND operation_kind = ? AND idempotency_key = ? LIMIT 1`)
-    .bind(ledger.ledgerId, identity.ownerSubjectHash, identity.operationKind, identity.idempotencyKey).first<{ response_json: string }>();
+    WHERE ledger_id = ? AND connection_id = ? AND connection_generation = ? AND owner_subject_hash = ? AND operation_kind = ? AND idempotency_key = ? LIMIT 1`)
+    .bind(ledger.ledgerId,connectionBinding(ledger).id,connectionBinding(ledger).generation, identity.ownerSubjectHash, identity.operationKind, identity.idempotencyKey).first<{ response_json: string }>();
   if (!row) return null;
   try {
     return parseOperationRecord(JSON.parse(row.response_json) as unknown, requestDigest);
@@ -372,16 +382,15 @@ export async function rememberLunchFlowOperation(
 ) {
   const id = await operationId(ledger, identity);
   const statement = db.prepare(`INSERT INTO lunchflow_operations
-    (id, ledger_id, owner_subject_hash, operation_kind, idempotency_key, response_json)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(ledger_id, owner_subject_hash, operation_kind, idempotency_key) DO NOTHING`)
+    (id, ledger_id, connection_id, connection_generation, owner_subject_hash, operation_kind, idempotency_key, response_json)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM lunchflow_operations WHERE id=?)`)
     .bind(
       id,
-      ledger.ledgerId,
+      ledger.ledgerId,connectionBinding(ledger).id,connectionBinding(ledger).generation,
       identity.ownerSubjectHash,
       identity.operationKind,
       identity.idempotencyKey,
-      operationResponseJson(receipt.response, receipt.requestDigest, receipt.revisions),
+      operationResponseJson(receipt.response, receipt.requestDigest, receipt.revisions),id,
     );
   await db.batch([activeLunchFlowGuard(db, ledger), statement]);
   return (await readLunchFlowOperationRecord(db, ledger, identity, receipt.requestDigest))?.response ?? receipt.response;
@@ -392,10 +401,11 @@ export async function lunchFlowRequestDigest(value: unknown) {
 }
 
 export async function recordLunchFlowError(db: D1Database, ledger: LedgerContext, revision: LunchFlowRevision, message: string, updatedAt = new Date().toISOString()) {
+  const fence=lunchFlowScopePredicate(ledger);
   const bounded = message.trim().slice(0, 512) || 'Lunch Flow sync failed.';
   await db.prepare(`UPDATE lunchflow_accounts SET last_error = ?, updated_at = ?
-    WHERE ledger_id = ? AND provider_account_id = ? AND enabled = 1 AND revision = ?`)
-    .bind(bounded, updatedAt, ledger.ledgerId, revision.providerAccountId, revision.revision).run();
+    WHERE ledger_id = ? AND connection_id = ? AND provider_account_id = ? AND enabled = 1 AND revision = ? AND ${fence.sql}`)
+    .bind(bounded, updatedAt, ledger.ledgerId,connectionBinding(ledger).id, revision.providerAccountId, revision.revision,...fence.bindings).run();
 }
 
 function snapshotPayload(transactions: readonly MappedLunchFlowTransaction[]) {
@@ -428,27 +438,29 @@ interface SnapshotSqlContext {
   payload: string;
   syncedAt: string;
   revisionFence: string;
+  fenceBindings: unknown[];
+  connectionId:string;
 }
 
 function snapshotCurrencyStatements(context: SnapshotSqlContext) {
-  const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence } = context;
+  const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence, fenceBindings } = context;
   return [
     db.prepare(`INSERT OR IGNORE INTO account_currencies (ledger_id, account_id, currency)
       SELECT ?, ?, json_extract(incoming.value, '$.currency')
       FROM json_each(?) AS incoming
       WHERE ${revisionFence}`)
-      .bind(ledgerId, accountId, payload, ledgerId, providerAccountId, accountId, revision),
+      .bind(ledgerId, accountId, payload, ...fenceBindings),
     db.prepare(`UPDATE accounts SET currency_mode = 'multi'
       WHERE id = ? AND ledger_id = ?
         AND EXISTS (SELECT 1 FROM json_each(?) AS incoming
           WHERE json_extract(incoming.value, '$.currency') <> accounts.currency)
         AND ${revisionFence}`)
-      .bind(accountId, ledgerId, payload, ledgerId, providerAccountId, accountId, revision),
+      .bind(accountId, ledgerId, payload, ...fenceBindings),
   ];
 }
 
 function snapshotTransactionStatements(context: SnapshotSqlContext) {
-  const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence } = context;
+  const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence, fenceBindings } = context;
   return [db.prepare(`INSERT INTO transactions
     (id, ledger_id, account_id, date, fx_lock_date, merchant, amount_minor, currency, category, kind, status, source,
      fingerprint, note, provider_transaction_id, provider_pending_transaction_id)
@@ -476,11 +488,11 @@ function snapshotTransactionStatements(context: SnapshotSqlContext) {
       provider_transaction_id = excluded.provider_transaction_id,
       provider_pending_transaction_id = NULL,
       updated_at = CURRENT_TIMESTAMP WHERE transactions.ledger_id = excluded.ledger_id AND transactions.account_id = excluded.account_id AND transactions.source = 'lunchflow'`)
-    .bind(ledgerId, accountId, payload, ledgerId, providerAccountId, accountId, revision)];
+    .bind(ledgerId, accountId, payload, ...fenceBindings)];
 }
 
 function snapshotSourceStatements(context: SnapshotSqlContext) {
-  const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence } = context;
+  const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence, fenceBindings } = context;
   return [db.prepare(`INSERT INTO transaction_source_records
     (id, ledger_id, source_kind, identity_key, transaction_id, account_id, provider_item_id, provider_account_id,
      provider_transaction_id, content_digest)
@@ -497,11 +509,11 @@ function snapshotSourceStatements(context: SnapshotSqlContext) {
       provider_account_id = excluded.provider_account_id,
       provider_transaction_id = excluded.provider_transaction_id,
       content_digest = excluded.content_digest`)
-    .bind(ledgerId, accountId, payload, ledgerId, providerAccountId, accountId, revision)];
+    .bind(ledgerId, accountId, payload, ...fenceBindings)];
 }
 
 function snapshotCleanupStatements(context: SnapshotSqlContext) {
-  const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence } = context;
+  const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence, fenceBindings } = context;
   return [db.prepare(`DELETE FROM transactions
     WHERE ledger_id = ? AND account_id = ? AND source = 'lunchflow' AND status = 'provisional'
       AND ${revisionFence}
@@ -510,20 +522,17 @@ function snapshotCleanupStatements(context: SnapshotSqlContext) {
           AND source_row.provider_account_id = ?
           AND NOT EXISTS (SELECT 1 FROM json_each(?) AS incoming
             WHERE json_extract(incoming.value, '$.providerTransactionId') = source_row.provider_transaction_id))`)
-    .bind(ledgerId, accountId, ledgerId, providerAccountId, accountId, revision, providerAccountId, payload)];
+    .bind(ledgerId, accountId, ...fenceBindings, providerAccountId, payload)];
 }
 
 function snapshotMetadataStatements(context: SnapshotSqlContext) {
-  const { db, ledgerId, accountId, providerAccountId, revision, syncedAt } = context;
+  const { db, ledgerId, accountId, providerAccountId, syncedAt,connectionId,revisionFence,fenceBindings } = context;
   return [
     db.prepare(`UPDATE lunchflow_accounts SET last_synced_at = ?, last_error = NULL, updated_at = CURRENT_TIMESTAMP
-      WHERE ledger_id = ? AND provider_account_id = ? AND enabled = 1 AND revision = ?`)
-      .bind(syncedAt, ledgerId, providerAccountId, revision),
-    db.prepare(`UPDATE accounts SET last_synced_at = ?
-      WHERE id = ? AND ledger_id = ? AND EXISTS (SELECT 1 FROM lunchflow_accounts fence
-        WHERE fence.ledger_id = ? AND fence.provider_account_id = ? AND fence.account_id = ?
-          AND fence.enabled = 1 AND fence.revision = ?)`)
-      .bind(syncedAt, accountId, ledgerId, ledgerId, providerAccountId, accountId, revision),
+      WHERE ledger_id = ? AND connection_id=? AND provider_account_id = ? AND ${revisionFence}`)
+      .bind(syncedAt,ledgerId,connectionId,providerAccountId,...fenceBindings),
+    db.prepare(`UPDATE accounts SET last_synced_at = ? WHERE id = ? AND ledger_id = ? AND ${revisionFence}`)
+      .bind(syncedAt,accountId,ledgerId,...fenceBindings),
   ];
 }
 
@@ -575,12 +584,15 @@ export async function publishLunchFlowSnapshot(
   publication: {revision:LunchFlowRevision;transactions:readonly MappedLunchFlowTransaction[];syncedAt:string},
 ) {
   const {revision,transactions,syncedAt} = publication;
-  await assertFinancialAuthority(db, ledger, 'connections:manage');
+  await assertLunchFlowScope(db, ledger);
   const mapping = await readLunchFlowMapping(db, ledger, revision.providerAccountId);
   if (!isCurrentSnapshotMapping(mapping, revision)) return { stale: true, written: 0 };
+  const binding=connectionBinding(ledger),fence=lunchFlowScopePredicate(ledger);
   const scopedTransactions = await Promise.all(transactions.map(async transaction => ({ ...transaction,
-    id: await ledgerScopedIdentifier(ledger, 'lunchflow-transaction', transaction.id),
-    sourceRecordId: await ledgerScopedIdentifier(ledger, 'lunchflow-source', transaction.sourceRecordId),
+    id: await ledgerScopedIdentifier(ledger, 'lunchflow-transaction', lunchFlowIdentity(ledger,transaction.id)),
+    sourceRecordId: await ledgerScopedIdentifier(ledger, 'lunchflow-source', lunchFlowIdentity(ledger,transaction.sourceRecordId)),
+    sourceIdentity:lunchFlowIdentity(ledger,transaction.sourceIdentity),
+    fingerprint:lunchFlowIdentity(ledger,transaction.fingerprint),
   })));
   const payload = snapshotPayload(scopedTransactions);
   if (new TextEncoder().encode(payload).byteLength > MAX_D1_SNAPSHOT_BYTES) {
@@ -589,21 +601,23 @@ export async function publishLunchFlowSnapshot(
   const statements = snapshotStatements({
     db,
     ledgerId: ledger.ledgerId,
+    connectionId:binding.id,
+    fenceBindings:[ledger.ledgerId,binding.id,revision.providerAccountId,mapping.accountId,revision.revision,...fence.bindings],
     accountId: mapping.accountId,
     providerAccountId: revision.providerAccountId,
     revision: revision.revision,
     payload,
     syncedAt,
     revisionFence: `EXISTS (SELECT 1 FROM lunchflow_accounts fence
-      WHERE fence.ledger_id = ? AND fence.provider_account_id = ? AND fence.account_id = ?
-        AND fence.enabled = 1 AND fence.revision = ?)`,
+      WHERE fence.ledger_id = ? AND fence.connection_id = ? AND fence.provider_account_id = ? AND fence.account_id = ?
+        AND fence.enabled = 1 AND fence.revision = ?) AND ${fence.sql}`,
   });
   await db.batch([activeLunchFlowGuard(db, ledger), ...statements]);
   return { stale: false, written: transactions.length };
 }
 
 function activeLunchFlowGuard(db: D1Database, ledger: FinancialContext) {
-  const authority = financialAuthorityPredicate(ledger, 'connections:manage');
+  const authority = lunchFlowScopePredicate(ledger);
   return db.prepare(`INSERT INTO ledger_preferences(ledger_id) VALUES
     (CASE WHEN ${authority.sql} THEN ? ELSE NULL END) ON CONFLICT(ledger_id) DO NOTHING`)
     .bind(...authority.bindings, ledger.ledgerId);

@@ -1,3 +1,4 @@
+import { handleLunchFlowHttp } from './lunchflow-http';
 import { PlaidOwnershipConflictError } from './plaid-connection-store';
 import { LedgerAccessError } from './tenant-context';
 import type { D1Database } from './db-types';
@@ -53,8 +54,6 @@ import { createLedgerExportResponse, MobileExportError } from './mobile-export';
 import { ImportStoreError } from './import-store';
 import { ConnectionServiceError, createConnectionService } from './connection-service';
 import { LunchFlowError } from './lunchflow';
-import { createLunchFlowService } from './lunchflow-service';
-import { parseLunchFlowMobileSelectionAccounts } from './lunchflow-routing';
 import {
   annotateMobileTransaction,
   applyMobileAlertReview,
@@ -89,6 +88,10 @@ export interface MobileRouteEnv {
   PLAID_ANDROID_PACKAGE_NAME?: string;
   PLAID_ANDROID_REDIRECT_URI?: string;
   LUNCHFLOW_API_KEY?: string;
+  LUNCHFLOW_CLIENT_ID?:string;
+  LUNCHFLOW_CLIENT_SECRET?:string;
+  LUNCHFLOW_REDIRECT_URI?:string;
+  LUNCHFLOW_TOKEN_ENCRYPTION_KEY?:string;
   LUNCHFLOW_API_BASE_URL?: string;
   SYNC_QUEUE?: { send(message: unknown): Promise<void> };
 }
@@ -285,45 +288,14 @@ function sourceScopes(body: Record<string, unknown>) {
   return body.sourceScopes as Array<{ sourceProfileId: string; accountId: string; currency: string; hintKind?: string; hintValue?: string }>;
 }
 
-function lunchFlowSelectionBody(value: unknown) {
-  const body = bodyRecord(value);
-  const accounts = parseLunchFlowMobileSelectionAccounts(body.accounts);
-  if (!accounts) throw new MobileAuthError('invalid_request', 'The Lunch Flow account selection is not valid.', 400);
-  return accounts;
+async function authorizedLunchFlowOwner(request:Request,env:MobileRouteEnv,config:MobileAuthConfig) {
+  const owner=await authenticateOwner(bearer(request),env.DB,config,'connections:manage');
+  authorizeMobileRoute(owner,new URL(request.url).pathname,'connections:manage');
+  return owner;
 }
-
-async function lunchFlowAccountsResponse(service: ReturnType<typeof createLunchFlowService>, url: URL) {
-  const result = url.searchParams.get('status') === 'local' ? await service.readStatus() : await service.readAccounts();
-  return json(result, { status: 200, headers: { 'cache-control': 'no-store' } });
-}
-
-async function handleLunchFlowMobileRequest(request: Request, env: MobileRouteEnv, config: MobileAuthConfig): Promise<Response | null> {
-  const url = new URL(request.url);
-  if (!url.pathname.startsWith('/api/mobile/v1/lunchflow/')) return null;
-  if (request.method === 'GET' && url.pathname === '/api/mobile/v1/lunchflow/accounts') {
-    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-    const service = createLunchFlowService(env, owner);
-    return lunchFlowAccountsResponse(service, url);
-  }
-  if (request.method === 'POST' && url.pathname === '/api/mobile/v1/lunchflow/account-selection') {
-    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-    const service = createLunchFlowService(env, owner);
-    const body = lunchFlowSelectionBody(await readJsonBody<unknown>(request, 32 * 1024));
-    return json(await service.selectAccounts({
-      accounts: body,
-      ownerSubjectHash: owner.subjectHash,
-      idempotencyKey: requiredIdempotencyKey(request),
-    }), { status: 200 });
-  }
-  if (request.method === 'POST' && url.pathname === '/api/mobile/v1/lunchflow/sync') {
-    const owner = await authenticateOwner(bearer(request), env.DB, config, 'connections:manage');
-    authorizeMobileRoute(owner, url.pathname, 'connections:manage');
-    const service = createLunchFlowService(env, owner);
-    return json(await service.requestSync(owner.subjectHash, requiredIdempotencyKey(request)), { status: 202 });
-  }
-  return null;
+async function handleLunchFlowMobileRequest(request:Request,env:MobileRouteEnv,config:MobileAuthConfig) {
+  if(!new URL(request.url).pathname.startsWith('/api/mobile/v1/lunchflow/'))return null;
+  return handleLunchFlowHttp(request,env,await authorizedLunchFlowOwner(request,env,config));
 }
 
 type ConnectionRouteContext = {

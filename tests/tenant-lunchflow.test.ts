@@ -1,3 +1,4 @@
+import { resolveLunchFlowScope } from '../worker/lunchflow-scope';
 import { describe, expect, it } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import { OWNER_LEDGER, SECOND_LEDGER, seedTenants } from './helpers/tenants';
@@ -19,11 +20,12 @@ describe('Lunch Flow tenant isolation', () => {
     const fixture = createSqliteD1Fixture();
     try {
       await seedTenants(fixture.db);
+      await fixture.db.prepare("INSERT INTO lunchflow_connections(id,user_id,ledger_id,adapter,app_client_id,lifecycle) VALUES ('second-connection','second','second-ledger','platform','test-client','connected')").run();
       for (const context of [OWNER_LEDGER,SECOND_LEDGER]) {
-        await fixture.db.prepare(`INSERT INTO lunchflow_accounts(provider_account_id,account_id,ledger_id,name,institution,currency,kind)
-          VALUES ('same-bank',?,?,?,'Bank','CAD','chequing')`).bind(`${context.userId}-account`,context.ledgerId,context.userId).run();
+        await fixture.db.prepare(`INSERT INTO lunchflow_accounts(provider_account_id,account_id,ledger_id,name,institution,currency,kind,connection_id)
+          VALUES ('same-bank',?,?,?,'Bank','CAD','chequing',?)`).bind(`${context.userId}-account`,context.ledgerId,context.userId,context.userId==='owner'?'lunchflow-personal-owner':'second-connection').run();
       }
-      expect((await readLunchFlowMappings(fixture.db, SECOND_LEDGER)).map(row => row.name)).toEqual(['second']);
+      expect((await readLunchFlowMappings(fixture.db, (await resolveLunchFlowScope(fixture.db,SECOND_LEDGER,'second-connection'))!)).map(row => row.name)).toEqual(['second']);
     } finally {fixture.close();}
   });
 });
@@ -45,7 +47,9 @@ it('keeps equal provider IDs and idempotency keys independent while preserving h
   try {
     await seedTenants(fixture.db);
     const identity={ownerSubjectHash:'same-subject',operationKind:'account-selection',idempotencyKey:'same-key'};
-    for(const context of [OWNER_LEDGER,SECOND_LEDGER]) {
+    await fixture.db.prepare("INSERT INTO lunchflow_connections(id,user_id,ledger_id,adapter,app_client_id,lifecycle) VALUES ('second-connection','second','second-ledger','platform','test-client','connected')").run();
+    const second=(await resolveLunchFlowScope(fixture.db,SECOND_LEDGER,'second-connection'))!;
+    for(const context of [OWNER_LEDGER,second]) {
       const accountId=await lunchFlowLedgerAccountId(context,'same-bank');
       const selection=[{providerAccountId:'same-bank',accountId,name:context.userId,institution:'Bank',currency:'CAD',kind:'chequing' as const}];
       await publishLunchFlowSelection(fixture.db,context,selection,{...identity,selection,requestDigest:'digest',response:{user:context.userId}});

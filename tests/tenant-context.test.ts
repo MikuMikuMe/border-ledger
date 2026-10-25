@@ -54,6 +54,17 @@ describe('closed hosted identity resolution', () => {
     await expect(provisionOwnerIdentityBindings(db, [])).rejects.toThrow();
     await expect(provisionOwnerIdentityBindings(db, [{ issuer: '', subject: 'owner' }])).rejects.toThrow();
     await db.prepare("DELETE FROM ledger_preferences WHERE ledger_id = 'personal'").run();
+    // Remove only the verified-empty seed before constructing this intentionally invalid ledger fixture.
+    expect(await db.prepare(`SELECT provider_user_id,token_ciphertext,token_iv,credential_version,operation_id,operation_kind,
+      (SELECT COUNT(*) FROM lunchflow_provider_bindings WHERE user_id='owner') AS provider_bindings,
+      (SELECT COUNT(*) FROM lunchflow_accounts WHERE connection_id='lunchflow-personal-owner') AS mappings,
+      (SELECT COUNT(*) FROM lunchflow_oauth_states WHERE connection_id='lunchflow-personal-owner') AS authorizations,
+      (SELECT COUNT(*) FROM transactions WHERE ledger_id='personal') AS history
+      FROM lunchflow_connections WHERE id='lunchflow-personal-owner'`).first()).toEqual({
+      provider_user_id:null,token_ciphertext:null,token_iv:null,credential_version:0,operation_id:null,operation_kind:null,
+      provider_bindings:0,mappings:0,authorizations:0,history:0,
+    });
+    await db.prepare("DELETE FROM lunchflow_connections WHERE id = 'lunchflow-personal-owner' AND provider_user_id IS NULL AND token_ciphertext IS NULL AND token_iv IS NULL AND credential_version = 0 AND operation_id IS NULL").run();
     await db.prepare("DELETE FROM ledgers WHERE id = 'personal'").run();
     await db.prepare("INSERT INTO ledgers (id, user_id) VALUES ('unexpected', 'owner')").run();
     await expect(provisionOwnerIdentityBindings(db, [ownerIdentity])).rejects.toThrow();

@@ -171,10 +171,10 @@ describe('Lunch Flow selection and sync', () => {
     const service = createLunchFlowService(serviceEnv(fixture.db), OWNER_LEDGER, provider);
 
     await expect(service.readStatus()).resolves.toEqual({
-      configured: true,
+      configured: true,connectionId:'lunchflow-personal-owner',generation:1,
       accounts: [
         {
-          providerAccountId: 'local-enabled',
+          providerAccountId: 'local-enabled',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
           name: 'Enabled account',
           institution: 'Synthetic Bank',
           currencies: ['CAD'],
@@ -187,7 +187,7 @@ describe('Lunch Flow selection and sync', () => {
           lastError: 'Provider unavailable.',
         },
         {
-          providerAccountId: 'local-disabled',
+          providerAccountId: 'local-disabled',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
           name: 'Disabled account',
           institution: 'Synthetic Bank',
           currencies: ['CAD'],
@@ -281,8 +281,8 @@ describe('Lunch Flow selection and sync', () => {
     expect(first).toEqual({ selected: 1, queued: true });
     expect(replay).toEqual(first);
     expect(queued).toEqual([
-      { type: 'lunchflow-sync', ...OWNER_LEDGER, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
-      { type: 'lunchflow-sync', ...OWNER_LEDGER, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
     ]);
     await expect(fixture.db.prepare('SELECT account_id, enabled, revision FROM lunchflow_accounts').all()).resolves.toMatchObject({ results: [{ enabled: 1, revision: 1 }] });
   });
@@ -412,7 +412,7 @@ describe('Lunch Flow selection and sync', () => {
     fail = false;
     await expect(service.selectAccounts(input)).resolves.toEqual({ selected: 1, queued: true });
     expect(accountReads).toBe(1);
-    expect(queued).toEqual([{ type: 'lunchflow-sync', ...OWNER_LEDGER, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] }]);
+    expect(queued).toEqual([{ type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] }]);
     await expect(fixture.db.prepare('SELECT revision FROM lunchflow_accounts').first<{ revision: number }>()).resolves.toMatchObject({ revision: 1 });
   });
 
@@ -474,8 +474,8 @@ describe('Lunch Flow selection and sync', () => {
     await service.selectAccounts({ accounts: [{ providerAccountId: 'account-synthetic-1', currency: 'CAD', kind: 'chequing' }] });
 
     expect(queued).toEqual([
-      { type: 'lunchflow-sync', ...OWNER_LEDGER, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
-      { type: 'lunchflow-sync', ...OWNER_LEDGER, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 3 }] },
+      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 3 }] },
     ]);
     await processLunchFlowSync(service, [{ providerAccountId: 'account-synthetic-1', revision: 1 }]);
     await expect(fixture.db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE source = 'lunchflow'").first<{ count: number }>()).resolves.toMatchObject({ count: 0 });

@@ -1,3 +1,7 @@
+import { runLunchFlowJob, scheduleLunchFlow } from './lunchflow-jobs';
+import { handleLunchFlowHttp } from './lunchflow-http';
+import { lunchFlowHash } from './lunchflow-crypto';
+import type { LunchFlowBrowserSession } from './lunchflow-oauth';
 import { PlaidOwnershipConflictError } from './plaid-connection-store';
 import { assertFinancialAuthority } from './financial-authority';
 import { connectionPublicationStatements, readStoredPlaidItem, beginPlaidDisconnect, disconnectPublicationStatements, plaidClientUserId } from './plaid-connection-store';
@@ -53,8 +57,6 @@ import { isFxProviderError } from './fx-rates';
 import { getCurrencyMeta, type CurrencyCode } from '../src/domain/currencies';
 import { readPreferences, updatePreferences, PreferenceRevisionConflictError } from './preferences-store';
 import { LunchFlowError } from './lunchflow';
-import { createLunchFlowService } from './lunchflow-service';
-import { parseLunchFlowQueueAccounts, parseLunchFlowSelectionAccounts } from './lunchflow-routing';
 
 interface Queue {
   send(message: unknown): Promise<void>;
@@ -89,6 +91,10 @@ interface Env {
   MOBILE_APPROVED_ACCESS_SUBJECTS?: string;
   DEPLOYMENT_REVISION?: string;
   LUNCHFLOW_API_KEY?: string;
+  LUNCHFLOW_CLIENT_ID?:string;
+  LUNCHFLOW_CLIENT_SECRET?:string;
+  LUNCHFLOW_REDIRECT_URI?:string;
+  LUNCHFLOW_TOKEN_ENCRYPTION_KEY?:string;
   LUNCHFLOW_API_BASE_URL?: string;
 }
 
@@ -856,7 +862,7 @@ function validationErrorResponse(error: unknown) {
 function serviceErrorResponse(error: unknown) {
   if (error instanceof PlaidOwnershipConflictError) return json({ code:error.code,error:error.message },{status:error.status});
   if (error instanceof PreferenceRevisionConflictError) return json({ error: error.message, currentRevision: error.currentRevision }, { status: 409 });
-  if (error instanceof LunchFlowError) return json({ error: error.message }, { status: error.status });
+  if (error instanceof LunchFlowError) return json({ error: error.message,code:error.code,retryable:error.retryable }, { status: error.status });
   if (error instanceof ConfigurationError) return json({ error: 'Plaid is not fully configured on the Worker yet.' }, { status: 503 });
   if (error instanceof PlaidApiError && error.status >= 400 && error.status < 500) return json({ error: 'Plaid rejected the request. Check the connection and try again.' }, { status: 400 });
   return null;
@@ -901,42 +907,18 @@ async function handlePreferencesRequest(request: Request, env: Env, context: Led
   return json({ error: 'Not found' }, { status: 404 });
 }
 
-function lunchFlowSelectionBody(value: unknown) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new RequestValidationError('The Lunch Flow selection body is not valid.');
-  const body = value as Record<string, unknown>;
-  if (!Array.isArray(body.accounts)) throw new RequestValidationError('The Lunch Flow account selection is required.');
-  const accounts = parseLunchFlowSelectionAccounts(body.accounts);
-  if (!accounts) throw new RequestValidationError('The Lunch Flow account selection is not valid.');
-  return accounts;
+async function lunchFlowBrowserSession(request:Request,env:Env):Promise<LunchFlowBrowserSession|undefined> {
+  const verified=await verifiedAccessJwt(request,env);
+  if(!verified)return undefined;
+  if(typeof verified.payload.sub!=='string')return undefined;
+  if(typeof verified.payload.exp!=='number')return undefined;
+  if(!Number.isFinite(verified.payload.exp)||verified.payload.exp*1000<=Date.now())return undefined;
+  return {sessionHash:await lunchFlowHash(request.headers.get('Cf-Access-Jwt-Assertion')!),identityHash:await lunchFlowHash(JSON.stringify([verified.issuer,verified.payload.sub])),expiresAt:new Date(verified.payload.exp*1000).toISOString()};
 }
-
-function optionalIdempotencyKey(request: Request) {
-  const value = request.headers.get('idempotency-key')?.trim();
-  if (value && value.length > 256) throw new RequestValidationError('The idempotency key is not valid.');
-  return value || undefined;
-}
-
-function lunchFlowQueueAccounts(value: unknown) {
-  const accounts = parseLunchFlowQueueAccounts(value);
-  if (!accounts) throw new LunchFlowError('invalid_queue_message', 'The Lunch Flow sync message is invalid.', 400, false);
-  return accounts;
-}
-
-async function handleLunchFlowRequest(request: Request, env: Env, context: LedgerContext) {
-  const service = createLunchFlowService(env, context);
-  const url = new URL(request.url);
-  if (request.method === 'GET' && url.pathname === '/api/lunchflow/accounts') {
-    const result = url.searchParams.get('status') === 'local' ? await service.readStatus() : await service.readAccounts();
-    return json(result, { status: 200, headers: { 'cache-control': 'no-store' } });
-  }
-  if (request.method === 'POST' && url.pathname === '/api/lunchflow/account-selection') {
-    const body = lunchFlowSelectionBody(await readJsonBody<unknown>(request, 32 * 1024));
-    return json(await service.selectAccounts({ accounts: body, idempotencyKey: optionalIdempotencyKey(request) }), { status: 200 });
-  }
-  if (request.method === 'POST' && url.pathname === '/api/lunchflow/sync') {
-    return json(await service.requestSync('web-owner', optionalIdempotencyKey(request)), { status: 202 });
-  }
-  return null;
+async function handleLunchFlowRequest(request:Request,env:Env,context:LedgerContext) {
+  if(!new URL(request.url).pathname.startsWith('/api/lunchflow/'))return null;
+  const browser=new URL(request.url).pathname.includes('/oauth/')?await lunchFlowBrowserSession(request,env):undefined;
+  return handleLunchFlowHttp(request,env,context,browser);
 }
 
 type AuthorizedRouteDispatch = () => Promise<Response | null>;
@@ -1055,7 +1037,7 @@ async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, 
   }
 }
 
-type QueueMessageBody = { type?: unknown; itemId?: unknown; generation?: unknown; scopeVersion?: unknown; connectionRevision?: unknown; userId?: unknown; ledgerId?: unknown; accounts?: unknown };
+type QueueMessageBody = { type?: unknown; itemId?: unknown; generation?: unknown; scopeVersion?: unknown; connectionRevision?: unknown; connectionId?:unknown; userId?: unknown; ledgerId?: unknown; accounts?: unknown };
 type QueueBodyHandler = (body: QueueMessageBody, env: Env) => Promise<void>;
 
 async function enqueueCompletedPlaidFollowup(env:Env,completed:PlaidJobBinding) {
@@ -1082,20 +1064,8 @@ async function handlePlaidRecurringQueueBody(body: QueueMessageBody, env: Env) {
   if (binding) await syncPlaidRecurring(env, binding);
 }
 
-async function activePersonalLunchFlowContext(db: D1Database) {
-  return db.prepare(`SELECT l.id AS ledgerId, u.id AS userId FROM ledgers l JOIN users u ON u.id=l.user_id
-    WHERE l.id='personal' AND u.id='owner' AND u.status='active'`).first<LedgerContext>();
-}
-
-async function schedulePersonalLunchFlow(env: Env) {
-  const context = await activePersonalLunchFlowContext(env.DB);
-  if (context) await createLunchFlowService(env, context).requestSync('scheduled-sync');
-}
-
-async function handleLunchFlowQueueBody(body: QueueMessageBody, env: Env) {
-  if (body.userId !== 'owner' || body.ledgerId !== 'personal') return;
-  const context = await activePersonalLunchFlowContext(env.DB);
-  if (context) await createLunchFlowService(env, context).sync(lunchFlowQueueAccounts(body.accounts));
+async function handleLunchFlowQueueBody(body:QueueMessageBody,env:Env) {
+  await runLunchFlowJob(env,body);
 }
 
 const queueBodyHandlers: ReadonlyMap<string, QueueBodyHandler> = new Map([
@@ -1198,13 +1168,8 @@ export default {
       if (!isFxProviderError(error)) throw error;
       console.error('fx_snapshot_refresh_failed', error.name);
     }
-    if (env.LUNCHFLOW_API_KEY?.trim()) {
-      try {
-        await schedulePersonalLunchFlow(env);
-      } catch (error) {
-        console.error('lunchflow_schedule_failed', error instanceof Error ? error.name : 'unknown');
-      }
-    }
+    await scheduleLunchFlow(env);
+
   },
 
   async queue(batch: { messages: Array<{ body: unknown; ack(): void; retry(): void }> }, env: Env) {

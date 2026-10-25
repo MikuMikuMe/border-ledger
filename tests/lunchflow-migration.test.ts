@@ -255,12 +255,12 @@ describe('Lunch Flow migration', () => {
         .bind('schema-account', 'Synthetic account', 'Synthetic bank', 'CAD', 'chequing', 'connected').run();
       const lunchflowAccountColumns = await fixture.db.prepare('PRAGMA table_info(lunchflow_accounts)').all<{ name: string }>();
       expect(lunchflowAccountColumns.results.map((column) => column.name)).toEqual([
-        'provider_account_id', 'account_id', 'ledger_id', 'name', 'institution', 'currency', 'kind', 'enabled',
+        'provider_account_id', 'connection_id', 'provider_bank_connection_id', 'account_id', 'ledger_id', 'name', 'institution', 'currency', 'kind', 'enabled',
         'revision', 'last_synced_at', 'last_error', 'created_at', 'updated_at',
       ]);
       const lunchflowOperationColumns = await fixture.db.prepare('PRAGMA table_info(lunchflow_operations)').all<{ name: string }>();
       expect(lunchflowOperationColumns.results.map((column) => column.name)).toEqual([
-        'id', 'ledger_id', 'owner_subject_hash', 'operation_kind', 'idempotency_key', 'response_json', 'created_at',
+        'id', 'connection_id', 'connection_generation', 'ledger_id', 'owner_subject_hash', 'operation_kind', 'idempotency_key', 'response_json', 'created_at',
       ]);
       const sourceRecordColumns = await fixture.db.prepare('PRAGMA table_info(transaction_source_records)').all<{ name: string }>();
       expect(sourceRecordColumns.results.map((column) => column.name)).toContain('provider_account_id');
