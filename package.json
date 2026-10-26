@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "jose": "6.2.12",
+    "jose": "6.2.13",
     "lucide-react": "1.61.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
