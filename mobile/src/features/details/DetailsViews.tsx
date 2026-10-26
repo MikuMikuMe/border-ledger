@@ -147,13 +147,24 @@ function useAccountInteractions(state:LoadState<AccountsData>,onDisconnect:(id:s
   return {selected,setSelected,account,setAccount,disconnect,setDisconnect,confirmDisconnect};
 }
 
-export function AccountsView({lunchFlowMessage=null,onLunchFlowAuthorize=()=>{},onLunchFlowCancel=()=>{},onLunchFlowDisconnect=()=>{},dark,state,mutation,lunchFlowBusy=false,onRetry,onLoadMore,onConnect,onCancelConnect,onSelect,onCancel,onSync,onDisconnect,onLunchFlowSelection=()=>{},onLunchFlowSync=()=>{}}:Base&{lunchFlowMessage?:string|null;onLunchFlowAuthorize?():void;onLunchFlowCancel?():void;onLunchFlowDisconnect?(binding:LunchFlowBinding):void;state:LoadState<AccountsData>;lunchFlowBusy?:boolean;onConnect(reconnect:string|null):void;onCancelConnect():void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(id:string):void;onLunchFlowSelection?(selections:LunchFlowSelection[]):void;onLunchFlowSync?():void}) {
+type AccountsProps=Base&{lunchFlowMessage?:string|null;onLunchFlowAuthorize?():void;onLunchFlowCancel?():void;onLunchFlowDisconnect?(binding:LunchFlowBinding):void;state:LoadState<AccountsData>;lunchFlowBusy?:boolean;onConnect(reconnect:string|null):void;onCancelConnect():void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(id:string):void;onLunchFlowSelection?(selections:LunchFlowSelection[]):void;onLunchFlowSync?():void};
+
+function accountLunchFlowOptions({lunchFlowMessage=null,onLunchFlowAuthorize=()=>{},onLunchFlowCancel=()=>{},onLunchFlowDisconnect=()=>{},lunchFlowBusy=false,onLunchFlowSelection=()=>{},onLunchFlowSync=()=>{}}:AccountsProps){
+  return {
+    actions:{message:lunchFlowMessage,authorize:onLunchFlowAuthorize,cancel:onLunchFlowCancel,disconnect:onLunchFlowDisconnect},
+    busy:lunchFlowBusy,onSelection:onLunchFlowSelection,onSync:onLunchFlowSync,
+  };
+}
+
+export function AccountsView(props:AccountsProps) {
+  const {dark,state,mutation,onRetry,onLoadMore,onConnect,onCancelConnect,onSelect,onCancel,onSync,onDisconnect}=props;
+  const lunchFlow=accountLunchFlowOptions(props);
   const data=state.data,link=data?.link;
   const {selected,setSelected,account,setAccount,disconnect,setDisconnect,confirmDisconnect}=useAccountInteractions(state,onDisconnect);
-  const disabled=isMutationDisabled(state,mutation)||link?.state==='reconciliation_required',lunchFlowDisabled=disabled||lunchFlowBusy;
+  const disabled=isMutationDisabled(state,mutation)||link?.state==='reconciliation_required',lunchFlowDisabled=disabled||lunchFlow.busy;
   const message=linkMessage(link);
   return <View style={styles.section}>
-    <AccountsBody lunchFlowActions={{message:lunchFlowMessage,authorize:onLunchFlowAuthorize,cancel:onLunchFlowCancel,disconnect:onLunchFlowDisconnect}} dark={dark} state={state} data={data} link={link} disabled={disabled} lunchFlowDisabled={lunchFlowDisabled} selected={selected} setSelected={setSelected} message={message} onRetry={onRetry} onCancelConnect={onCancelConnect} onLoadMore={onLoadMore} onConnect={onConnect} onSelect={onSelect} onCancel={onCancel} onSync={onSync} onDisconnect={connection=>setDisconnect(connection)} onOpenAccount={setAccount} onLunchFlowSelection={onLunchFlowSelection} onLunchFlowSync={onLunchFlowSync}/>
+    <AccountsBody lunchFlowActions={lunchFlow.actions} dark={dark} state={state} data={data} link={link} disabled={disabled} lunchFlowDisabled={lunchFlowDisabled} selected={selected} setSelected={setSelected} message={message} onRetry={onRetry} onCancelConnect={onCancelConnect} onLoadMore={onLoadMore} onConnect={onConnect} onSelect={onSelect} onCancel={onCancel} onSync={onSync} onDisconnect={connection=>setDisconnect(connection)} onOpenAccount={setAccount} onLunchFlowSelection={lunchFlow.onSelection} onLunchFlowSync={lunchFlow.onSync}/>
     <MutationStatus dark={dark} mutation={mutation}/>
     <AccountModals dark={dark} state={state} account={account} disconnect={disconnect} disabled={disabled} onCloseAccount={()=>setAccount(null)} onConfirmDisconnect={confirmDisconnect} onCloseDisconnect={()=>setDisconnect(null)}/>
   </View>;
