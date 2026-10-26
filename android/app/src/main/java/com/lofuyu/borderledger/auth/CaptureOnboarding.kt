@@ -312,40 +312,40 @@ class CaptureOnboardingCoordinator(
 
     private suspend fun issueBoundCredential(binding: SessionBinding, current: CaptureOnboardingState): String? {
         val retired = ownerSession.commitIfCurrent(binding) {
-                credentials.current()?.let { previous ->
-                    retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, previous.generation, previous.revocationCapability, Instant.now().toString()))
-                    credentials.clear()
-                }
+            credentials.current()?.let { previous ->
+                retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, previous.generation, previous.revocationCapability, Instant.now().toString()))
+                credentials.clear()
             }
+        }
         if (!retired) return null
-            val grant = withContext(OwnerWork(binding)) { captureApi.issueCaptureCredential(
-                CapturePairingRequest(
-                    deviceName = deviceName,
-                    sourceScopes = listOf(requireNotNull(current.selected)),
-                    explicitConsent = true,
-                    expectedRevision = current.sourceConfigRevision ?: 0,
-                ),
-            ) }
-            if (ownerSession.binding() != binding || grant.identity != binding.identity) {
-                retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, grant.generation, grant.revocationCapability, Instant.now().toString()))
-                return null
-            }
-            val committed = ownerSession.commitIfCurrent(binding) { credentials.save(
-                CaptureCredentialRecord(
-                    credential = grant.credential,
-                    deviceId = grant.deviceId,
-                    generation = grant.generation,
-                    expiresAt = grant.expiresAt,
-                    revocationCapability = grant.revocationCapability,
-                    identity = grant.identity,
-                    sessionEpoch = binding.epoch,
-                ),
-            )
-            }
-            if (!committed) {
-                retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, grant.generation, grant.revocationCapability, Instant.now().toString()))
-                return null
-            }
+        val grant = withContext(OwnerWork(binding)) { captureApi.issueCaptureCredential(
+            CapturePairingRequest(
+                deviceName = deviceName,
+                sourceScopes = listOf(requireNotNull(current.selected)),
+                explicitConsent = true,
+                expectedRevision = current.sourceConfigRevision ?: 0,
+            ),
+        ) }
+        if (ownerSession.binding() != binding || grant.identity != binding.identity) {
+            retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, grant.generation, grant.revocationCapability, Instant.now().toString()))
+            return null
+        }
+        val committed = ownerSession.commitIfCurrent(binding) { credentials.save(
+            CaptureCredentialRecord(
+                credential = grant.credential,
+                deviceId = grant.deviceId,
+                generation = grant.generation,
+                expiresAt = grant.expiresAt,
+                revocationCapability = grant.revocationCapability,
+                identity = grant.identity,
+                sessionEpoch = binding.epoch,
+            ),
+        )
+        }
+        if (!committed) {
+            retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, grant.generation, grant.revocationCapability, Instant.now().toString()))
+            return null
+        }
         return grant.expiresAt
     }
 

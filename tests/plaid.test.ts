@@ -38,7 +38,7 @@ describe('Plaid integration primitives', () => {
       name: 'Metro Toronto',
       pending: false,
       personal_finance_category: { primary: 'FOOD_AND_DRINK' },
-    }, 'account-rbc');
+    }, {accountId: 'account-rbc'});
 
     expect(transaction).toMatchObject({
       id: 'plaid-account-rbc-txn-1',
@@ -62,7 +62,7 @@ describe('Plaid integration primitives', () => {
       date: '2026-10-09',
       name: 'Euro merchant',
       pending: false,
-    }, 'account-eur');
+    }, {accountId: 'account-eur'});
     const yen = mapPlaidTransaction({
       transaction_id: 'txn-jpy',
       account_id: 'plaid-account-1',
@@ -71,7 +71,7 @@ describe('Plaid integration primitives', () => {
       date: '2026-10-09',
       name: 'Yen merchant',
       pending: false,
-    }, 'account-jpy');
+    }, {accountId: 'account-jpy'});
     const dinar = mapPlaidTransaction({
       transaction_id: 'txn-tnd',
       account_id: 'plaid-account-1',
@@ -80,7 +80,7 @@ describe('Plaid integration primitives', () => {
       date: '2026-10-09',
       name: 'Dinar merchant',
       pending: false,
-    }, 'account-tnd');
+    }, {accountId: 'account-tnd'});
 
     expect(euro).toMatchObject({ currency: 'EUR', amountMinor: -1234 });
     expect(yen).toMatchObject({ currency: 'JPY', amountMinor: -123 });
@@ -96,7 +96,7 @@ describe('Plaid integration primitives', () => {
       date: '2026-10-09',
       name: 'Unknown currency merchant',
       pending: false,
-    }, 'account-unknown')).toBeNull();
+    }, {accountId: 'account-unknown'})).toBeNull();
   });
 
   it('uses the pending transaction id so a posted transaction updates the same record', () => {
@@ -109,7 +109,7 @@ describe('Plaid integration primitives', () => {
       merchant_name: 'Cafe',
       name: 'Cafe',
       pending: true,
-    }, 'account-rbc');
+    }, {accountId: 'account-rbc'});
     const posted = mapPlaidTransaction({
       transaction_id: 'posted-1',
       pending_transaction_id: 'pending-1',
@@ -120,7 +120,7 @@ describe('Plaid integration primitives', () => {
       merchant_name: 'Cafe',
       name: 'Cafe',
       pending: false,
-    }, 'account-rbc');
+    }, {accountId: 'account-rbc'});
 
     expect(pending).not.toBeNull();
     expect(posted).not.toBeNull();
@@ -150,7 +150,7 @@ describe('Plaid integration primitives', () => {
       merchant_name: 'Cafe',
       name: 'Cafe',
       pending: true,
-    }, 'account-rbc', 'item-rbc');
+    }, {accountId: 'account-rbc', itemId: 'item-rbc'});
     const posted = mapPlaidTransaction({
       transaction_id: 'posted-lock-1',
       pending_transaction_id: 'pending-lock-1',
@@ -161,7 +161,7 @@ describe('Plaid integration primitives', () => {
       merchant_name: 'Cafe posted',
       name: 'Cafe posted',
       pending: false,
-    }, 'account-rbc', 'item-rbc');
+    }, {accountId: 'account-rbc', itemId: 'item-rbc'});
     expect(pending).not.toBeNull();
     expect(posted).not.toBeNull();
 

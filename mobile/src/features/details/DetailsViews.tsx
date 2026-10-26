@@ -138,13 +138,20 @@ function AccountsBody({lunchFlowActions,dark,state,data,link,disabled,lunchFlowD
   return <><Copy dark={dark}>Plaid handles bank authorization. Select which accounts Border Ledger can use.</Copy><Status dark={dark} state={state} onRetry={onRetry} label="bank status"/>{message?<View accessibilityLiveRegion="polite"><Copy dark={dark}>{message}</Copy></View>:null}{canCancel?<View><Copy dark={dark}>Authorization has not opened yet. You can safely cancel this handoff.</Copy><Action dark={dark} label="Cancel bank authorization" disabled={state.phase!=='ready'} onPress={onCancelConnect}/></View>:null}{data?<AccountsDataSection lunchFlowActions={lunchFlowActions} dark={dark} state={state} data={data} link={link} disabled={disabled} lunchFlowDisabled={lunchFlowDisabled} selected={selected} setSelected={setSelected} onLoadMore={onLoadMore} onConnect={onConnect} onSelect={onSelect} onCancel={onCancel} onSync={onSync} onDisconnect={onDisconnect} onOpenAccount={onOpenAccount} onLunchFlowSelection={onLunchFlowSelection} onLunchFlowSync={onLunchFlowSync}/>:null}</>;
 }
 
-export function AccountsView({lunchFlowMessage=null,onLunchFlowAuthorize=()=>{},onLunchFlowCancel=()=>{},onLunchFlowDisconnect=()=>{},dark,state,mutation,lunchFlowBusy=false,onRetry,onLoadMore,onConnect,onCancelConnect,onSelect,onCancel,onSync,onDisconnect,onLunchFlowSelection=()=>{},onLunchFlowSync=()=>{}}:Base&{lunchFlowMessage?:string|null;onLunchFlowAuthorize?():void;onLunchFlowCancel?():void;onLunchFlowDisconnect?(binding:LunchFlowBinding):void;state:LoadState<AccountsData>;lunchFlowBusy?:boolean;onConnect(reconnect:string|null):void;onCancelConnect():void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(id:string):void;onLunchFlowSelection?(selections:LunchFlowSelection[]):void;onLunchFlowSync?():void}) {
-  const data=state.data,link=data?.link,[selected,setSelected]=useState<string[]>([]),[account,setAccount]=useState<Account|null>(null),[disconnect,setDisconnect]=useState<Connection|null>(null);
-  useEffect(()=>{setSelected([]);},[link?.pendingConnectionId]);
+function useAccountInteractions(state:LoadState<AccountsData>,onDisconnect:(id:string)=>void){
+  const [selected,setSelected]=useState<string[]>([]),[account,setAccount]=useState<Account|null>(null),[disconnect,setDisconnect]=useState<Connection|null>(null);
+  const pendingConnectionId=state.data?.link?.pendingConnectionId;
+  useEffect(()=>{setSelected([]);},[pendingConnectionId]);
   useEffect(()=>{if(state.phase==='locked'){setAccount(null);setDisconnect(null);setSelected([]);}},[state.phase]);
+  const confirmDisconnect=()=>{if(disconnect){onDisconnect(disconnect.connectionId);setDisconnect(null);}};
+  return {selected,setSelected,account,setAccount,disconnect,setDisconnect,confirmDisconnect};
+}
+
+export function AccountsView({lunchFlowMessage=null,onLunchFlowAuthorize=()=>{},onLunchFlowCancel=()=>{},onLunchFlowDisconnect=()=>{},dark,state,mutation,lunchFlowBusy=false,onRetry,onLoadMore,onConnect,onCancelConnect,onSelect,onCancel,onSync,onDisconnect,onLunchFlowSelection=()=>{},onLunchFlowSync=()=>{}}:Base&{lunchFlowMessage?:string|null;onLunchFlowAuthorize?():void;onLunchFlowCancel?():void;onLunchFlowDisconnect?(binding:LunchFlowBinding):void;state:LoadState<AccountsData>;lunchFlowBusy?:boolean;onConnect(reconnect:string|null):void;onCancelConnect():void;onSelect(ids:string[]):void;onCancel():void;onSync():void;onDisconnect(id:string):void;onLunchFlowSelection?(selections:LunchFlowSelection[]):void;onLunchFlowSync?():void}) {
+  const data=state.data,link=data?.link;
+  const {selected,setSelected,account,setAccount,disconnect,setDisconnect,confirmDisconnect}=useAccountInteractions(state,onDisconnect);
   const disabled=isMutationDisabled(state,mutation)||link?.state==='reconciliation_required',lunchFlowDisabled=disabled||lunchFlowBusy;
   const message=linkMessage(link);
-  const confirmDisconnect=()=>{if(disconnect){onDisconnect(disconnect.connectionId);setDisconnect(null);}};
   return <View style={styles.section}>
     <AccountsBody lunchFlowActions={{message:lunchFlowMessage,authorize:onLunchFlowAuthorize,cancel:onLunchFlowCancel,disconnect:onLunchFlowDisconnect}} dark={dark} state={state} data={data} link={link} disabled={disabled} lunchFlowDisabled={lunchFlowDisabled} selected={selected} setSelected={setSelected} message={message} onRetry={onRetry} onCancelConnect={onCancelConnect} onLoadMore={onLoadMore} onConnect={onConnect} onSelect={onSelect} onCancel={onCancel} onSync={onSync} onDisconnect={connection=>setDisconnect(connection)} onOpenAccount={setAccount} onLunchFlowSelection={onLunchFlowSelection} onLunchFlowSync={onLunchFlowSync}/>
     <MutationStatus dark={dark} mutation={mutation}/>

@@ -40,7 +40,7 @@ it('does not publish transactions or cursor after disabled-during-fetch',async()
  expect(log).toHaveBeenCalledExactlyOnceWith('queue_message_failed','Error');
 });
 it('rolls back all changed rows and cursor when an incoming identity collides with manual history',async()=>{
- const {db,env,job}=await setup();const log=vi.spyOn(console,'error').mockImplementation(()=>{});const colliding={...transaction,transaction_id:'collision'};const mapped=mapPlaidTransaction(colliding,'plaid-same-account','same-item')!;
+ const {db,env,job}=await setup();const log=vi.spyOn(console,'error').mockImplementation(()=>{});const colliding={...transaction,transaction_id:'collision'};const mapped=mapPlaidTransaction(colliding, {accountId: 'plaid-same-account', itemId: 'same-item'})!;
  await db.prepare(`INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint)
  VALUES (?,'plaid-same-account','2026-10-24','Manual',-9900,'CAD','Food','expense','confirmed','manual','manual')`).bind(mapped.id).run();
  vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({added:[transaction,colliding],modified:[],removed:[],next_cursor:'new',has_more:false}));

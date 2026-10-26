@@ -117,7 +117,13 @@ function kindFor(transaction: PlaidTransaction, amountMinor: number): Transactio
   });
 }
 
-export function mapPlaidTransaction(transaction: PlaidTransaction, accountId: string, itemId?: string): MappedPlaidTransaction | null {
+export interface PlaidTransactionBinding {
+  accountId: string;
+  itemId?: string;
+}
+
+export function mapPlaidTransaction(transaction: PlaidTransaction, binding: PlaidTransactionBinding): MappedPlaidTransaction | null {
+  const { accountId, itemId } = binding;
   const currency = normalizedCurrency(transaction);
   if (!currency) return null;
 

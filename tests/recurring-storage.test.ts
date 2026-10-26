@@ -37,11 +37,11 @@ describe('Plaid transaction storage identity', () => {
     fixtures.push(fixture);
     await seedLedger(fixture.db);
 
-    const pending = mapPlaidTransaction(plaidTransaction(), 'account-rbc', 'item-1');
+    const pending = mapPlaidTransaction(plaidTransaction(), {accountId: 'account-rbc', itemId: 'item-1'});
     expect(pending).not.toBeNull();
     await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, pending!);
 
-    const posted = mapPlaidTransaction(plaidTransaction({ transaction_id: 'posted-1', pending_transaction_id: 'pending-1', pending: false }), 'account-rbc', 'item-1');
+    const posted = mapPlaidTransaction(plaidTransaction({ transaction_id: 'posted-1', pending_transaction_id: 'pending-1', pending: false }), {accountId: 'account-rbc', itemId: 'item-1'});
     expect(posted).not.toBeNull();
     await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, posted!);
     await removePlaidTransaction(fixture.db,OWNER_LEDGER, 'item-1', 'pending-1');
@@ -50,7 +50,7 @@ describe('Plaid transaction storage identity', () => {
     expect(afterPendingRemoval.results).toHaveLength(1);
     expect(afterPendingRemoval.results[0]).toMatchObject({ id: pending!.id, amount_minor: -2000, status: 'confirmed', provider_transaction_id: 'posted-1', provider_pending_transaction_id: 'pending-1' });
 
-    const modified = mapPlaidTransaction(plaidTransaction({ transaction_id: 'posted-1', amount: 21, pending: false, pending_transaction_id: null }), 'account-rbc', 'item-1');
+    const modified = mapPlaidTransaction(plaidTransaction({ transaction_id: 'posted-1', amount: 21, pending: false, pending_transaction_id: null }), {accountId: 'account-rbc', itemId: 'item-1'});
     expect(modified).not.toBeNull();
     await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, modified!);
 

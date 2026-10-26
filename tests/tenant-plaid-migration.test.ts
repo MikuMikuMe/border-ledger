@@ -65,9 +65,9 @@ it('recovers exact pending-to-posted lineage while rejecting contradictory provi
    const published=await connectionPublicationStatements(source.db,OWNER_LEDGER,{providerItemId:`${raw}-item`,institution:'Bank',ciphertext:'cipher',iv:'iv',accounts:[{providerAccountId:raw,name:'Bank',currency:'CAD',kind:'chequing',mask:null,subtype:null}]});
    await source.db.batch(published.statements);
    const pending={transaction_id:`pending-${raw}`,account_id:raw,amount:12,iso_currency_code:'CAD',date:'2026-01-01',name:'Pending purchase',pending:true};
-   const pendingId=await upsertPlaidTransaction(source.db,OWNER_LEDGER,mapPlaidTransaction(pending,`plaid-${raw}`,`${raw}-item`)!);
+   const pendingId=await upsertPlaidTransaction(source.db,OWNER_LEDGER,mapPlaidTransaction(pending, {accountId: `plaid-${raw}`, itemId: `${raw}-item`})!);
    const posted={...pending,transaction_id:`posted-${raw}`,pending_transaction_id:`pending-${raw}`,date:'2026-01-03',name:'Posted purchase',pending:false};
-   expect(await upsertPlaidTransaction(source.db,OWNER_LEDGER,mapPlaidTransaction(posted,`plaid-${raw}`,`${raw}-item`)!)).toBe(pendingId);
+   expect(await upsertPlaidTransaction(source.db,OWNER_LEDGER,mapPlaidTransaction(posted, {accountId: `plaid-${raw}`, itemId: `${raw}-item`})!)).toBe(pendingId);
   }
   await source.db.prepare("UPDATE transaction_source_records SET provider_pending_transaction_id='unrelated-pending' WHERE account_id='plaid-wrong-pending' AND provider_transaction_id IS NULL").run();
   await source.db.prepare("UPDATE transaction_source_records SET provider_transaction_id='unrelated-current' WHERE account_id='plaid-wrong-current' AND provider_transaction_id IS NOT NULL").run();

@@ -31,7 +31,7 @@ describe('Task 3 provider and candidate identity', () => {
       merchant_name: 'Synthetic Cafe',
       name: 'Synthetic Cafe',
       pending: false,
-    }, 'account-rbc', 'item-rbc');
+    }, {accountId: 'account-rbc', itemId: 'item-rbc'});
     expect(first).not.toBeNull();
     await upsertPlaidTransaction(fixture.db,OWNER_LEDGER, first!);
 
@@ -80,7 +80,7 @@ describe('Task 3 provider and candidate identity', () => {
       merchant_name: 'Synthetic Cafe',
       name: 'Synthetic Cafe',
       pending: true,
-    }, 'account-rbc', 'item-rbc');
+    }, {accountId: 'account-rbc', itemId: 'item-rbc'});
     const posted = mapPlaidTransaction({
       transaction_id: 'posted-1',
       pending_transaction_id: 'pending-1',
@@ -91,7 +91,7 @@ describe('Task 3 provider and candidate identity', () => {
       merchant_name: 'Synthetic Cafe',
       name: 'Synthetic Cafe',
       pending: false,
-    }, 'account-rbc', 'item-rbc');
+    }, {accountId: 'account-rbc', itemId: 'item-rbc'});
     const modified = mapPlaidTransaction({
       transaction_id: 'posted-1',
       account_id: 'plaid-account-rbc',
@@ -101,7 +101,7 @@ describe('Task 3 provider and candidate identity', () => {
       merchant_name: 'Synthetic Cafe',
       name: 'Synthetic Cafe',
       pending: false,
-    }, 'account-rbc', 'item-rbc');
+    }, {accountId: 'account-rbc', itemId: 'item-rbc'});
     expect(pending).not.toBeNull();
     expect(posted).not.toBeNull();
     expect(modified).not.toBeNull();

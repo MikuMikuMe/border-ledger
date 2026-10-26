@@ -583,7 +583,7 @@ async function syncPlaidItem(env:Env,binding:PlaidJobBinding) {
     const statements:D1Statement[]=[plaidJobGuard(env.DB,binding)];
     for(const transaction of [...changes.added,...changes.modified]) {
       const accountId=accounts.get(transaction.account_id);if(!accountId)continue;
-      const mapped=mapPlaidTransaction(transaction,accountId,binding.itemId);if(!mapped)continue;
+      const mapped=mapPlaidTransaction(transaction, {accountId: accountId, itemId: binding.itemId});if(!mapped)continue;
       statements.push(...(await plaidTransactionStatements(env.DB,binding,mapped)).statements);
       statements.push(env.DB.prepare("UPDATE accounts SET last_synced_at=CURRENT_TIMESTAMP,status='connected' WHERE id=? AND ledger_id=?").bind(accountId,binding.ledgerId));
     }
