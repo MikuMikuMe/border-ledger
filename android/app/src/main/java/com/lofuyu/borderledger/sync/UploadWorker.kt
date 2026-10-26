@@ -1,6 +1,9 @@
 package com.lofuyu.borderledger.sync
 
 import android.content.Context
+import com.lofuyu.borderledger.auth.CaptureWorkBoundary
+import com.lofuyu.borderledger.auth.CaptureWork
+import kotlin.coroutines.coroutineContext
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.lofuyu.borderledger.BorderLedgerApplication
@@ -34,21 +37,32 @@ class CaptureUploadCoordinator(
     private val health: CaptureHealthStore,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val batchEncoder: (List<CaptureUploadEvent>) -> ByteArray = CaptureUploadJson::encode,
+    private val boundary: CaptureWorkBoundary? = null,
 ) {
     private val mutex = Mutex()
 
-    suspend fun sync(): UploadSyncResult = mutex.withLock {
+    suspend fun sync(): UploadSyncResult {
+        val paused = UploadSyncResult.PairingRequired("capture_identity_required")
+        val active = boundary ?: return paused
+        return try { active.run<UploadSyncResult>(paused) { syncBound() } }
+        catch (_: Exception) { paused }
+    }
+    private suspend fun syncBound(): UploadSyncResult = mutex.withLock {
         val pending = store.nextBatch(CaptureIntakeLimits.MAX_BATCH_EVENTS)
         if (pending.isEmpty()) {
             health.uploadReady()
             return@withLock UploadSyncResult.NoPendingEvents
         }
+        val work = requireNotNull(coroutineContext[CaptureWork])
+        if (pending.any { it.ownerLedgerId != work.credential.identity?.ledgerId }) return@withLock UploadSyncResult.PairingRequired("capture_identity_mismatch")
         val batch = boundedBatch(pending)
         if (batch == null) {
             val invalid = pending.first()
             return@withLock quarantine(listOf(invalid), "payload_invalid_or_too_large")
         }
-        when (val outcome = client.upload(batch.map { CaptureUploadEvent(it.eventId, it.payload.copyOf()) })) {
+        val outcome = client.upload(batch.map { CaptureUploadEvent(it.eventId, it.payload.copyOf()) })
+        requireNotNull(boundary).requireCurrent(work)
+        when (outcome) {
             is CaptureUploadResult.Success -> persistAcknowledgements(batch, outcome.acknowledgements)
             is CaptureUploadResult.Retryable -> {
                 val attempt = (health.state.value.uploadRetryAttempt + 1).coerceAtLeast(1)
@@ -95,8 +109,10 @@ class CaptureUploadCoordinator(
         // The encrypted state write completes before this separate purge. A lost
         // response therefore leaves the exact batch replayable until the next run.
         if (localAcks.isNotEmpty()) {
-            store.applyAcknowledgements(localAcks)
-            store.purgeAcknowledged()
+            requireNotNull(boundary).commit(requireNotNull(coroutineContext[CaptureWork])) {
+                store.applyAcknowledgements(localAcks)
+                store.purgeAcknowledged()
+            }
             health.uploadSucceeded(clock())
         }
         return if (unique.size == batch.size) {
@@ -115,10 +131,12 @@ class CaptureUploadCoordinator(
 
     private suspend fun quarantine(items: List<QueuedAlert>, code: String): UploadSyncResult {
         if (items.isEmpty()) return UploadSyncResult.Quarantined(emptyList(), code)
-        store.applyAcknowledgements(items.map {
-            AlertAcknowledgement(it.eventId, code, CaptureAcknowledgementDisposition.REVIEW)
-        })
-        store.purgeAcknowledged()
+        requireNotNull(boundary).commit(requireNotNull(coroutineContext[CaptureWork])) {
+            store.applyAcknowledgements(items.map {
+                AlertAcknowledgement(it.eventId, code, CaptureAcknowledgementDisposition.REVIEW)
+            })
+            store.purgeAcknowledged()
+        }
         health.uploadSucceeded(clock())
         return UploadSyncResult.Quarantined(items.map(QueuedAlert::eventId), code)
     }

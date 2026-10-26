@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import registeredCurrencies from '../contracts/currencies.json';

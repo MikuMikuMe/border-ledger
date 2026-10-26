@@ -27,7 +27,7 @@ class OwnerSessionGenerationTest {
         checkedRefreshing.await()
         assertFalse(read.isCompleted)
 
-        state.value = OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null)
+        state.value = OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session"))
         assertEquals("owner-generation", read.await())
     }
 }

@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import assert from 'node:assert/strict';
 import worker from '../worker/index';
 import { createOpaqueCredential } from '../worker/mobile-auth';

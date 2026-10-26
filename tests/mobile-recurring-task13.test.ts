@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMobileRequest } from '../worker/mobile';
 import { createOpaqueCredential, hashSecret, type OwnerScope } from '../worker/mobile-auth';

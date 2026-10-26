@@ -79,6 +79,8 @@ export interface PairingClaimResult {
   deviceId: string | null;
   credentialExpiresAt: string | null;
   revocationCapability?: string;
+  userId?: string;
+  ledgerId?: string;
 }
 
 interface PairingRow {
@@ -348,13 +350,13 @@ export async function claimPairing(db: D1Database, input: PairingClaimInput, con
       .bind(context.ledgerId, pairing.device_id, input.credentialHash).first<{ id: string; expires_at: string }>();
     if (!existing) throw new MobileAuthError('claim_conflict', 'The pairing credential is not available.', 409);
     await validateClaimDisclosure(db, pairing.id, config);
-    return { state: 'claimed', deviceId: pairing.device_id, credentialExpiresAt: existing.expires_at };
+    return { state: 'claimed', userId: context.userId, ledgerId: context.ledgerId, deviceId: pairing.device_id, credentialExpiresAt: existing.expires_at };
   }
   if (pairing.status !== 'approved' || !pairing.approved_subject_hash) throw new MobileAuthError('not_approved', 'The pairing is awaiting explicit owner approval.', 202);
   const credentialId = randomId();
   const credentialExpiresAt = isoAfter(at, CAPTURE_LIFETIME);
   const revocation = await captureRevocationCapability(config, credentialId, 1, credentialExpiresAt);
-  const sealed = await encryptReplayResponse({ state: 'claimed', deviceId: pairing.device_id, credentialExpiresAt, revocationCapability: revocation }, config);
+  const sealed = await encryptReplayResponse({ state: 'claimed', userId: context.userId, ledgerId: context.ledgerId, deviceId: pairing.device_id, credentialExpiresAt, revocationCapability: revocation }, config);
   const results = await publishPairingBatch(db, [
     financialAuthorityGuard(db, context, 'devices:manage'),
     claimPublicationGuard(db, context, pairing),
@@ -369,7 +371,7 @@ export async function claimPairing(db: D1Database, input: PairingClaimInput, con
     if (!isReviewStateConflict(error)) throw error;
     return [];
   });
-  if (claimPublicationSucceeded(results)) return { state: 'claimed', deviceId: pairing.device_id, credentialExpiresAt, revocationCapability: revocation };
+  if (claimPublicationSucceeded(results)) return { state: 'claimed', userId: context.userId, ledgerId: context.ledgerId, deviceId: pairing.device_id, credentialExpiresAt, revocationCapability: revocation };
   const recovered = await claimReplay(db, { context, digest, at: now(config), pairingId: pairing.id }, config);
   if (recovered) return recovered;
   throw new MobileAuthError('claim_conflict', 'The pairing claim conflicts with an existing credential.', 409);
@@ -407,7 +409,7 @@ export async function renewCaptureCredential(db: D1Database, input: { owner: Own
   requireRenewalPublished(results[1]);
   const acknowledged = await currentCaptureCredential(db, owner, input.deviceId);
   if (acknowledged.id !== id) throw new MobileAuthError('revoked', 'The capture grant changed.', 403);
-  return { state: 'claimed', deviceId: input.deviceId, credentialExpiresAt: expiresAt, revocationCapability: revocation };
+  return { state: 'claimed', userId: owner.userId, ledgerId: owner.ledgerId, deviceId: input.deviceId, credentialExpiresAt: expiresAt, revocationCapability: revocation };
 }
 
 async function currentCaptureCredential(db: D1Database, owner: OwnerContext, deviceId: string) {

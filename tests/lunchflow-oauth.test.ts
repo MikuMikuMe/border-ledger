@@ -58,7 +58,7 @@ describe('Lunch Flow single-use OAuth',()=>{
     const gate=deferred<Response>(),entered=deferred<void>();
     const f=await setup(async(_input,init)=>{if(init?.method==='DELETE'){entered.resolve();return gate.promise;}return Response.json(token);});
     try{const id=await connect(f);const start=await f.oauth.startWeb(SECOND_LEDGER,browser);
-      const disconnect=f.connections.disconnect(SECOND_LEDGER,id);await entered.promise;
+      const disconnect=f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!);await entered.promise;
       await expect(f.oauth.startWeb(SECOND_LEDGER,browser)).rejects.toThrow();
       await expect(f.oauth.complete(SECOND_LEDGER,browser,{state:new URL(start.authorizationUrl).searchParams.get('state')!,cookie:start.cookie,code:'code'})).rejects.toThrow();
       gate.resolve(new Response(null,{status:204}));await disconnect;
@@ -73,10 +73,10 @@ it('disconnect fences an initial token exchange that has not returned yet',async
     const start=await f.oauth.startWeb(SECOND_LEDGER,browser);
     const completing=f.oauth.complete(SECOND_LEDGER,browser,{state:new URL(start.authorizationUrl).searchParams.get('state')!,cookie:start.cookie,code:'code'});
     const rejected=expect(completing).rejects.toThrow();await entered.promise;
-    const pending=await f.connections.disconnect(SECOND_LEDGER,start.connectionId);
+    const pending=await f.connections.disconnect(SECOND_LEDGER,start.connectionId,(await f.connections.status(SECOND_LEDGER)).generation!);
     gate.resolve(Response.json(token));await rejected;
     expect(pending).toMatchObject({connected:false,remoteRevocation:'pending',canReconnect:false});
-    expect(await f.connections.disconnect(SECOND_LEDGER,start.connectionId)).toMatchObject({remoteRevocation:'succeeded',connected:false});
+    expect(await f.connections.disconnect(SECOND_LEDGER,start.connectionId,(await f.connections.status(SECOND_LEDGER)).generation!)).toMatchObject({remoteRevocation:'succeeded',connected:false});
   }finally{f.close();}
 });
 it('invalidates other issued states when an authorization completes',async()=>{

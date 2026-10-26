@@ -14,7 +14,25 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class UploadSchedulerPolicyTest {
+    @Test
+    fun detachedSchedulingAttemptGetsCurrentIdentityAndStopsAfterLogout() = runTest {
+        val identity = com.lofuyu.borderledger.IdentityFixture()
+        var calls = 0
+        val scheduler = IdentityCaptureUploadScheduler(object : CaptureUploadScheduler {
+            override suspend fun schedule(): UploadScheduleResult {
+                org.junit.Assert.assertEquals(identity.credential, kotlin.coroutines.coroutineContext[com.lofuyu.borderledger.auth.CaptureWork]?.credential)
+                calls++
+                return UploadScheduleResult.ENQUEUED
+            }
+        }, identity.boundary)
+        assertEquals(UploadScheduleResult.ENQUEUED, scheduler.schedule())
+        identity.binding = null
+        assertEquals(UploadScheduleResult.PAUSED_CAPTURE_CREDENTIAL, scheduler.schedule())
+        assertEquals(1, calls)
+    }
+
     @Test
     fun expiredCaptureCredentialPausesUploadWithoutPausingLocalIntake() {
         assertEquals(
@@ -73,7 +91,7 @@ class UploadSchedulerPolicyTest {
                 generation = 1,
                 expiresAt = "1970-01-01T00:16:40Z",
                 revocationCapability = "revoke",
-            ),
+            identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), sessionEpoch = "test-session"),
         )
 
         assertEquals(1, scheduler.calls)

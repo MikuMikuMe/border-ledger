@@ -84,6 +84,9 @@ export interface OwnerRefreshInput {
 }
 
 export interface OwnerTokenResponse {
+  userId: string;
+  ledgerId: string;
+  refreshExpiresAt: string;
   accessToken: string;
   refreshToken: string;
   expiresAt: string;
@@ -304,11 +307,11 @@ async function atomicApproval(db: D1Database, approval: { context: LedgerContext
   return (results[0]?.meta?.changes ?? 0) === 1;
 }
 
-async function ownerResponse(config: MobileAuthConfig, familyId: string, generation: number, subjectHash: string, deviceId: string | null, refreshExpiresAt: string, accessExpiresAt: string, revocationCapability: string, revision: number): Promise<OwnerTokenResponse> {
+async function ownerResponse(config: MobileAuthConfig, familyId: string, generation: number, subjectHash: string, deviceId: string | null, refreshExpiresAt: string, accessExpiresAt: string, revocationCapability: string, revision: number, context: { userId: string; ledgerId: string }): Promise<OwnerTokenResponse> {
   const environmentHash = await hashSecret(config.environment);
   const accessToken = await createOpaqueCredential({ kind: 'owner-access', familyId, generation, subjectHash, deviceId, expiresAt: accessExpiresAt, environmentHash }, config);
   const refreshToken = await createOpaqueCredential({ kind: 'owner-refresh', familyId, generation, expiresAt: refreshExpiresAt, environmentHash }, config);
-  return { accessToken, refreshToken, expiresAt: accessExpiresAt, scopes: [...OWNER_SCOPES], revision, revocationCapability };
+  return { userId: context.userId, ledgerId: context.ledgerId, refreshExpiresAt, accessToken, refreshToken, expiresAt: accessExpiresAt, scopes: [...OWNER_SCOPES], revision, revocationCapability };
 }
 
 async function revocationCapability(config: MobileAuthConfig, grantId: string, generation: number, expiresAt: string) {
@@ -369,7 +372,7 @@ export async function exchangeOwnerCode(db: D1Database, input: OwnerCodeExchange
   const refreshHash = await hashSecret(refreshTokenPlaceholder);
   const capabilityPlaceholder = await revocationCapability(config, familyId, 1, refreshExpiresAt);
   const revocationHash = await hashSecret(capabilityPlaceholder);
-  const response = await ownerResponse(config, familyId, 1, request.approved_subject_hash, request.installation_id, refreshExpiresAt, accessExpiresAt, capabilityPlaceholder, 1);
+  const response = await ownerResponse(config, familyId, 1, request.approved_subject_hash, request.installation_id, refreshExpiresAt, accessExpiresAt, capabilityPlaceholder, 1, context);
   // The refresh token hash must describe the token returned to the client.
   const exactRefreshHash = await hashSecret(response.refreshToken);
   const committed = await atomicExchange(db, request, input, digest, response, config, at, familyId, request.approved_subject_hash, exactRefreshHash, revocationHash, accessExpiresAt, refreshExpiresAt, input.staySignedIn === true ? refreshExpiresAt : null);
@@ -495,7 +498,7 @@ export async function refreshOwnerSession(db: D1Database, input: OwnerRefreshInp
   const accessExpiresAt = isoAfter(at, Math.min(FIFTEEN_MINUTES, Date.parse(family.refresh_expires_at) - at.getTime()));
   const refreshExpiresAt = family.refresh_expires_at;
   const nextCapability = await revocationCapability(config, family.id, nextGeneration, refreshExpiresAt);
-  const response = await ownerResponse(config, family.id, nextGeneration, family.subject_hash, family.installation_id, refreshExpiresAt, accessExpiresAt, nextCapability, nextAccessGeneration);
+  const response = await ownerResponse(config, family.id, nextGeneration, family.subject_hash, family.installation_id, refreshExpiresAt, accessExpiresAt, nextCapability, nextAccessGeneration, context);
   const committed = await atomicRefresh(db, family, input, digest, payload.generation, nextGeneration, nextAccessGeneration, accessExpiresAt, refreshExpiresAt, await hashSecret(response.refreshToken), await hashSecret(nextCapability), response, config, at, refreshExpiresAt);
   if (committed) {
     const acknowledged = await authenticateOwner(committed.accessToken, db, config);

@@ -15,7 +15,7 @@ class CaptureOnboardingCoordinatorTest {
     @Test
     fun changingSelectedScopeRequiresNewMatchingListenerEvidenceBeforeAuthorization() = runTest {
         val client=FakeCaptureApi()
-        val owner=TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z",emptyList(),null))
+        val owner=TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z",emptyList(),null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val coordinator=CaptureOnboardingCoordinator(owner,client)
         coordinator.setProfiles(listOf(profile))
         coordinator.select(profile,"CAD")
@@ -47,7 +47,7 @@ class CaptureOnboardingCoordinatorTest {
     @Test
     fun loginDoesNotSilentlyAuthorizeCaptureAndSyntheticTestCannotMarkReady() = runTest {
         val client = FakeCaptureApi()
-        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null))
+        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val coordinator = CaptureOnboardingCoordinator(owner, client)
         coordinator.setProfiles(listOf(profile))
         coordinator.select(profile, "CAD")
@@ -80,7 +80,7 @@ class CaptureOnboardingCoordinatorTest {
     @Test
     fun sourceTestStaysAwaitingUntilObservedEvidence() = runTest {
         val client = FakeCaptureApi()
-        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null))
+        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val coordinator = CaptureOnboardingCoordinator(owner, client)
         coordinator.setProfiles(listOf(profile))
         coordinator.select(profile, "CAD")
@@ -99,7 +99,7 @@ class CaptureOnboardingCoordinatorTest {
     @Test
     fun emptyProfileSetIsImportOnlyAndCannotIssueCaptureCredential() = runTest {
         val client = FakeCaptureApi()
-        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null))
+        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val coordinator = CaptureOnboardingCoordinator(owner, client)
 
         coordinator.setProfiles(emptyList())
@@ -114,7 +114,7 @@ class CaptureOnboardingCoordinatorTest {
     @Test
     fun ownerMappingRevisionIsForwardedToTheRealCaptureCoordinator() = runTest {
         val client = FakeCaptureApi()
-        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null))
+        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val repository = object : CaptureProfileRepository {
             override suspend fun load() = CaptureProfileLoadResult.Available(listOf(profile), revision = 7)
         }
@@ -133,7 +133,7 @@ class CaptureOnboardingCoordinatorTest {
     @Test
     fun selectedInstrumentHintIsForwardedWithOwnerMappingRevision() = runTest {
         val client = FakeCaptureApi()
-        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null))
+        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val repository = object : CaptureProfileRepository {
             override suspend fun load() = CaptureProfileLoadResult.Available(listOf(hintedProfile), revision = 11)
         }
@@ -151,7 +151,7 @@ class CaptureOnboardingCoordinatorTest {
 
     @Test
     fun emptyAvailableProfileResultStillRemainsImportOnly() = runTest {
-        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null))
+        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val coordinator = CaptureOnboardingCoordinator(
             ownerSession = owner,
             captureApi = FakeCaptureApi(),
@@ -170,7 +170,7 @@ class CaptureOnboardingCoordinatorTest {
     @Test
     fun explicitConsentAndRealSourceTestAreRequiredBeforeCredentialIssuance() = runTest {
         val client = FakeCaptureApi()
-        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null))
+        val owner = TestOwnerStateProvider(OwnerSessionState.SignedIn("2099-01-01T00:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val coordinator = CaptureOnboardingCoordinator(owner, client)
         coordinator.setProfiles(listOf(profile))
         coordinator.select(profile, "CAD")
@@ -218,6 +218,6 @@ private class FakeCaptureApi : CaptureApi {
             generation = 1,
             expiresAt = "2099-01-01T00:00:00Z",
             revocationCapability = "synthetic-revocation",
-        )
+        identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"))
     }
 }

@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CONNECTION_PENDING_TTL_MS,

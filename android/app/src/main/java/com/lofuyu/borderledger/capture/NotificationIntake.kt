@@ -6,6 +6,9 @@ import com.lofuyu.borderledger.local.CaptureCommitResult
 import com.lofuyu.borderledger.local.EncryptedCaptureIntakeStore
 import com.lofuyu.borderledger.parser.BankAlertParser
 import com.lofuyu.borderledger.parser.ParseResult
+import com.lofuyu.borderledger.auth.CaptureWorkBoundary
+import com.lofuyu.borderledger.auth.CaptureWork
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -91,15 +94,30 @@ class BankNotificationIntake(
     private val parserFor: (SourceProfile) -> BankAlertParser,
     private val extractor: NotificationExtractor = NotificationExtractor(),
     private val clock: () -> Long = { System.currentTimeMillis() },
+    private val boundary: CaptureWorkBoundary? = null,
 ) {
     private val mutex = Mutex()
     private var activationAtMillis: Long? = null
     private var tracker: ObservationTracker? = null
 
-    suspend fun onListenerConnected() = mutex.withLock {
+    suspend fun onListenerConnected() {
+        health.listenerConnected()
+        val active = boundary ?: return
+        active.run(Unit) { connectBound() }
+    }
+    /** Called when a new consent credential is saved, before later notifications can be classified. */
+    suspend fun activateCurrentConsent() {
+        val active = requireNotNull(boundary)
+        active.run(Unit) { mutex.withLock { initializeTracker() } }
+    }
+    private suspend fun initializeTracker() {
+        resetTrackerForSession()
+        activationAtMillis = store.ensureActivation(clock())
+        tracker = ObservationTracker(requireNotNull(activationAtMillis), nowMillis = clock)
+    }
+    private suspend fun connectBound() = mutex.withLock {
         try {
-            activationAtMillis = store.ensureActivation(clock())
-            tracker = ObservationTracker(requireNotNull(activationAtMillis), nowMillis = clock)
+            initializeTracker()
             health.storageReady()
             health.listenerConnected()
             health.pendingCount(store.pendingCount())
@@ -109,7 +127,14 @@ class BankNotificationIntake(
         }
     }
 
-    suspend fun process(snapshot: AndroidNotificationSnapshot): NotificationProcessResult = mutex.withLock {
+    suspend fun process(snapshot: AndroidNotificationSnapshot): NotificationProcessResult {
+        val paused = NotificationProcessResult(listOf(CaptureItemResult(CaptureItemStatus.INTAKE_PAUSED)))
+        val active = boundary ?: return paused
+        return try { active.run(paused) { processBound(snapshot) } } catch (_: Exception) { paused }
+    }
+    private var trackerBinding: String? = null
+    private suspend fun processBound(snapshot: AndroidNotificationSnapshot): NotificationProcessResult = mutex.withLock {
+        resetTrackerForSession()
         if (health.monitoringIsPaused()) {
             return@withLock NotificationProcessResult(listOf(CaptureItemResult(CaptureItemStatus.INTAKE_PAUSED)))
         }
@@ -168,6 +193,11 @@ class BankNotificationIntake(
         NotificationProcessResult(itemResults)
     }
 
+    private suspend fun resetTrackerForSession() {
+        val epoch = coroutineContext[CaptureWork]?.partition
+        if (trackerBinding != epoch) { tracker = null; activationAtMillis = null; trackerBinding = epoch }
+    }
+
     private suspend fun processMessage(message: ObservedBankMessage, profile: SourceProfile): CaptureItemResult {
         val parsed = runCatching { parserFor(profile).parse(message, profile) }.getOrElse {
             health.storageFailed("parser_failed")
@@ -188,6 +218,7 @@ class BankNotificationIntake(
                 message = message,
                 event = event,
                 disposition = if (queue) CaptureCandidateDisposition.QUEUED else CaptureCandidateDisposition.REVIEW,
+                ownerLedgerId = coroutineContext[CaptureWork]?.credential?.identity?.ledgerId,
             ),
         )
         return when (commit) {

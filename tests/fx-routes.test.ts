@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../worker/index';

@@ -254,7 +254,7 @@ export async function issueCaptureAuthorization(db:D1Database,inputOwner:OwnerCo
   ]);
   const updated=await readDevice(db,owner,deviceId);
   await assertIssuedCaptureAuthorization(db,owner,{credentialId,deviceId,generation,revision:captureConfig.expectedRevision+1});
-  return {...updated,deviceId,generation,credentialExpiresAt:expiresAt,revocationCapability};
+  return {...updated,userId:owner.userId,ledgerId:owner.ledgerId,deviceId,generation,credentialExpiresAt:expiresAt,revocationCapability};
 }
 
 async function assertIssuedCaptureAuthorization(db:D1Database,owner:OwnerContext,binding:{credentialId:string;deviceId:string;generation:number;revision:number}) {

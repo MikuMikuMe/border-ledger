@@ -7,13 +7,15 @@ import android.os.Build
 import android.os.UserManager
 import android.provider.Settings
 import android.content.pm.PackageManager
+import com.lofuyu.borderledger.auth.SessionBinding
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Runtime capture state is intentionally separate from owner-session state. A
- * missing/expired upload grant must not stop eligible local capture.
+ * Device permissions survive account changes. Financial activity and capture
+ * diagnostics belong to one authenticated local session and reject stale work.
  */
 data class CaptureHealthState(
     val listenerPermission: ListenerPermission = ListenerPermission.UNKNOWN,
@@ -56,15 +58,62 @@ data class CaptureHealthState(
 
 class CaptureHealthStore(
     private val pendingLimit: Int = CaptureIntakeLimits.MAX_STORED_INTAKE_ITEMS,
+    private val owner: (() -> SessionBinding?)? = null,
 ) {
     private val _state = MutableStateFlow(CaptureHealthState(pendingLimit = pendingLimit))
     @Volatile private var monitoringPaused = false
     val state: StateFlow<CaptureHealthState> = _state.asStateFlow()
 
+    private val workBinding = ThreadLocal<SessionBinding?>()
+    private var stateOwner: SessionBinding? = null
+
+    fun context(expected: SessionBinding? = workBinding.get()) = workBinding.asContextElement(expected)
+
+    @Synchronized
+    fun snapshot(expected: SessionBinding?): CaptureHealthState {
+        synchronizeOwner()
+        return if (expected != null && expected == owner?.invoke()) _state.value else deviceState()
+    }
+
+    @Synchronized
+    private fun updateOwned(expected: SessionBinding? = workBinding.get(), change: (CaptureHealthState) -> CaptureHealthState) {
+        synchronizeOwner()
+        if (!acceptsWork(expected)) return
+        _state.value = change(_state.value)
+    }
+
+    private fun acceptsWork(expected: SessionBinding?): Boolean {
+        if (owner == null) return true
+        return expected != null && expected == stateOwner
+    }
+
+    @Synchronized
+    private fun updateDevice(change: (CaptureHealthState) -> CaptureHealthState) {
+        synchronizeOwner()
+        _state.value = change(_state.value)
+    }
+
+    private fun synchronizeOwner() {
+        if (stateOwner != owner?.invoke()) resetOwnerState()
+    }
+    private fun resetOwnerState() {
+        stateOwner = owner?.invoke()
+        _state.value = deviceState()
+    }
+    private fun deviceState(): CaptureHealthState = CaptureHealthState(
+        pendingLimit = pendingLimit,
+        listenerPermission = _state.value.listenerPermission,
+        listenerConnected = _state.value.listenerConnected,
+        appPostingNotificationPermission = _state.value.appPostingNotificationPermission,
+        firstUnlock = _state.value.firstUnlock,
+    )
+
     fun pauseMonitoring() {
         monitoringPaused = true
-        _state.value = _state.value.copy(intake = CaptureHealthState.Intake.WAITING_FOR_LISTENER)
+        synchronized(this) { resetOwnerState() }
     }
+
+    fun resumeAfterConsent() { monitoringPaused = false }
 
     fun monitoringIsPaused(): Boolean = monitoringPaused
 
@@ -78,80 +127,80 @@ class CaptureHealthStore(
             CaptureHealthState.AppPostingNotificationPermission.REVOKED
         }
         val unlocked = context.getSystemService(UserManager::class.java)?.isUserUnlocked == true
-        _state.value = _state.value.copy(
+        updateDevice { it.copy(
             listenerPermission = if (listenerGranted) CaptureHealthState.ListenerPermission.GRANTED else CaptureHealthState.ListenerPermission.REVOKED,
             appPostingNotificationPermission = appPermission,
             firstUnlock = if (unlocked) CaptureHealthState.FirstUnlock.UNLOCKED else CaptureHealthState.FirstUnlock.LOCKED,
-        )
+        ) }
     }
 
     fun listenerConnected() {
-        _state.value = _state.value.copy(
+        updateDevice { it.copy(
             listenerPermission = CaptureHealthState.ListenerPermission.GRANTED,
             listenerConnected = true,
-        ).withIntakeState()
+        ).withIntakeState() }
     }
 
     fun listenerDisconnected() {
-        _state.value = _state.value.copy(
+        updateDevice { it.copy(
             listenerConnected = false,
             intake = CaptureHealthState.Intake.WAITING_FOR_LISTENER,
-        )
+        ) }
     }
 
     fun storageReady() {
-        _state.value = _state.value.copy(
+        updateOwned { it.copy(
             storage = CaptureHealthState.Storage.READY,
             lastFailureCode = null,
-        ).withIntakeState()
+        ).withIntakeState() }
     }
 
     fun storageFailed(code: String = "encrypted_storage_unavailable") {
-        _state.value = _state.value.copy(
+        updateOwned { it.copy(
             storage = CaptureHealthState.Storage.FAILED,
             intake = CaptureHealthState.Intake.STORAGE_UNAVAILABLE,
             lastFailureCode = code,
-        )
+        ) }
     }
 
     fun pendingCount(value: Int) {
         val bounded = value.coerceAtLeast(0)
-        _state.value = _state.value.copy(pendingCount = bounded).withIntakeState()
+        updateOwned { it.copy(pendingCount = bounded).withIntakeState() }
     }
 
     fun storedIntakeCount(value: Int) {
-        _state.value = _state.value.copy(storedIntakeCount = value.coerceAtLeast(0)).withIntakeState()
+        updateOwned { it.copy(storedIntakeCount = value.coerceAtLeast(0)).withIntakeState() }
     }
 
     fun eligibleSource() {
-        _state.value = _state.value.copy(source = CaptureHealthState.Source.ELIGIBLE)
+        updateOwned { it.copy(source = CaptureHealthState.Source.ELIGIBLE) }
     }
 
     fun reviewSource() {
-        _state.value = _state.value.copy(source = CaptureHealthState.Source.REVIEW)
+        updateOwned { it.copy(source = CaptureHealthState.Source.REVIEW) }
     }
 
     fun ignoredSource() {
-        _state.value = _state.value.copy(source = CaptureHealthState.Source.IGNORED)
+        updateOwned { it.copy(source = CaptureHealthState.Source.IGNORED) }
     }
 
     fun genericOrMutedSource() {
-        _state.value = _state.value.copy(source = CaptureHealthState.Source.GENERIC_OR_MUTED)
+        updateOwned { it.copy(source = CaptureHealthState.Source.GENERIC_OR_MUTED) }
     }
 
     fun uploadReady() {
-        _state.value = _state.value.copy(
+        updateOwned { it.copy(
             upload = CaptureHealthState.Upload.READY,
             uploadRetryAttempt = 0,
             uploadRetryMaxAttempts = 0,
             uploadRetryAtMillis = null,
             uploadFailureCode = null,
             pairingRenewalRequired = false,
-        )
+        ) }
     }
 
     fun uploadSucceeded(atMillis: Long) {
-        _state.value = _state.value.copy(
+        updateOwned { it.copy(
             upload = CaptureHealthState.Upload.READY,
             uploadRetryAttempt = 0,
             uploadRetryMaxAttempts = 0,
@@ -159,57 +208,57 @@ class CaptureHealthStore(
             uploadFailureCode = null,
             lastSuccessfulUploadAtMillis = atMillis,
             pairingRenewalRequired = false,
-        )
+        ) }
     }
 
     fun uploadPausedForCredential() {
-        _state.value = _state.value.copy(
+        updateOwned { it.copy(
             upload = CaptureHealthState.Upload.PAUSED_CAPTURE_CREDENTIAL,
             uploadRetryAttempt = 0,
             uploadRetryMaxAttempts = 0,
             uploadRetryAtMillis = null,
             uploadFailureCode = null,
             pairingRenewalRequired = true,
-        )
+        ) }
     }
 
     fun uploadScheduled() {
-        _state.value = _state.value.copy(
+        updateOwned { it.copy(
             upload = CaptureHealthState.Upload.SCHEDULED,
             uploadRetryAttempt = 0,
             uploadRetryMaxAttempts = 0,
             uploadRetryAtMillis = null,
             uploadFailureCode = null,
             pairingRenewalRequired = false,
-        )
+        ) }
     }
 
     fun uploadRetryPending(attempt: Int, maxAttempts: Int, nextRetryAtMillis: Long, code: String = "retryable_upload_failure") {
-        _state.value = _state.value.copy(
+        updateOwned { it.copy(
             upload = CaptureHealthState.Upload.RETRY_PENDING,
             uploadRetryAttempt = attempt.coerceAtLeast(1),
             uploadRetryMaxAttempts = maxAttempts.coerceAtLeast(attempt),
             uploadRetryAtMillis = nextRetryAtMillis,
             uploadFailureCode = code,
-        )
+        ) }
     }
 
     fun uploadRetryExhausted(attempt: Int, maxAttempts: Int) {
-        _state.value = _state.value.copy(
+        updateOwned { it.copy(
             upload = CaptureHealthState.Upload.RETRY_EXHAUSTED,
             uploadRetryAttempt = attempt.coerceAtLeast(1),
             uploadRetryMaxAttempts = maxAttempts.coerceAtLeast(attempt),
             uploadRetryAtMillis = null,
             uploadFailureCode = "work_manager_unavailable",
-        )
+        ) }
     }
 
     fun uploadSchedulingFailed(code: String = "upload_scheduler_unavailable") {
-        _state.value = _state.value.copy(uploadFailureCode = code)
+        updateOwned { it.copy(uploadFailureCode = code) }
     }
 
-    fun cacheSnapshotRecorded(snapshotAtMillis: Long) {
-        _state.value = _state.value.copy(lastCacheSnapshotAtMillis = snapshotAtMillis)
+    fun cacheSnapshotRecorded(snapshotAtMillis: Long, expected: SessionBinding? = workBinding.get()) {
+        updateOwned(expected) { it.copy(lastCacheSnapshotAtMillis = snapshotAtMillis) }
     }
 
     private fun isListenerEnabled(context: Context, serviceClass: Class<*>): Boolean {

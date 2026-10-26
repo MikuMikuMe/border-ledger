@@ -136,7 +136,7 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
             mutex.withLock { active.remove(request.id) }
             throw error
         } catch (error: Exception) {
-            finish(request.id, JournalCompletion(failureStatus(error), null))
+            finish(request.id, JournalCompletion(failureStatus(error), (error as? com.lofuyu.borderledger.accounts.LunchFlowRequestFailure)?.let { "lunchflow_error:${it.code}" }))
         }
     }
 
@@ -256,7 +256,7 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
             mutex.withLock { active.remove(operationKey.id) }
             throw error
         } catch (error: Exception) {
-            finish(operationKey.id, JournalCompletion(failureStatus(error), null))
+            finish(operationKey.id, JournalCompletion(failureStatus(error), (error as? com.lofuyu.borderledger.accounts.LunchFlowRequestFailure)?.let { "lunchflow_error:${it.code}" }))
         }
     }
 
@@ -291,6 +291,7 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
     private suspend fun read(id: JournalOperationId): JSONObject? = records.read(key(id))?.let { JSONObject(it.decodeToString()) }
     private fun failureStatus(error: Exception): JournalStatus = when(error) {
         is BridgeLocalFailure -> JournalStatuses.FailedLocal
+        is com.lofuyu.borderledger.accounts.LunchFlowRequestFailure -> JournalStatuses.Rejected
         is com.lofuyu.borderledger.accounts.AccountRequestRejected -> JournalStatuses.Rejected
         is com.lofuyu.borderledger.recurring.RecurringRevisionConflict,
         is com.lofuyu.borderledger.review.ReviewRevisionConflict,

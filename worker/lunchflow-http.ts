@@ -23,6 +23,11 @@ function connectionId(value:unknown) {
  if(value.length>256)return invalid();
  return value;
 }
+function expectedGeneration(value:unknown) {
+ if(typeof value!=='number')return invalid('A positive expectedGeneration is required. Refresh connection status.');
+ if(!Number.isSafeInteger(value)||value<1)return invalid('A positive expectedGeneration is required. Refresh connection status.');
+ return value;
+}
 function browserRequired(browser?:LunchFlowBrowserSession) {
  if(!browser)throw new LunchFlowError('browser_session_required','A current verified browser session is required.',401);
  return browser;
@@ -81,7 +86,7 @@ async function accountsRoute({request,env,context}:Route) {
 async function disconnectRoute({request,env,context}:Route) {
  const input=await body(request),id=connectionId(input.connectionId);
  if(!id)return invalid('A connectionId is required.');
- const status=await createLunchFlowConnections(env).disconnect(context,id);
+ const status=await createLunchFlowConnections(env).disconnect(context,id,expectedGeneration(input.expectedGeneration));
  return json(status,['pending','failed','uncertain'].includes(status.remoteRevocation)?202:200);
 }
 function requestIdentity(request:Request,context:FinancialContext) {
@@ -92,11 +97,11 @@ async function selectionRoute({request,env,context}:Route) {
  const input=await body(request),id=connectionId(input.connectionId),accounts=parseLunchFlowMobileSelectionAccounts(input.accounts);
  if(!accounts)return invalid();
  const identity=requestIdentity(request,context);
- return json(await createLunchFlowService(env,context,undefined,id).selectAccounts({accounts,ownerSubjectHash:identity.subject,idempotencyKey:identity.key}));
+ return json(await createLunchFlowService(env,context,undefined,{connectionId:id,expectedGeneration:expectedGeneration(input.expectedGeneration)}).selectAccounts({accounts,ownerSubjectHash:identity.subject,idempotencyKey:identity.key}));
 }
 async function syncRoute({request,env,context}:Route) {
  const input=await body(request),identity=requestIdentity(request,context);
- return json(await createLunchFlowService(env,context,undefined,connectionId(input.connectionId)).requestSync(identity.subject,identity.key),202);
+ return json(await createLunchFlowService(env,context,undefined,{connectionId:connectionId(input.connectionId),expectedGeneration:expectedGeneration(input.expectedGeneration)}).requestSync(identity.subject,identity.key),202);
 }
 const routes=new Map<string,(route:Route)=>Promise<Response|null>>([
  ['POST /oauth/start',startRoute],['GET /oauth/launch',launchRoute],['GET /oauth/callback',callbackRoute],

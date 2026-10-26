@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { createOpaqueCredential,hashSecret } from '../worker/mobile-auth';
 import { afterEach, expect, it, vi } from 'vitest';
 import worker from '../worker/index';
@@ -81,9 +82,9 @@ it('reports missing configuration and rejects another user connection at HTTP bo
   expect(await status.json()).toMatchObject({userId:'second',ledgerId:'second-ledger',configured:false,connected:false,canReconnect:false,reason:'configuration_required'});
   const unavailable=await worker.fetch(request('/api/lunchflow/oauth/start',{method:'POST'}),missing);
   expect(unavailable.status).toBe(503);expect(await unavailable.json()).toMatchObject({code:'configuration_required',retryable:false});
-  const start=await worker.fetch(request('/api/lunchflow/oauth/start',{method:'POST'}),env),dto=await start.json() as {connectionId:string};
+  const start=await worker.fetch(request('/api/lunchflow/oauth/start',{method:'POST'}),env),dto=await start.json() as {connectionId:string;generation:number};
   for(const suffix of ['/accounts?status=local&connectionId='+dto.connectionId,'/disconnect']){
-   const options=suffix==='/disconnect'?{method:'POST',body:{connectionId:dto.connectionId}}:{};
+   const options=suffix==='/disconnect'?{method:'POST',body:{connectionId:dto.connectionId,expectedGeneration:1}}:{};
    const foreign=await worker.fetch(request('/api/lunchflow'+suffix,{...options,assertion:'owner-subject:session1'}),env);
    expect(foreign.status).toBe(404);expect(await foreign.json()).toMatchObject({code:'connection_not_found'});
   }
@@ -110,11 +111,11 @@ it('discovers the owner Platform connection through HTTP status across selection
    return Response.json({...token,user_id:'external-owner'});
   });
   const id=await authorizeOwnerPlatform(env);
-  const connected=await worker.fetch(request('/api/lunchflow/connection',{assertion}),env),status=await connected.json() as {connectionId:string};
+  const connected=await worker.fetch(request('/api/lunchflow/connection',{assertion}),env),status=await connected.json() as {connectionId:string;generation:number};
   expect(status).toMatchObject({connectionId:id,adapter:'platform',connected:true,canReconnect:true});
-  const selected=await worker.fetch(request('/api/lunchflow/account-selection',{method:'POST',assertion,body:{connectionId:status.connectionId,accounts:[{providerAccountId:'1',currency:'CAD',kind:'chequing'}]}}),env);
+  const selected=await worker.fetch(request('/api/lunchflow/account-selection',{method:'POST',assertion,body:{expectedGeneration:status.generation,connectionId:status.connectionId,accounts:[{providerAccountId:'1',currency:'CAD',kind:'chequing'}]}}),env);
   expect(selected.status).toBe(200);
-  await worker.fetch(request('/api/lunchflow/disconnect',{method:'POST',assertion,body:{connectionId:status.connectionId}}),env);
+  await worker.fetch(request('/api/lunchflow/disconnect',{method:'POST',assertion,body:{expectedGeneration:status.generation,connectionId:status.connectionId}}),env);
   const disconnected=await worker.fetch(request('/api/lunchflow/connection',{assertion}),env);
   expect(await disconnected.json()).toMatchObject({connectionId:id,adapter:'platform',connected:false,canReconnect:true,remoteRevocation:'succeeded'});
   expect(await authorizeOwnerPlatform(env)).toBe(id);

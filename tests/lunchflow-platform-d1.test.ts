@@ -26,7 +26,7 @@ it('consumes concurrent real-D1 callbacks once and keeps the connection ID on re
   const start=await oauth.startWeb(SECOND_LEDGER,browser),input={state:new URL(start.authorizationUrl).searchParams.get('state')!,cookie:start.cookie,code:'code'};
   const results=await Promise.allSettled([oauth.complete(SECOND_LEDGER,browser,input),oauth.complete(SECOND_LEDGER,browser,input)]);
   expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1);expect(requests).toBe(1);
-  await connections.disconnect(SECOND_LEDGER,start.connectionId);
+  await connections.disconnect(SECOND_LEDGER,start.connectionId,(await connections.status(SECOND_LEDGER)).generation!);
   const next=await oauth.startWeb(SECOND_LEDGER,browser);expect(next.connectionId).toBe(start.connectionId);
   await oauth.complete(SECOND_LEDGER,browser,{state:new URL(next.authorizationUrl).searchParams.get('state')!,cookie:next.cookie,code:'next'});
   expect(await connections.status(SECOND_LEDGER)).toMatchObject({connected:true,connectionId:start.connectionId});

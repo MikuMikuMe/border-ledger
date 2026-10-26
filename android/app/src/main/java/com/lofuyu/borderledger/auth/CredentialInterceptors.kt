@@ -1,6 +1,7 @@
 package com.lofuyu.borderledger.auth
 
 import android.net.Uri
+import kotlin.coroutines.coroutineContext
 
 data class ApiEnvironment(val canonicalOrigin: String, val environment: String) {
     init {
@@ -21,7 +22,7 @@ data class MobileRequest(
     val headers: Map<String, String> = emptyMap(),
     val body: ByteArray? = null,
 ) {
-    fun withBearer(token: String): MobileRequest = copy(headers = headers + ("Authorization" to "Bearer $token"))
+    fun withBearer(token: String): MobileRequest = copy(headers = headers + mapOf("Authorization" to "Bearer $token", "X-Ledger-Protocol" to "2"))
 }
 
 class CredentialBoundaryException(message: String) : Exception(message)
@@ -35,9 +36,13 @@ class OwnerAuthInterceptor(
         if (!environment.accepts(request.url)) throw CredentialBoundaryException("Owner requests must use the configured HTTPS origin.")
         val path = Uri.parse(request.url).path ?: "/"
         if (!isOwnerPath(path, request.method)) throw CredentialBoundaryException("The owner credential cannot access this route.")
-        val token = provider.accessToken() ?: throw CredentialBoundaryException("An active owner session is required.")
+        val expected = expectedBinding()
+        val token = provider.accessTokenFor(expected) ?: throw CredentialBoundaryException("An active owner session is required.")
         return request.withBearer(token)
     }
+
+    private suspend fun expectedBinding(): SessionBinding = coroutineContext[OwnerWork]?.binding ?: provider.currentBinding()
+        ?: throw CredentialBoundaryException("Sign in again to bind this request.")
 
     private fun isOwnerPath(path: String, method: String): Boolean {
         if (!path.startsWith("/api/mobile/v1/")) return false
@@ -54,11 +59,21 @@ class CaptureAuthInterceptor(
 ) {
     suspend fun intercept(request: MobileRequest): MobileRequest {
         if (!environment.accepts(request.url)) throw CredentialBoundaryException("Capture requests must use the configured HTTPS origin.")
-        val path = Uri.parse(request.url).path ?: "/"
-        val allowed = (path == "/api/mobile/v1/status" && request.method == "GET") ||
-            (path == "/api/mobile/v1/alerts" && request.method == "POST")
-        if (!allowed) throw CredentialBoundaryException("The capture credential cannot access this route.")
-        val token = provider.current()?.credential ?: throw CredentialBoundaryException("Capture access is not paired.")
-        return request.withBearer(token)
+        if (!allowsCapture(request)) throw CredentialBoundaryException("The capture credential cannot access this route.")
+        val expected = expectedCredential()
+        val current = provider.current()
+        if (!matchesCredential(current, expected)) throw CredentialBoundaryException("Capture session changed.")
+        return request.withBearer(expected.credential)
     }
+    private suspend fun expectedCredential(): CaptureCredentialRecord = coroutineContext[CaptureWork]?.credential
+        ?: throw CredentialBoundaryException("Capture identity is required.")
+
+    private fun allowsCapture(request: MobileRequest): Boolean = when (Uri.parse(request.url).path) {
+        "/api/mobile/v1/status" -> request.method == "GET"
+        "/api/mobile/v1/alerts" -> request.method == "POST"
+        else -> false
+    }
+    private fun matchesCredential(current: CaptureCredentialRecord?, expected: CaptureCredentialRecord): Boolean =
+        current == expected && expected.identity != null && expected.sessionEpoch != null
+
 }

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -25,7 +26,7 @@ describe('button interactions', () => {
 
   beforeEach(() => {
     reportCalls = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    privateFetchSpy().mockImplementation(async (input, init) => {
       const url = new URL(String(input), 'https://ledger.example.test');
       if (url.pathname === '/api/accounts') {
         return new Response(JSON.stringify({ accounts: demoAccounts.map((account) => ({

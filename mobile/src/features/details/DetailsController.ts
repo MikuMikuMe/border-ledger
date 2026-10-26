@@ -1,3 +1,5 @@
+import {canAuthorizeConnection,connectionIntent} from '../../../../contracts/lunchflow';
+import type {LunchFlowBinding} from './contracts';
 import type {AccountsData,Alert,Detail,DetailsPorts,LinkSnapshot,LunchFlowAccount,LunchFlowAccounts,LunchFlowSelection,ReviewPage} from './contracts';
 import type {Operation,Stream} from '../finance/contracts';
 import {Resource,MutationGate,errorState} from '../finance/model';
@@ -70,13 +72,16 @@ function canSelectLunchFlow(state:DetailsPhase,data:AccountsData|null,selections
     return validLunchFlowSelection(account,selection);
   });
 }
-type LunchFlowBaseline=Map<string,{lastSyncedAt:string|null;lastError:string|null}>;
+type LunchFlowPoll={targetIds:string[];baseline:LunchFlowBaseline;binding:LunchFlowBinding};
+type LunchFlowBaseline=Map<string,{lastSyncedAt:string|null;lastAttemptAt:string|null;lastError:string|null}>;
 const lunchFlowStatusDelays=[0,500,1000,2000,3000,3500] as const;
 function lunchFlowBaseline(value:LunchFlowAccounts|undefined):LunchFlowBaseline{
-  return new Map((value?.accounts??[]).map(account=>[account.providerAccountId,{lastSyncedAt:account.lastSyncedAt,lastError:account.lastError}]));
+  return new Map((value?.accounts??[]).map(account=>[account.providerAccountId,{lastSyncedAt:account.lastSyncedAt,lastAttemptAt:account.lastAttemptAt,lastError:account.lastError}]));
 }
-function lunchFlowStatusChanged(account:LunchFlowAccount|undefined,before:{lastSyncedAt:string|null;lastError:string|null}|undefined){
-  return Boolean(account&&before&&(account.lastSyncedAt!==before.lastSyncedAt||account.lastError!==before.lastError));
+function lunchFlowStatusChanged(account:LunchFlowAccount|undefined,before:{lastSyncedAt:string|null;lastAttemptAt:string|null;lastError:string|null}|undefined){
+  if(!account||!before)return false;
+  if(account.lastAttemptAt!==before.lastAttemptAt)return true;
+  return account.lastSyncedAt!==before.lastSyncedAt||account.lastError!==before.lastError;
 }
 function lunchFlowCompleted(value:LunchFlowAccounts,targetIds:string[],baseline:LunchFlowBaseline){
   return targetIds.length===0||targetIds.every(id=>lunchFlowStatusChanged(value.accounts.find(account=>account.providerAccountId===id),baseline.get(id)));
@@ -90,7 +95,11 @@ function mergeLunchFlowStatus(discovery:LunchFlowAccounts,status:LunchFlowAccoun
     return {...current,currencies:account.currencies.length?account.currencies:current.currencies};
   });
   status.accounts.forEach(account=>{if(!seen.has(account.providerAccountId))accounts.push(account);});
-  return {configured:discovery.configured||status.configured,accounts};
+  return {...discovery,configured:discovery.configured||status.configured,accounts};
+}
+function sameLunchFlowBinding(value:LunchFlowAccounts|undefined,binding:LunchFlowBinding){
+  if(value?.connectionId!==binding.connectionId)return false;
+  return value.generation===binding.expectedGeneration;
 }
 function waitForLunchFlowStatus(delay:number){return delay?new Promise<void>(resolve=>setTimeout(resolve,delay)):Promise.resolve();}
 function cancelableOperation(available:boolean,link:LinkSnapshot){return available&&link.canCancel?link.operationId:null;}
@@ -102,16 +111,19 @@ function classificationStream(current:Resource<Detail>,classification:Classifica
   return stream;
 }
 const emptyLink:LinkSnapshot={state:'idle',outcomeCode:null,operationId:null,canCancel:false,pendingConnectionId:null,connectionId:null,accounts:[]};
-const emptyLunchFlow:LunchFlowAccounts={configured:false,accounts:[]};
+const emptyLunchFlow:LunchFlowAccounts={configured:false,accounts:[],connectionId:null,generation:null};
 export class DetailsController {
   readonly review:Resource<ReviewPage>;readonly detail:Resource<Detail>;readonly accounts:Resource<AccountsData>;readonly mutation:MutationGate;
   private subscriptions:{remove():void}[]=[];private disposed=false;private locked=false;private selectedId:string|null=null;private lunchFlowSettling=false;
   private alerts=new Map<string,Alert>();private streams=new Map<string,Stream>();private link=emptyLink;private linkEpoch=0;private accountsRequest=0;
   constructor(private ports:DetailsPorts,private changed:()=>void=()=>{}){this.review=new Resource(changed);this.detail=new Resource(changed);this.accounts=new Resource(changed);this.mutation=new MutationGate(changed);}
+  lunchFlowMessage:string|null=null;
+  private lunchFlowFailure(){if(this.available()){this.lunchFlowMessage='Lunch Flow could not complete the action. Check connection status, then choose the action again.';this.changed();}}
   get lunchFlowBusy(){return this.lunchFlowSettling;}
   private setLunchFlowBusy(value:boolean){if(this.lunchFlowSettling===value)return;this.lunchFlowSettling=value;if(!this.disposed)this.changed();}
   async start(){
     this.subscriptions=[this.ports.review.onChanged(()=>{void this.loadReview();}),this.ports.recurring.onChanged(()=>{if(this.selectedId)void this.loadDetail();}),this.ports.accounts.onStateChanged(value=>{if(!this.available())return;this.link=value;this.linkEpoch++;const data=this.accounts.current().data;if(data)this.accounts.seed({...data,link:value},true);this.changed();})];
+    if(this.ports.accounts.onLunchFlowChanged)this.subscriptions.push(this.ports.accounts.onLunchFlowChanged(()=>{void this.loadAccounts();}));
     await Promise.all([this.recover(),this.loadReview(),this.loadAccounts()]);
   }
   private available(){return !this.disposed&&!this.locked;}
@@ -164,18 +176,34 @@ export class DetailsController {
     await this.accounts.load(()=>this.readAccountsPage(previous,epoch,request));
   }
   private async readAccountsPage(previous:AccountsData|null,epoch:number,request:number):Promise<AccountsData>{
-    const [page,connections,link,lunchFlow]=await this.read(()=>Promise.all([
+    const [page,connections,link,lunchFlowState]=await this.read(()=>Promise.all([
       this.ports.accounts.readAccounts(previous?.page.nextCursor??null,50),
       this.ports.accounts.readConnections(),
       this.ports.accounts.getSnapshot(),
-      this.ports.accounts.readLunchFlowAccounts?.()??Promise.resolve(emptyLunchFlow),
+      this.readLunchFlow(),
     ]));
     if(!this.available())throw {code:'unauthorized'};
     if(epoch===this.linkEpoch&&request===this.accountsRequest)this.link=link;
     const accounts=previous?merge(previous.page.accounts,page.accounts,a=>a.providerAccountId):page.accounts;
-    return {page:{...page,accounts},connections,link:this.link,lunchFlow};
+    return {page:{...page,accounts},connections,link:this.link,...lunchFlowState};
   }
-  private async refreshLunchFlowStatus(targetIds:string[],baseline:LunchFlowBaseline){
+  private async readLunchFlow(){
+    const lunchFlowConnection=await this.read(()=>this.ports.accounts.readLunchFlowConnection?.()??Promise.resolve(undefined));
+    if(!lunchFlowConnection?.connected)return {lunchFlowConnection,lunchFlow:emptyLunchFlow};
+    const binding=connectionIntent(lunchFlowConnection);
+    const lunchFlow=await this.read(()=>this.ports.accounts.readLunchFlowAccounts?.(binding)??Promise.resolve(emptyLunchFlow));
+    return {lunchFlowConnection,lunchFlow};
+  }
+  private applyLunchFlowStatus(status:LunchFlowAccounts,poll:LunchFlowPoll):boolean {
+    const current=this.accounts.current().data;
+    if(!current||!this.available())return true;
+    if(!sameLunchFlowBinding(status,poll.binding))return true;
+    if(!sameLunchFlowBinding(current.lunchFlow,poll.binding))return true;
+    const lunchFlow=mergeLunchFlowStatus(current.lunchFlow??emptyLunchFlow,status);
+    this.accounts.seed({...current,lunchFlow},true);
+    return lunchFlowCompleted(lunchFlow,poll.targetIds,poll.baseline);
+  }
+  private async refreshLunchFlowStatus(poll:LunchFlowPoll){
     try {
       const localRead=this.ports.accounts.readLunchFlowStatus;
       if(!localRead){await this.loadAccounts();return;}
@@ -183,12 +211,8 @@ export class DetailsController {
         if(!this.available())return;
         await waitForLunchFlowStatus(delay);
         let status:LunchFlowAccounts;
-        try{status=await this.read(()=>localRead());}catch{return;}
-        const current=this.accounts.current().data;
-        if(!current)continue;
-        const lunchFlow=mergeLunchFlowStatus(current.lunchFlow??emptyLunchFlow,status);
-        this.accounts.seed({...current,lunchFlow},true);
-        if(lunchFlowCompleted(lunchFlow,targetIds,baseline))break;
+        try{status=await this.read(()=>localRead(poll.binding));}catch{return;}
+        if(this.applyLunchFlowStatus(status,poll))break;
       }
     } finally {
       try{await this.ports.refreshLedger?.();}catch{/* A queued refresh remains visible in Accounts. */}
@@ -199,10 +223,10 @@ export class DetailsController {
     await this.mutation.submit(command.operationId,()=>this.read(call),id=>this.read(()=>this.ports.session.queryOperation(id)));
     if(this.available()&&['completed','canceled'].includes(this.mutation.current().status))await refresh();
   }
-  private async writeLunchFlow(command:OperationCommand,call:()=>Promise<Operation>,targetIds:string[],baseline:LunchFlowBaseline){
+  private async writeLunchFlow(command:OperationCommand,call:()=>Promise<Operation>,poll:LunchFlowPoll){
     if(this.lunchFlowSettling)return;
     this.setLunchFlowBusy(true);
-    try{await this.write(command,call,()=>this.refreshLunchFlowStatus(targetIds,baseline));}
+    try{this.lunchFlowMessage=null;await this.write(command,call,()=>this.refreshLunchFlowStatus(poll));if(this.mutation.current().status==='rejected'){this.lunchFlowFailure();await this.loadAccounts();}}
     finally{this.setLunchFlowBusy(false);}
   }
   async resolve(command:ResolveReviewCommand){
@@ -238,15 +262,39 @@ export class DetailsController {
   async selectLunchFlow(command:LunchFlowSelectionCommand){
     const current=this.accounts.current();
     if(!this.ports.accounts.startLunchFlowAccountSelection||!canSelectLunchFlow(current.phase,current.data,command.accounts))return;
+    const connection=current.data?.lunchFlowConnection;if(!connection?.connected)return;
+    const binding=connectionIntent(connection);
     const baseline=lunchFlowBaseline(current.data?.lunchFlow),targetIds=command.accounts.map(account=>account.providerAccountId);
-    await this.writeLunchFlow(command,()=>this.ports.accounts.startLunchFlowAccountSelection!(command.operationId,command.accounts),targetIds,baseline);
+    await this.writeLunchFlow(command,()=>this.ports.accounts.startLunchFlowAccountSelection!(command.operationId,command.accounts,binding),{targetIds,baseline,binding});
   }
   async syncLunchFlow(command:OperationCommand){
     const current=this.accounts.current();
     if(!this.ports.accounts.startLunchFlowSync||!isReady(current.phase))return;
+    const connection=current.data?.lunchFlowConnection;if(!connection?.connected)return;
+    const binding=connectionIntent(connection);
     const targetIds=(current.data?.lunchFlow?.accounts??[]).filter(account=>account.selected).map(account=>account.providerAccountId);
     const baseline=lunchFlowBaseline(current.data?.lunchFlow);
-    await this.writeLunchFlow(command,()=>this.ports.accounts.startLunchFlowSync!(command.operationId),targetIds,baseline);
+    await this.writeLunchFlow(command,()=>this.ports.accounts.startLunchFlowSync!(command.operationId,binding),{targetIds,baseline,binding});
+  }
+  private async connectionAction(action:()=>Promise<boolean>){
+    if(this.lunchFlowSettling||!this.available())return;
+    this.setLunchFlowBusy(true);this.lunchFlowMessage=null;
+    try{await this.read(action);if(this.available())await this.loadAccounts();}
+    catch{this.lunchFlowFailure();}
+    finally{this.setLunchFlowBusy(false);}
+  }
+  async authorizeLunchFlow(){
+    const value=this.accounts.current().data?.lunchFlowConnection;
+    if(!canAuthorizeConnection(value))return;
+    await this.connectionAction(()=>this.ports.accounts.startLunchFlowAuthorization?.()??Promise.resolve(false));
+  }
+  async cancelLunchFlow(){await this.connectionAction(()=>this.ports.accounts.cancelLunchFlowAuthorization?.()??Promise.resolve(false));}
+  async disconnectLunchFlow(command:OperationCommand&LunchFlowBinding){
+    if(!this.ports.accounts.disconnectLunchFlow)return;
+    const binding={connectionId:command.connectionId,expectedGeneration:command.expectedGeneration};
+    this.lunchFlowMessage=null;
+    await this.write(command,()=>this.ports.accounts.disconnectLunchFlow!(command.operationId,binding),()=>this.loadAccounts());
+    if(this.mutation.current().status==='rejected'){this.lunchFlowFailure();await this.loadAccounts();}
   }
   dispose(){this.disposed=true;this.lunchFlowSettling=false;this.subscriptions.forEach(s=>s.remove());this.review.dispose();this.detail.dispose();this.accounts.dispose();this.alerts.clear();this.streams.clear();this.link=emptyLink;}
 }

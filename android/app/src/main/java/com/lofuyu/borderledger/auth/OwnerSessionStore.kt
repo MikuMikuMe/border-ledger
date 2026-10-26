@@ -53,7 +53,8 @@ class EncryptedOwnerSessionStore(private val records: EncryptedRecordStore) : Ow
 
     private fun decodeSession(bytes: ByteArray): OwnerSessionRecord = guarded {
         DataInputStream(ByteArrayInputStream(bytes)).use { input ->
-            checkVersion(input)
+            val version = input.readInt()
+            require(version in 1..SESSION_VERSION)
             val access = input.readUTF()
             val refresh = input.readUTF()
             val expiresAt = input.readUTF()
@@ -62,13 +63,15 @@ class EncryptedOwnerSessionStore(private val records: EncryptedRecordStore) : Ow
             val capability = input.readUTF()
             val deviceId = readNullable(input)
             val destination = readNullable(input)
-            OwnerSessionRecord(access, refresh, expiresAt, scopes, revision, capability, deviceId, destination)
+            val identity = if (version >= 2) LedgerIdentity(input.readUTF(), input.readUTF()) else null
+            val epoch = if (version >= 2) input.readUTF().also { require(it.isNotBlank()) } else null
+            OwnerSessionRecord(access, refresh, expiresAt, scopes, revision, capability, deviceId, destination, identity, epoch)
         }
     }
 
     private fun encodeSession(value: OwnerSessionRecord): ByteArray = ByteArrayOutputStream().use { bytes ->
         DataOutputStream(bytes).use { output ->
-            output.writeInt(FORMAT_VERSION)
+            output.writeInt(SESSION_VERSION)
             output.writeUTF(value.accessToken)
             output.writeUTF(value.refreshToken)
             output.writeUTF(value.expiresAt)
@@ -77,6 +80,9 @@ class EncryptedOwnerSessionStore(private val records: EncryptedRecordStore) : Ow
             output.writeUTF(value.revocationCapability)
             writeNullable(output, value.deviceId)
             writeNullable(output, value.pendingDestination)
+            output.writeUTF(requireNotNull(value.identity).userId)
+            output.writeUTF(requireNotNull(value.identity).ledgerId)
+            output.writeUTF(requireNotNull(value.epoch))
         }
         bytes.toByteArray()
     }
@@ -181,6 +187,7 @@ class EncryptedOwnerSessionStore(private val records: EncryptedRecordStore) : Ow
 
     private companion object {
         const val FORMAT_VERSION = 1
+        const val SESSION_VERSION = 2
         const val MAX_SCOPES = 32
         const val MAX_REVOCATIONS = 32
 

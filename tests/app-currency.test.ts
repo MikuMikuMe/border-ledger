@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -22,7 +23,7 @@ describe('registered extra-currency workspace data', () => {
   });
 
   it('keeps registered extra currencies in source totals, chart legends, and filters without FX conversion', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       if (String(input).endsWith('/api/accounts')) {
         return new Response(JSON.stringify({ accounts: [{ id: 'usd-account', name: 'USD account', institution: 'Synthetic bank', currency: 'USD', kind: 'chequing', status: 'import_only', last_synced_at: null, plaid_item_id: null }] }), { status: 200 });
       }
@@ -76,7 +77,7 @@ describe('registered extra-currency workspace data', () => {
   });
 
   it('renders an overview for a USD/HKD-only ledger without inventing a CAD total', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes('/api/accounts')) {
         return new Response(JSON.stringify({ accounts: [{ id: 'usd-account', name: 'USD account', institution: 'Synthetic bank', currency: 'USD', kind: 'chequing', status: 'import_only', last_synced_at: null, plaid_item_id: null }] }), { status: 200, headers: { 'content-type': 'application/json' } });

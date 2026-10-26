@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createD1Fixture, task22MigrationNames } from './helpers/d1';
 import worker from '../worker/index';

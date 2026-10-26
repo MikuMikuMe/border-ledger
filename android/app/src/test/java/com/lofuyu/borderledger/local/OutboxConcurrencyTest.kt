@@ -14,7 +14,7 @@ class OutboxConcurrencyTest {
     @Test
     fun concurrentEnqueuesPreserveEveryEvent() = runTest {
         val records = YieldingRecordStore()
-        val outbox = EncryptedOutboxDao(records)
+        val outbox = EncryptedOutboxDao(records, com.lofuyu.borderledger.IdentityFixture().binding)
         val events = (0 until 101).map { index ->
             QueuedAlert(
                 localId = "local-$index",
@@ -43,7 +43,7 @@ class OutboxConcurrencyTest {
 
     @Test
     fun nextBatchRejectsMoreThanApiBatchCeiling() = runTest {
-        val outbox = EncryptedOutboxDao(YieldingRecordStore())
+        val outbox = EncryptedOutboxDao(YieldingRecordStore(), com.lofuyu.borderledger.IdentityFixture().binding)
 
         val error = runCatching {
             outbox.nextBatch(CaptureIntakeLimits.MAX_BATCH_EVENTS + 1)

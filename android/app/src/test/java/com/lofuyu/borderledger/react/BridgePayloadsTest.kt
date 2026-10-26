@@ -33,8 +33,8 @@ class BridgePayloadsTest {
         assertFalse(payload.containsKey("uploadRetryAtMillis"))
     }
     @Test fun sessionProjectionDoesNotExposeNativeRefreshOrBrowserSecrets() {
-        val payload = BridgePayloads.session(OwnerSessionState.SignedIn("2026-10-17T00:00:00Z", listOf("owner"), "activity", "2027-01-01T00:00:00Z"), "sandbox")
-        assertEquals(setOf("state", "expiresAt", "pendingDestination", "reason", "pendingRevocations", "environment"), payload.keys)
+        val payload = BridgePayloads.session(OwnerSessionState.SignedIn("2026-10-17T00:00:00Z", listOf("owner"), "activity", "2027-01-01T00:00:00Z", binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")), "sandbox")
+        assertEquals(setOf("state", "expiresAt", "pendingDestination", "reason", "pendingRevocations", "environment", "userId", "ledgerId", "sessionEpoch"), payload.keys)
         assertEquals("signed_in", payload["state"])
         assertEquals("sandbox", payload["environment"])
     }

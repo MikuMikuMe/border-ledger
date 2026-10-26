@@ -350,7 +350,8 @@ function createBoundLunchFlowService(env: LunchFlowServiceEnv, binding: LunchFlo
     assertConnectionApp(row,env.LUNCHFLOW_CLIENT_ID);
     if(suppliedProvider)return suppliedProvider;
     if(context.connection.adapter==='personal')return createLunchFlowProvider(env);
-    const access=await createLunchFlowConnections(env).accessToken(context,context.connection.id),platform=createLunchFlowPlatform(env);
+    const access=await createLunchFlowConnections(env).accessToken(context,context.connection.id,context.connection.generation),platform=createLunchFlowPlatform(env);
+    await assertLunchFlowScope(env.DB,context);
     return {listAccounts:()=>platform.listAccounts(access),listTransactions:(id:string)=>platform.listTransactions(access,id)};
   }
   const provider: LunchFlowProvider = {
@@ -469,11 +470,17 @@ function createBoundLunchFlowService(env: LunchFlowServiceEnv, binding: LunchFlo
   return { readAccounts, readStatus, selectAccounts, requestSync, sync, provider };
 }
 
-export function createLunchFlowService(env:LunchFlowServiceEnv,binding:LunchFlowBinding,provider?:LunchFlowProvider,connectionId?:string) {
+function requestedConnection(connection:string|{connectionId?:string;expectedGeneration:number}|undefined) {
+  if(typeof connection==='string')return {connectionId:connection,expectedGeneration:undefined};
+  return connection??{};
+}
+
+export function createLunchFlowService(env:LunchFlowServiceEnv,binding:LunchFlowBinding,provider?:LunchFlowProvider,connection?:string|{connectionId?:string;expectedGeneration:number}) {
   const context=Object.freeze({...binding,...('scopes' in binding?{scopes:Object.freeze([...binding.scopes])}:{}),...(binding.connection?{connection:Object.freeze({...binding.connection})}:{})});
+  const {connectionId,expectedGeneration}=requestedConnection(connection);
   let resolved:Promise<ReturnType<typeof createBoundLunchFlowService>|null>|undefined;
   async function service() {
-    resolved??=resolveLunchFlowScope(env.DB,context,connectionId).then(scope=>scope?createBoundLunchFlowService(env,scope,provider):null);
+    resolved??=resolveLunchFlowScope(env.DB,context,connectionId,expectedGeneration).then(scope=>scope?createBoundLunchFlowService(env,scope,provider):null);
     return resolved;
   }
   async function required() {

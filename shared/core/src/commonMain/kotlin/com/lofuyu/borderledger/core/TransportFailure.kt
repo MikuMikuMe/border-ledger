@@ -1,6 +1,7 @@
 package com.lofuyu.borderledger.api
 
 sealed class TransportFailure(message: String? = null) : Exception(message) {
+    data object UpdateRequired : TransportFailure("Update Border Ledger and sign in again.")
     data object Offline : TransportFailure()
     data object Unauthorized : TransportFailure()
     data object Retryable : TransportFailure()

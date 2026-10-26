@@ -134,7 +134,7 @@ class Task3ExternalOwnershipTest {
                     expiresAt = "2026-10-17T00:00:00Z",
                     scopes = listOf("owner"),
                     pendingDestination = null,
-                )
+                binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session"))
             },
             currentGeneration = { "owner-restored" },
             signedIn = { sessionState is OwnerSessionState.SignedIn },

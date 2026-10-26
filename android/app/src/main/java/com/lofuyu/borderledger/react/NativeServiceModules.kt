@@ -438,7 +438,7 @@ class CaptureDevicesModule(context: ReactApplicationContext, private val r: Nati
     }
 
     private fun emitCaptureHealth(value: com.lofuyu.borderledger.capture.CaptureHealthState) {
-        if (isOwnerSignedIn()) emitOnHealthChanged(BridgeSupport.map(BridgePayloads.captureRuntime(value)))
+        if (isOwnerSignedIn()) emitOnHealthChanged(BridgeSupport.map(BridgePayloads.captureRuntime(r.container.captureHealth.snapshot(r.container.ownerSessionManager.currentBinding()))))
     }
 
     private fun emitCaptureSnapshot() {
@@ -460,7 +460,7 @@ class CaptureDevicesModule(context: ReactApplicationContext, private val r: Nati
     override fun getSnapshot(p: Promise) = s.call(p) { snapshot() }
 
     override fun getRuntimeHealth(p: Promise) = s.call(p) {
-        BridgePayloads.captureRuntime(r.container.captureHealth.state.value)
+        BridgePayloads.captureRuntime(r.container.captureHealth.snapshot(r.container.ownerSessionManager.currentBinding()))
     }
 
     override fun refresh(p: Promise) = s.call(p) {

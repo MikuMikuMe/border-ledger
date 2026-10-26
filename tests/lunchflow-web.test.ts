@@ -1,4 +1,6 @@
+import { ledgerSession } from '../src/domain/api';
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -8,7 +10,7 @@ import { LunchFlowSection } from '../src/lunchflow';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const configuredAccounts = (overrides: Record<string, unknown> = {}) => ({
-  configured: true,
+  configured: true,connectionId:'c',generation:2,
   accounts: [
     {
       providerAccountId: 'rbc-chequing',
@@ -48,13 +50,15 @@ interface MockResponse {
 type MockRoute = MockResponse | ((init: RequestInit | undefined) => MockResponse);
 
 function mockApi(routes: Record<string, MockRoute>) {
-  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+  return privateFetchSpy().mockImplementation(async (input, init) => {
     const url = new URL(String(input), 'https://ledger.example.test');
+    url.searchParams.delete('connectionId');
     const path = `${url.pathname}${url.search}`;
-    const route = routes[path] ?? routes[url.pathname];
+    const defaultConnection={userId:'owner',ledgerId:'personal',connectionId:'c',generation:2,adapter:'personal',configured:true,connected:true,canReconnect:false,reconnectRequired:false,remoteRevocation:'not_requested',reason:'legacy_cutover_required',retryable:false};
+    const route = routes[path] ?? routes[url.pathname] ?? (url.pathname==='/api/lunchflow/connection'?{body:defaultConnection}:undefined);
     if (!route) throw new Error(`Unexpected request: ${path}`);
     const response = typeof route === 'function' ? route(init) : route;
-    return new Response(JSON.stringify(response.body), { status: response.status ?? 200 });
+    return new Response(JSON.stringify(url.pathname==='/api/lunchflow/accounts'?{connectionId:'c',generation:2,...response.body as object}:response.body), { status: response.status ?? 200 });
   });
 }
 
@@ -75,13 +79,19 @@ function requiredButton(container: HTMLDivElement | null, text: string) {
   return button;
 }
 
+function requiredField<T extends HTMLElement>(container:HTMLDivElement|null,selector:string):T {
+  const field=container?.querySelector<T>(selector);
+  if(!field)throw new Error(`Missing field: ${selector}`);
+  return field;
+}
+
 function containerText(container: HTMLDivElement | null) {
   if (!container) throw new Error('Missing test container.');
   return container.textContent ?? '';
 }
 
 function requestWasMade(fetchMock: { mock: { calls: Array<Array<unknown>> } }, suffix: string) {
-  return fetchMock.mock.calls.some((call) => String(call[0]).endsWith(suffix));
+  return fetchMock.mock.calls.some((call) => String(call[0]).replace(/([?&])connectionId=[^&]*&?/,'$1').replace(/[?&]$/,'').endsWith(suffix));
 }
 
 function expectPost(init: RequestInit | undefined) {
@@ -110,6 +120,7 @@ describe('Lunch Flow web section', () => {
     }
     container?.remove();
     container = null;
+    ledgerSession.invalidate();
     vi.restoreAllMocks();
   });
 
@@ -118,6 +129,7 @@ describe('Lunch Flow web section', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     await act(async () => {
+      await ledgerSession.bootstrap();
       const section = createElement(LunchFlowSection, { onWorkspaceRefresh });
       root?.render(strict ? createElement(StrictMode, null, section) : section);
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -129,6 +141,45 @@ describe('Lunch Flow web section', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+
+  it('preserves checkbox, currency and kind drafts across unchanged focus and status refreshes',async()=>{
+    let discovery=0,submitted:unknown;
+    mockApi({
+      '/api/lunchflow/accounts':()=>{discovery++;return {body:configuredAccounts({currencies:['CAD','USD']})};},
+      '/api/lunchflow/account-selection':init=>{submitted=requestBody(init);return {body:{selected:1,queued:false}};},
+    });
+    await renderSection();
+    await act(async()=>{
+      requiredField<HTMLInputElement>(container,'input[type="checkbox"]').click();
+    });
+    await act(async()=>{setSelectValue(container,'Everyday Chequing currency','USD');setSelectValue(container,'Everyday Chequing kind','savings');});
+    const initialReads=discovery;
+    await act(async()=>{window.dispatchEvent(new Event('focus'));await new Promise(resolve=>setTimeout(resolve,0));});
+    await clickAndSettle(requiredButton(container,'Check connection status'));
+    expect(discovery).toBe(initialReads);
+    expect(requiredField<HTMLInputElement>(container,'input[type="checkbox"]').checked).toBe(true);
+    expect(requiredField<HTMLSelectElement>(container,'select[aria-label="Everyday Chequing currency"]').value).toBe('USD');
+    expect(requiredField<HTMLSelectElement>(container,'select[aria-label="Everyday Chequing kind"]').value).toBe('savings');
+    await clickAndSettle(requiredButton(container,'Save selection'));
+    expect(submitted).toMatchObject({connectionId:'c',expectedGeneration:2,accounts:expect.arrayContaining([{providerAccountId:'rbc-chequing',currency:'USD',kind:'savings'}])});
+  });
+
+  it('reloads account drafts and invalidates disconnect confirmation when the generation changes',async()=>{
+    let generation=2,discovery=0;
+    mockApi({
+      '/api/lunchflow/connection':()=>({body:{userId:'owner',ledgerId:'personal',connectionId:'c',generation,adapter:'personal',configured:true,connected:true,canReconnect:false,reconnectRequired:false,remoteRevocation:'not_requested',reason:'legacy_cutover_required',retryable:false}}),
+      '/api/lunchflow/accounts':()=>{discovery++;return {body:{...configuredAccounts(),generation}};},
+    });
+    await renderSection();
+    await act(async()=>{requiredField<HTMLInputElement>(container,'input[type="checkbox"]').click();});
+    await clickAndSettle(requiredButton(container,'Disconnect Lunch Flow'));
+    expect(findButton(container,'Confirm disconnect')).toBeDefined();
+    generation=4;
+    await clickAndSettle(requiredButton(container,'Check connection status'));
+    expect(discovery).toBe(2);
+    expect(requiredField<HTMLInputElement>(container,'input[type="checkbox"]').checked).toBe(false);
+    expect(findButton(container,'Confirm disconnect')).toBeUndefined();
+  });
 
   it('shows explicit account state and keeps a queued refresh separate from last-known data', async () => {
     let discoveryCalls = 0;
@@ -188,7 +239,7 @@ describe('Lunch Flow web section', () => {
     });
 
     await clickAndSettle(saveButton);
-    expect(selectionBody).toEqual({ accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] });
+    expect(selectionBody).toEqual({ connectionId:'c',expectedGeneration:2,accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] });
     expect(containerText(container)).toContain('Lunch Flow selection saved for 1 account.');
     expect(container?.querySelector('[role="alert"]')?.textContent).toContain('did not queue a sync');
   });
@@ -234,7 +285,7 @@ describe('Lunch Flow web section', () => {
     mockApi({
       '/api/lunchflow/accounts': { body: response },
       '/api/lunchflow/account-selection': (init) => {
-        expect(JSON.parse(String(init?.body))).toEqual({ accounts: [] });
+        expect(JSON.parse(String(init?.body))).toEqual({ connectionId:'c',expectedGeneration:2,accounts: [] });
         return { body: { selected: 0, queued: false } };
       },
     });
@@ -415,7 +466,51 @@ describe('Lunch Flow web section', () => {
       retryButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(container?.textContent).toContain('Lunch Flow is not configured on this Worker.');
-    expect(container?.textContent).toContain('No key belongs in the browser.');
+    expect(container?.textContent).toContain('Lunch Flow is not configured.');
+    expect(container?.textContent).toContain('No secret belongs in the browser.');
   });
+  it('offers Platform connect only after authenticated status and explains Personal disconnect', async () => {
+    mockApi({'/api/lunchflow/connection':{body:{userId:'owner',ledgerId:'personal',connectionId:'c',generation:2,adapter:'personal',configured:true,connected:true,canReconnect:false,reconnectRequired:false,remoteRevocation:'not_requested',reason:'legacy_cutover_required',retryable:false}},'/api/lunchflow/accounts':{body:configuredAccounts()}});
+    await renderSection();
+    expect(findButton(container,'Reconnect Lunch Flow')).toBeUndefined();
+    await clickAndSettle(requiredButton(container,'Disconnect Lunch Flow'));
+    expect(containerText(container)).toContain('requires the operator');
+    expect(containerText(container)).toContain('Imported history stays');
+  });
+
+  it.each([
+    [{configured:false,connected:false,canReconnect:false,adapter:'platform'},'operator',null],
+    [{connected:false,canReconnect:true,adapter:'platform',reason:'disconnected'},'disconnected','Connect Lunch Flow'],
+    [{connected:false,canReconnect:true,adapter:'platform',reconnectRequired:true},'authorization again','Reconnect Lunch Flow'],
+    [{connected:false,canReconnect:false,adapter:'personal',reason:'personal_disconnected'},'requires the operator',null],
+    [{connected:false,canReconnect:false,adapter:'platform',remoteRevocation:'pending',retryable:true},'pending','Retry access removal'],
+    [{connected:false,canReconnect:false,adapter:'platform',remoteRevocation:'failed',retryable:true},'failed','Retry access removal'],
+    [{connected:false,canReconnect:false,adapter:'platform',remoteRevocation:'uncertain',reason:'operation_uncertain'},'uncertain',null],
+  ])('renders the authenticated connection action matrix %j',async(overrides,copy,action)=>{
+    const status=Object.assign({userId:'owner',ledgerId:'personal',connectionId:'c',generation:2,configured:true,connected:true,canReconnect:false,reconnectRequired:false,adapter:'personal',remoteRevocation:'not_requested',reason:'legacy_cutover_required',retryable:false},overrides);
+    const spy=mockApi({'/api/lunchflow/connection':{body:status}});
+    window.history.replaceState(null,'','/?lunchflow=connected');
+    await renderSection();
+    expect(containerText(container)).toContain(copy);
+    if(action)expect(requiredButton(container,action).disabled).toBe(false);
+    else expect(findButton(container,'Connect Lunch Flow')).toBeUndefined();
+    expect(window.location.search).not.toContain('lunchflow');
+    expect(spy.mock.calls.some(call=>String(call[0]).includes('/accounts'))).toBe(false);
+  });
+  it('confirms the captured generation and shows pending remote removal without promising success',async()=>{
+    let removed=false;
+    const status={userId:'owner',ledgerId:'personal',connectionId:'c',generation:2,configured:true,connected:true,canReconnect:true,reconnectRequired:false,adapter:'platform',remoteRevocation:'not_requested',reason:'connected',retryable:false};
+    const spy=mockApi({
+      '/api/lunchflow/connection':()=>({body:removed?{...status,generation:3,connected:false,canReconnect:false,remoteRevocation:'pending',retryable:true}:status}),
+      '/api/lunchflow/accounts':{body:configuredAccounts()},
+      '/api/lunchflow/disconnect':init=>{expect(requestBody(init)).toEqual({connectionId:'c',expectedGeneration:2});removed=true;return {status:202,body:{...status,generation:3,connected:false,remoteRevocation:'pending'}};},
+    });
+    await renderSection();await clickAndSettle(requiredButton(container,'Disconnect Lunch Flow'));
+    expect(containerText(container)).toContain('across its bank feeds');
+    expect(requestWasMade(spy,'/api/lunchflow/disconnect')).toBe(false);
+    await clickAndSettle(requiredButton(container,'Confirm disconnect'));
+    expect(containerText(container)).toContain('is pending');
+    expect(findButton(container,'Save selection')).toBeUndefined();
+  });
+
 });

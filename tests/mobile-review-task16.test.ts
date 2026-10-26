@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { OWNER_LEDGER } from './helpers/tenants';
 import { describe, expect, it } from 'vitest';
 import worker from '../worker/index';

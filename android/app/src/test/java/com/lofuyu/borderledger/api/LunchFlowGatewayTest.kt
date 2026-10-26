@@ -3,6 +3,7 @@ package com.lofuyu.borderledger.api
 import com.lofuyu.borderledger.accounts.AccountHttpTransport
 import com.lofuyu.borderledger.accounts.HttpWorkerAccountConnectionGateway
 import com.lofuyu.borderledger.accounts.IdempotencyKey
+import com.lofuyu.borderledger.accounts.LunchFlowBinding
 import com.lofuyu.borderledger.accounts.LunchFlowSelection
 import com.lofuyu.borderledger.accounts.LunchFlowSelectionRequest
 import com.lofuyu.borderledger.accounts.LunchFlowSyncRequest
@@ -20,11 +21,11 @@ class LunchFlowGatewayTest {
     fun discoveryDecodesNullableProviderCurrencyAndLastError() = runTest {
         val gateway = gateway(
             """
-            {"configured":true,"accounts":[{"providerAccountId":"provider-1","name":"Everyday chequing","institution":"RBC","currencies":["CAD"],"selected":false,"accountId":null,"kind":null,"currency":null,"lastSyncedAt":null,"lastError":"provider_unavailable"}]}
+            {"configured":true,"connectionId":"lf","generation":2,"accounts":[{"connectionId":"lf","providerAccountId":"provider-1","name":"Everyday chequing","institution":"RBC","currencies":["CAD"],"selected":false,"accountId":null,"kind":null,"currency":null,"lastSyncedAt":null,"lastError":"provider_unavailable"}]}
             """.trimIndent(),
         )
 
-        val account = gateway.readLunchFlowAccounts().accounts.single()
+        val account = gateway.readLunchFlowAccounts(LunchFlowBinding("lf",2)).accounts.single()
 
         assertEquals("provider-1", account.providerAccountId)
         assertNull(account.accountId)
@@ -39,19 +40,19 @@ class LunchFlowGatewayTest {
         val gateway = HttpWorkerAccountConnectionGateway(
             origin = "https://pf.example",
             environment = "sandbox",
-            ownerCredentials = OwnerCredentialProvider { "owner-token" },
+            ownerCredentials = com.lofuyu.borderledger.ownerCredentials("owner-token"),
             transport = object : AccountHttpTransport {
                 override suspend fun execute(value: MobileRequest): ByteArray {
                     request = value
-                    return """{"configured":true,"accounts":[]}""".encodeToByteArray()
+                    return """{"configured":true,"connectionId":"lf","generation":2,"accounts":[]}""".encodeToByteArray()
                 }
             },
         )
 
-        gateway.readLunchFlowStatus()
+        gateway.readLunchFlowStatus(LunchFlowBinding("lf",2))
 
         assertEquals("GET", request?.method)
-        assertEquals("https://pf.example/api/mobile/v1/lunchflow/accounts?status=local", request?.url)
+        assertEquals("https://pf.example/api/mobile/v1/lunchflow/accounts?status=local&connectionId=lf", request?.url)
         assertEquals("Bearer owner-token", request?.headers?.get("Authorization"))
     }
 
@@ -61,7 +62,7 @@ class LunchFlowGatewayTest {
         val gateway = HttpWorkerAccountConnectionGateway(
             origin = "https://pf.example",
             environment = "sandbox",
-            ownerCredentials = OwnerCredentialProvider { "owner-token" },
+            ownerCredentials = com.lofuyu.borderledger.ownerCredentials("owner-token"),
             transport = object : AccountHttpTransport {
                 override suspend fun execute(value: MobileRequest): ByteArray {
                     request = value
@@ -72,6 +73,7 @@ class LunchFlowGatewayTest {
 
         val receipt = gateway.selectLunchFlowAccounts(
             LunchFlowSelectionRequest(
+                binding=LunchFlowBinding("lf",2),
                 accounts = listOf(LunchFlowSelection("provider-1", "CAD", "credit")),
                 idempotencyKey = IdempotencyKey("request-1"),
             ),
@@ -87,6 +89,8 @@ class LunchFlowGatewayTest {
         assertEquals("provider-1", account.getString("providerAccountId"))
         assertEquals("CAD", account.getString("currency"))
         assertEquals("credit", account.getString("kind"))
+        assertEquals(2,JSONObject(request?.body?.toString(Charsets.UTF_8)).getLong("expectedGeneration"))
+        assertEquals("lf",JSONObject(request?.body?.toString(Charsets.UTF_8)).getString("connectionId"))
         assertEquals(1, receipt.selected)
         assertTrue(receipt.queued)
     }
@@ -97,7 +101,7 @@ class LunchFlowGatewayTest {
         val gateway = HttpWorkerAccountConnectionGateway(
             origin = "https://pf.example",
             environment = "sandbox",
-            ownerCredentials = OwnerCredentialProvider { "owner-token" },
+            ownerCredentials = com.lofuyu.borderledger.ownerCredentials("owner-token"),
             transport = object : AccountHttpTransport {
                 override suspend fun execute(value: MobileRequest): ByteArray {
                     request = value
@@ -106,7 +110,7 @@ class LunchFlowGatewayTest {
             },
         )
 
-        val receipt = gateway.syncLunchFlow(LunchFlowSyncRequest(IdempotencyKey("sync-1")))
+        val receipt = gateway.syncLunchFlow(LunchFlowSyncRequest(IdempotencyKey("sync-1"),LunchFlowBinding("lf",2)))
 
         assertEquals("POST", request?.method)
         assertEquals("https://pf.example/api/mobile/v1/lunchflow/sync", request?.url)
@@ -118,7 +122,7 @@ class LunchFlowGatewayTest {
 private fun gateway(body: String): HttpWorkerAccountConnectionGateway = HttpWorkerAccountConnectionGateway(
     origin = "https://pf.example",
     environment = "sandbox",
-    ownerCredentials = OwnerCredentialProvider { "owner-token" },
+    ownerCredentials = com.lofuyu.borderledger.ownerCredentials("owner-token"),
     transport = object : AccountHttpTransport {
         override suspend fun execute(value: MobileRequest): ByteArray = body.encodeToByteArray()
     },

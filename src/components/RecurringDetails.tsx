@@ -1,8 +1,9 @@
+import { useLedgerApi } from './PrivateSession';
 import { useEffect, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, CircleAlert, CircleCheck, Clock3, RefreshCw, X } from 'lucide-react';
 import { formatDate, formatMoney } from '../domain/format';
 import type { CurrencyCode } from '../domain/currencies';
-import { ledgerApi, LedgerApiError } from '../domain/api';
+import { LedgerApiError } from '../domain/api';
 import type { RecurringClassification, RecurringDetailPage } from '../domain/recurring';
 
 interface RecurringDetailsProps {
@@ -30,6 +31,7 @@ function detailError(error: unknown) {
 }
 
 export function RecurringDetails({ streamId, onClose, onSaved }: RecurringDetailsProps) {
+  const ledgerApi = useLedgerApi();
   const [detail, setDetail] = useState<RecurringDetailPage | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);

@@ -22,6 +22,9 @@ object BridgePayloads {
             is OwnerSessionState.CallbackRejected -> "callback_rejected"; is OwnerSessionState.StorageFailure -> "storage_failure"
         }, "expiresAt" to when(v) { is OwnerSessionState.SignedIn -> v.expiresAt; is OwnerSessionState.AwaitingBrowser -> v.expiresAt; else -> null },
         "pendingDestination" to (v as? OwnerSessionState.SignedIn)?.pendingDestination,
+        "userId" to (v as? OwnerSessionState.SignedIn)?.binding?.identity?.userId,
+        "ledgerId" to (v as? OwnerSessionState.SignedIn)?.binding?.identity?.ledgerId,
+        "sessionEpoch" to (v as? OwnerSessionState.SignedIn)?.binding?.epoch,
         "reason" to (v as? OwnerSessionState.SignedOut)?.reason?.name,
         "pendingRevocations" to when(v) { is OwnerSessionState.SignedOut -> v.pendingRevocations; is OwnerSessionState.Expired -> v.pendingRevocations; else -> 0 },
         "environment" to environment,
@@ -71,9 +74,13 @@ object BridgePayloads {
         "linkDisabledReason" to v.linkDisabledReason, "transactionId" to v.transactionId, "annotation" to v.annotation?.let { mapOf("transactionId" to it.transactionId, "expectedRevision" to it.expectedRevision, "category" to it.category, "note" to it.note) }, "annotationDisabledReason" to v.annotationDisabledReason)
     fun account(v: BankAccount) = mapOf("providerAccountId" to v.providerAccountId, "name" to v.name, "mask" to v.mask, "subtype" to v.subtype, "currency" to v.currency, "kind" to v.kind)
     fun accountPage(v: AccountPage) = mapOf("accounts" to v.accounts.map(::account), "nextCursor" to v.nextCursor, "limit" to v.limit)
-    fun lunchFlowAccounts(v: LunchFlowAccounts) = mapOf("configured" to v.configured, "accounts" to v.accounts.map { account ->
+    fun lunchFlowConnection(v: com.lofuyu.borderledger.accounts.LunchFlowConnection) = mapOf(
+        "userId" to v.userId,"ledgerId" to v.ledgerId,"connectionId" to v.connectionId,"generation" to v.generation?.toDouble(),
+        "adapter" to v.adapter,"configured" to v.configured,"connected" to v.connected,"reconnectRequired" to v.reconnectRequired,
+        "canReconnect" to v.canReconnect,"remoteRevocation" to v.remoteRevocation,"reason" to v.reason,"retryable" to v.retryable)
+    fun lunchFlowAccounts(v: LunchFlowAccounts) = mapOf("connectionId" to v.connectionId,"generation" to v.generation.toDouble(),"configured" to v.configured, "accounts" to v.accounts.map { account ->
         mapOf("providerAccountId" to account.providerAccountId, "name" to account.name, "institution" to account.institution,
-            "currencies" to account.currencies, "selected" to account.selected, "accountId" to account.accountId,
+            "connectionId" to account.connectionId,"providerBankConnectionId" to account.providerBankConnectionId,"lastAttemptAt" to account.lastAttemptAt,"currencies" to account.currencies, "selected" to account.selected, "accountId" to account.accountId,
             "kind" to account.kind, "currency" to account.currency, "lastSyncedAt" to account.lastSyncedAt, "lastError" to account.lastError)
     })
     fun connection(v: ConnectionStatus) = mapOf("connectionId" to v.connectionId, "institution" to v.institution, "state" to v.state, "expiresAt" to v.expiresAt, "cleanupState" to v.cleanupState, "lastSyncedAt" to v.lastSyncedAt, "lastError" to v.lastError?.let { "source_error" })

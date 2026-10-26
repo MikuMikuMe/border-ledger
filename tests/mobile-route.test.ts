@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { describe, expect, it } from 'vitest';
 import worker from '../worker/index';
 import { createAlertFixture, event, mobileEnv, postAlerts, CAPTURE_SECRET } from './helpers/alerts';

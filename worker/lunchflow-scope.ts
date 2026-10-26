@@ -11,13 +11,14 @@ export function connectionBinding(context:LedgerContext & {connection?:Readonly<
   if(context.userId==='owner'&&context.ledgerId==='personal')return {id:PERSONAL_CONNECTION_ID,generation:1,adapter:'personal'};
   return connectionError('connection_required',400);
 }
-export async function resolveLunchFlowScope(db:D1Database,context:LunchFlowBinding,id?:string):Promise<LunchFlowScope|null> {
+export async function resolveLunchFlowScope(db:D1Database,context:LunchFlowBinding,id?:string,expectedGeneration?:number):Promise<LunchFlowScope|null> {
   await assertFinancialAuthority(db,context,'connections:manage');
   const requested=id??context.connection?.id??(context.userId==='owner'&&context.ledgerId==='personal'?PERSONAL_CONNECTION_ID:undefined);
   if(!requested)return null;
   const row=await readLunchFlowConnection(db,context,requested);
   if(!row)return connectionError('connection_not_found',404);
-  const binding=context.connection??{id:row.id,generation:row.generation,adapter:row.adapter};
+  if(expectedGeneration!==undefined&&row.generation!==expectedGeneration)return connectionError('connection_generation_conflict');
+  const binding=context.connection??{id:row.id,generation:expectedGeneration??row.generation,adapter:row.adapter};
   return Object.freeze({...immutableFinancialContext(context),connection:Object.freeze({...binding})});
 }
 export function lunchFlowScopePredicate(context:LunchFlowBinding) {
@@ -32,6 +33,7 @@ export async function assertLunchFlowScope(db:D1Database,context:LunchFlowBindin
   const fence=lunchFlowScopePredicate(context);
   if(await db.prepare(`SELECT 1 WHERE ${fence.sql}`).bind(...fence.bindings).first())return;
   const row=await readLunchFlowConnection(db,context,connectionBinding(context).id);
+  if(row&&row.generation!==connectionBinding(context).generation)return connectionError('connection_generation_conflict');
   if(row)assertConnectionIdle(row);
   connectionError('reconnect_required');
 }

@@ -10,6 +10,7 @@ import {
 
 const snapshot = (state: SafeSessionSnapshot['state'], overrides: Partial<SafeSessionSnapshot> = {}): SafeSessionSnapshot => ({
   state,
+  userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session',
   expiresAt: null,
   pendingDestination: null,
   reason: null,

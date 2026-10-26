@@ -354,7 +354,10 @@ export async function publishLunchFlowSelection(
   if (operation && operationIdValue) statements.push(selectionReceiptStatement(db, ledger, operation, { operationIdValue: operationIdValue, selectionJson: context.selectionJson }));
   statements.push(selectionRevisionStatement(db, ledger, context.selectionJson));
 
-  const batchResults = statements.length > 0 ? await db.batch(statements) : [];
+  const batchResults = await db.batch(statements).catch(async error => {
+    await assertLunchFlowScope(db,ledger);
+    throw error;
+  });
   return completeSelectionPublication(db, ledger, selection, { operation: operation, batchResults: batchResults });
 }
 

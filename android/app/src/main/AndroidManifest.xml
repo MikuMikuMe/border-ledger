@@ -25,6 +25,14 @@
                     android:scheme="https" />
             </intent-filter>
         </activity>
+        <activity android:name=".accounts.LunchFlowCallbackActivity" android:excludeFromRecents="true" android:exported="true" android:noHistory="true">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:host="${mobileCallbackHost}" android:path="/android/lunchflow/callback" android:scheme="https" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"

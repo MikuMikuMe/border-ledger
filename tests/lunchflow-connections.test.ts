@@ -38,11 +38,11 @@ describe('Lunch Flow encrypted connections',()=>{
     try{
       const id=await connect(f);await f.db.prepare("UPDATE lunchflow_connections SET access_expires_at='2000-01-01' WHERE id=?").bind(id).run();
       const refreshing=f.connections.accessToken(SECOND_LEDGER,id);const rejected=expect(refreshing).rejects.toThrow();await entered.promise;
-      expect(await f.connections.disconnect(SECOND_LEDGER,id)).toMatchObject({connected:false,remoteRevocation:'pending',canReconnect:false});
+      expect(await f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!)).toMatchObject({connected:false,remoteRevocation:'pending',canReconnect:false});
       expect(methods).not.toContain('DELETE');
       expect(await f.db.prepare('SELECT token_ciphertext FROM lunchflow_connections WHERE id=?').bind(id).first()).toMatchObject({token_ciphertext:null});
       gate.resolve(Response.json({...token,access_token:'late'}));await rejected;
-      expect(await f.connections.disconnect(SECOND_LEDGER,id)).toMatchObject({remoteRevocation:'succeeded',connected:false,canReconnect:true});
+      expect(await f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!)).toMatchObject({remoteRevocation:'succeeded',connected:false,canReconnect:true});
       expect((await f.db.prepare("SELECT COUNT(*) n FROM transactions WHERE ledger_id='second-ledger'").first())?.n).toBe(2);
     }finally{f.close();}
   });
@@ -65,7 +65,7 @@ describe('Lunch Flow encrypted connections',()=>{
   });
   it('never assigns one provider user to two hosted users, even after disconnect',async()=>{
     const f=await setup(async(_input,init)=>init?.method==='DELETE'?new Response(null,{status:204}):Response.json(token));
-    try{const id=await connect(f);await f.connections.disconnect(SECOND_LEDGER,id);
+    try{const id=await connect(f);await f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!);
       const other=await f.oauth.startWeb(OWNER_LEDGER,browser);
       await expect(f.oauth.complete(OWNER_LEDGER,browser,{state:new URL(other.authorizationUrl).searchParams.get('state')!,cookie:other.cookie,code:'code'})).rejects.toMatchObject({code:'provider_identity_conflict'});
       expect(await f.connections.status(OWNER_LEDGER)).toMatchObject({connected:false});
@@ -74,9 +74,9 @@ describe('Lunch Flow encrypted connections',()=>{
   it('keeps remote revocation failure disabled and supports a fenced explicit retry',async()=>{
     let deletes=0;const f=await setup(async(_input,init)=>{if(init?.method==='DELETE'){deletes++;return new Response(null,{status:deletes===1?401:204});}return Response.json(token);});
     try{const id=await connect(f);
-      expect(await f.connections.disconnect(SECOND_LEDGER,id)).toMatchObject({remoteRevocation:'failed',canReconnect:false,connected:false});
+      expect(await f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!)).toMatchObject({remoteRevocation:'failed',canReconnect:false,connected:false});
       await expect(f.oauth.startWeb(SECOND_LEDGER,browser)).rejects.toThrow();
-      expect(await f.connections.disconnect(SECOND_LEDGER,id)).toMatchObject({remoteRevocation:'succeeded',canReconnect:true});
+      expect(await f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!)).toMatchObject({remoteRevocation:'succeeded',canReconnect:true});
     }finally{f.close();}
   });
 });
@@ -93,10 +93,10 @@ it.each(['exchange','revoke'] as const)('keeps an uncertain %s outcome blocked a
     if(kind==='exchange') {
       const start=await f.oauth.startWeb(SECOND_LEDGER,browser);id=start.connectionId;
       await expect(f.oauth.complete(SECOND_LEDGER,browser,{state:new URL(start.authorizationUrl).searchParams.get('state')!,cookie:start.cookie,code:'code'})).rejects.toThrow();
-    }else{id=await connect(f);await f.connections.disconnect(SECOND_LEDGER,id);}
+    }else{id=await connect(f);await f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!);}
     await f.db.prepare("UPDATE lunchflow_connections SET operation_expires_at='2000-01-01' WHERE id=?").bind(id).run();
     await expect(f.oauth.startWeb(SECOND_LEDGER,browser)).rejects.toMatchObject({code:'operation_uncertain'});
-    const status=await f.connections.disconnect(SECOND_LEDGER,id);
+    const status=await f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!);
     expect(status).toMatchObject({connected:false,canReconnect:false,reason:'operation_uncertain',remoteRevocation:'uncertain'});
     expect(attempts).toBe(1);
     expect(JSON.stringify(status)).not.toContain('test-refresh');
@@ -115,7 +115,7 @@ it('never revokes through a different configured OAuth application',async()=>{
     const id=await connect(f);let requests=0;
     const changed=createLunchFlowConnections({...f.env,LUNCHFLOW_CLIENT_ID:'another-app'},async()=>{requests++;return new Response(null,{status:404});});
     await expect(changed.accessToken(SECOND_LEDGER,id)).rejects.toMatchObject({code:'application_configuration_changed'});
-    await expect(changed.disconnect(SECOND_LEDGER,id)).rejects.toMatchObject({code:'application_configuration_changed'});
+    await expect(changed.disconnect(SECOND_LEDGER,id,(await changed.status(SECOND_LEDGER)).generation!)).rejects.toMatchObject({code:'application_configuration_changed'});
     expect(requests).toBe(0);
     expect(await f.connections.status(SECOND_LEDGER)).toMatchObject({connected:false,remoteRevocation:'pending',canReconnect:false});
   }finally{f.close();}
@@ -140,7 +140,7 @@ async function completeOperation(f:Awaited<ReturnType<typeof setup>>,operation:C
     const refreshing=f.connections.accessToken(SECOND_LEDGER,id);
     if(failed)await expect(refreshing).rejects.toThrow();else await refreshing;
   }
-  if(operation==='revoke')await f.connections.disconnect(SECOND_LEDGER,id);
+  if(operation==='revoke')await f.connections.disconnect(SECOND_LEDGER,id,(await f.connections.status(SECOND_LEDGER)).generation!);
   return id;
 }
 it.each([

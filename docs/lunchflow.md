@@ -62,11 +62,15 @@ All routes return `Cache-Control: no-store`. Web routes use `/api/lunchflow`; na
 | --- | --- | --- |
 | `GET /connection` | None | Connection status described below |
 | `POST /oauth/start` | No user, ledger or return URL | Exactly `{authorizationUrl,connectionId}` |
-| `POST /disconnect` | `{connectionId}` | Connection status, HTTP 202 for remote pending/failed/uncertain, otherwise 200 |
+| `POST /disconnect` | `{connectionId,expectedGeneration}` | Connection status, HTTP 202 for remote pending/failed/uncertain, otherwise 200 |
 | `GET /accounts` | `connectionId` query | `{configured,connectionId,generation,accounts,archivedAccountCount?}` |
 | `GET /accounts?status=local` | `connectionId` query | Same shape without provider calls; rows include `lastAttemptAt` |
-| `POST /account-selection` | `{connectionId,accounts:[{providerAccountId,currency,kind}]}` | Existing `{selected,queued}` |
-| `POST /sync` | `{connectionId}` | Existing `{queued,accounts}`, HTTP 202 |
+| `POST /account-selection` | `{connectionId,expectedGeneration,accounts:[{providerAccountId,currency,kind}]}` | Existing `{selected,queued}` |
+| `POST /sync` | `{connectionId,expectedGeneration}` | Existing `{queued,accounts}`, HTTP 202 |
+
+Selection, manual sync, and disconnect require a positive safe-integer `expectedGeneration`, including Personal requests. Capture it with the connection ID from the status the user observed, before any await; keep that exact pair through dispatch, retries and reconciliation. Missing/malformed values return 400. An owned connection whose generation changed returns 409 `connection_generation_conflict` without mutation, enqueue or remote removal. Foreign IDs still return 404; generation is a precondition, never authorization. Refresh status and ask for a new explicit action after a conflict. Never substitute a refreshed generation into an old command.
+
+The initial disconnect atomically increments the observed generation and disables local credentials/selections. Retrying pending or failed remote removal uses the freshly observed disabled generation and that connection's exact durable operation. An old pre-disconnect generation cannot authorize a retry or affect a later reconnect. In-progress/uncertain outcomes remain blocked and never retry automatically.
 
 Selection/sync require `Idempotency-Key` for native requests and accept it for web requests. Receipt identity includes connection generation. Platform mutations require an explicit owned connection ID; foreign IDs return non-disclosing 404. Only exact-owner Personal calls retain omitted-ID compatibility. An unbound nonowner account read returns `{configured:false,accounts:[]}`; clients should first load `/connection` and then pass its ID. Account rows retain existing fields and add `connectionId` and nullable `providerBankConnectionId`.
 
@@ -82,6 +86,8 @@ Native start returns a one-use launch URL at `/api/lunchflow/oauth/launch?ticket
 
 Success returns only to canonical `/?lunchflow=connected` (web) or `/android/lunchflow/callback?result=connected` (native). Verified native denial returns `?result=failed`; other callback failures use canonical `/?lunchflow=failed`. Caller-supplied return URLs are ignored. These result indicators contain no code, state, token or identity and are never proof of ownership: re-fetch authenticated status.
 
-Task 4 must add the separate `/android/lunchflow/callback` app-link handler; `/android/auth/callback` remains sign-in only. App resume with authenticated status refresh is the fallback until that client ships. Add distinct native connection/start/disconnect bridge methods and retain structured web error codes. Keep session/cache partitioning separate from capture-intake storage. Client OAuth controls and real-provider end-to-end verification are not completed by this backend change.
+The maintained Android client has a separate `/android/lunchflow/callback` app-link handler; `/android/auth/callback` remains sign-in only. It accepts only canonical HTTPS result-only links with a single known result and no fragment. The native system-browser launch URL/ticket never enters JavaScript or pending storage. Encrypted pending metadata binds user, ledger, local session epoch, connection and observed generation, expires after ten minutes, and is consumed before callback refresh. A hint re-fetches authenticated status; it cannot mark connected, switch identities or exchange a login code. Replay/unsolicited hints can only refresh actual status. Logout, account switch, cancellation and generation replacement discard completion; app resume independently refreshes status when the callback is lost. Native connection/start/disconnect methods preserve structured service codes and immutable OwnerWork binding.
+
+Web and native controls honor configuration, Personal operator-only restoration, canReconnect, retryable, and pending/failed/uncertain remote removal. Disconnect explains application-wide access removal and retained history before confirmation. Reconnect requires an explicit account-selection save. Client/session isolation and capture-intake storage stay separate. Real-provider end-to-end verification remains external.
 
 Platform client credentials, encryption-key installation, provider callback registration, and production rollout remain external setup. Tests use synthetic credentials and fake provider transport; no real bank/provider mutation is part of implementation validation.

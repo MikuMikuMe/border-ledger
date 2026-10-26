@@ -33,6 +33,19 @@ describe('closed-registration web authentication', () => {
     await db.batch([db.prepare("INSERT INTO users(id) VALUES ('second')"), db.prepare("INSERT INTO ledgers(id,user_id) VALUES ('second-ledger','second')"), db.prepare("INSERT INTO user_identities(issuer,subject,user_id) VALUES ('https://access.example.com','second','second')")]);
     const response = await worker.fetch(new Request('https://pf.example.com/api/accounts', { headers: { 'Cf-Access-Jwt-Assertion': 'second' } }), { ...env, DB: db } as never);
     expect(response.status).toBe(200);
+    expect(response.headers.get('X-Ledger-User')).toBe('second');
+    expect(response.headers.get('X-Ledger-Id')).toBe('second-ledger');
+    expect(response.headers.get('X-Ledger-Session')).toMatch(/^[a-f0-9]{64}$/);
     expect(await response.json()).toEqual({ accounts: [] });
+  });
+});
+
+
+describe('native identity protocol', () => {
+  it('rejects unsupported native clients before issuing a login request', async () => {
+    const { db } = fixture();
+    const response = await worker.fetch(new Request('https://pf.example.com/api/mobile/v1/auth/requests', { method: 'POST', body: '{}' }), { ...env, DB: db } as never);
+    expect(response.status).toBe(426);
+    expect(await response.json()).toMatchObject({ code: 'update_required', retryable: false });
   });
 });

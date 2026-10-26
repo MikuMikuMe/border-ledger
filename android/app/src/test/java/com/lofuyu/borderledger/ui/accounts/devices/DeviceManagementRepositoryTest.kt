@@ -14,7 +14,7 @@ class DeviceManagementRepositoryTest {
         val repository = HttpWorkerDeviceManagementRepository(
             origin = "https://pf.example",
             environment = "sandbox",
-            ownerCredentials = OwnerCredentialProvider { "owner-token" },
+            ownerCredentials = com.lofuyu.borderledger.ownerCredentials("owner-token"),
             transport = DeviceHttpTransport { captured ->
                 request = captured
                 DeviceHttpResponse(200, """
@@ -42,7 +42,7 @@ class DeviceManagementRepositoryTest {
         val repository = HttpWorkerDeviceManagementRepository(
             origin = "https://pf.example",
             environment = "sandbox",
-            ownerCredentials = OwnerCredentialProvider { "owner-token" },
+            ownerCredentials = com.lofuyu.borderledger.ownerCredentials("owner-token"),
             transport = DeviceHttpTransport { captured ->
                 request = captured
                 DeviceHttpResponse(200, """

@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { describe, expect, it } from 'vitest';
 import { createAlertFixture, event, postAlerts, CAPTURE_SECRET } from './helpers/alerts';
 import { hashSecret } from '../worker/mobile-auth';

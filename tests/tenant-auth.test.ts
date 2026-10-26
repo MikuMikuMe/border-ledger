@@ -59,9 +59,12 @@ describe('provisioned tenant authentication', () => {
       await provision(fixture.db);
       const first = await login(fixture.db, 'owner-login');
       const second = await login(fixture.db, 'second-login');
+      expect(first.tokens).toMatchObject({ userId: 'owner', ledgerId: 'personal' });
+      expect(second.tokens).toMatchObject({ userId: 'second', ledgerId: 'second-ledger' });
       expect(await authenticateOwner(first.tokens.accessToken, fixture.db, config)).toMatchObject({ userId: 'owner', ledgerId: 'personal' });
       expect(await authenticateOwner(second.tokens.accessToken, fixture.db, config)).toMatchObject({ userId: 'second', ledgerId: 'second-ledger' });
       const refreshed = await refreshOwnerSession(fixture.db, { refreshToken: second.tokens.refreshToken, idempotencyKey: 'same-key' }, config);
+      expect(refreshed).toMatchObject({ userId: 'second', ledgerId: 'second-ledger' });
       expect(await authenticateOwner(refreshed.accessToken, fixture.db, config)).toMatchObject({ userId: 'second', ledgerId: 'second-ledger' });
       const children = await fixture.db.prepare('SELECT DISTINCT r.ledger_id FROM owner_refresh_generations r JOIN owner_session_families f ON f.id = r.family_id WHERE f.ledger_id = ?').bind('second-ledger').all();
       expect(children.results).toEqual([{ ledger_id: 'second-ledger' }]);

@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { handleMobileRequest } from '../worker/mobile';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';

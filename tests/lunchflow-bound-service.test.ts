@@ -21,7 +21,7 @@ it.each([OWNER_LEDGER,SECOND_LEDGER])('binds $userId Platform reconnect to stabl
   expect(before).toHaveLength(1);
   expect(queued[0]).toMatchObject({connectionId:id,generation:2,userId:context.userId,ledgerId:context.ledgerId});
   expect(await f.db.prepare('SELECT connection_id,provider_bank_connection_id FROM lunchflow_accounts').first()).toEqual({connection_id:id,provider_bank_connection_id:'raw-bank-connection'});
-  await f.connections.disconnect(context,id);
+  await f.connections.disconnect(context,id,(await f.connections.status(context)).generation!);
   expect(await f.db.prepare('SELECT enabled FROM lunchflow_accounts').first()).toEqual({enabled:0});
   await expect(service.requestSync()).rejects.toThrow();
   const start=await f.oauth.startWeb(context,browser);expect(start.connectionId).toBe(id);
@@ -35,7 +35,7 @@ it.each([OWNER_LEDGER,SECOND_LEDGER])('binds $userId Platform reconnect to stabl
 });
 it('does not silently reactivate disconnected Personal access when its key remains configured',async()=>{
  const f=await setup();try{
-  await f.connections.disconnect(OWNER_LEDGER,'lunchflow-personal-owner');
+  await f.connections.disconnect(OWNER_LEDGER,'lunchflow-personal-owner',1);
   let calls=0;const service=createLunchFlowService({...f.env,LUNCHFLOW_API_KEY:'test-owner',SYNC_QUEUE:{send:async()=>{}}},OWNER_LEDGER,{...provider,listAccounts:async()=>{calls++;return [account];}});
   await expect(service.selectAccounts(selection)).rejects.toThrow();
   expect(calls).toBe(0);
@@ -61,7 +61,7 @@ it.each(['snapshot','selection'] as const)('fences disconnect immediately before
   const mapping=await f.db.prepare('SELECT account_id FROM lunchflow_accounts WHERE connection_id=?').bind(f.id).first<{account_id:string}>();
   const row=await mapLunchFlowTransaction({...transaction,merchant:'late'},'same-bank',mapping!.account_id);
   let saved:unknown;
-  const racing={prepare:f.db.prepare.bind(f.db),batch:async(statements:D1Statement[])=>{await f.connections.disconnect(SECOND_LEDGER,f.id);saved=await history(f);return f.db.batch(statements);}};
+  const racing={prepare:f.db.prepare.bind(f.db),batch:async(statements:D1Statement[])=>{await f.connections.disconnect(SECOND_LEDGER,f.id,(await f.connections.status(SECOND_LEDGER)).generation!);saved=await history(f);return f.db.batch(statements);}};
   const write=operation==='snapshot'
    ?publishLunchFlowSnapshot(racing,scope,{revision:{providerAccountId:'same-bank',revision:1},transactions:[row],syncedAt:'2090-01-01'})
    :publishLunchFlowSelection(racing,scope,[{providerAccountId:'same-bank',accountId:mapping!.account_id,providerBankConnectionId:'raw-bank-connection',name:'late',institution:'Bank',currency:'CAD',kind:'chequing'}]);
@@ -114,7 +114,7 @@ it.each(['discovery','transactions'] as const)('does not return or publish %s fe
     listTransactions:async()=>{entered.resolve();await gate.promise;return [{...transaction,merchant:'late-private-data'}];}};
   const service=createLunchFlowService(f.env,SECOND_LEDGER,delayed,f.id);
   const pending=phase==='discovery'?service.readAccounts():service.sync();const rejected=expect(pending).rejects.toThrow();
-  await entered.promise;await f.connections.disconnect(SECOND_LEDGER,f.id);const saved=await history(f);
+  await entered.promise;await f.connections.disconnect(SECOND_LEDGER,f.id,(await f.connections.status(SECOND_LEDGER)).generation!);const saved=await history(f);
   gate.resolve();await rejected;expect(await history(f)).toEqual(saved);
  }finally{f.close();}
 });

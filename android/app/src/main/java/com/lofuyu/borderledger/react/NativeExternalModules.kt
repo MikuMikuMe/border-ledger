@@ -19,7 +19,15 @@ import com.lofuyu.borderledger.accounts.PendingCancellationRequest
 import com.lofuyu.borderledger.accounts.ProviderAccountId
 import com.lofuyu.borderledger.accounts.SyncRequest
 import org.json.JSONObject
+import kotlin.coroutines.coroutineContext
+import com.lofuyu.borderledger.auth.OwnerWork
+import com.lofuyu.borderledger.accounts.LunchFlowBinding
 
+private fun lunchFlowBinding(v: ReadableMap): LunchFlowBinding {
+    val generation=v.getDouble("expectedGeneration")
+    require(generation.isFinite() && generation==generation.toLong().toDouble())
+    return LunchFlowBinding(requireNotNull(v.text("connectionId")),generation.toLong())
+}
 private fun lunchFlowSelections(value: ReadableMap): List<LunchFlowSelection> {
     val values = requireNotNull(value.getArray("accounts"))
     require(values.size() <= 25)
@@ -41,7 +49,7 @@ private fun lunchFlowSyncResultId(receipt: LunchFlowSyncReceipt) =
 
 class AccountsModule(context: ReactApplicationContext, private val r: NativeServiceRuntime): NativeAccountsSpec(context) {
     private val s=BridgeSupport(r)
-    override fun initialize() { super.initialize(); s.observeSuspending("accounts") { val snapshot=r.external.linkSnapshot(); if(r.container.ownerSessionManager.state.value is com.lofuyu.borderledger.auth.OwnerSessionState.SignedIn) emitOnStateChanged(BridgeSupport.map(snapshot)) } }
+    override fun initialize() { super.initialize(); s.observeState(r.lunchFlowChanges) { emitOnLunchFlowChanged(BridgeSupport.map(mapOf("sequence" to 1.0))) }; s.observeSuspending("accounts") { val snapshot=r.external.linkSnapshot(); if(r.container.ownerSessionManager.state.value is com.lofuyu.borderledger.auth.OwnerSessionState.SignedIn) emitOnStateChanged(BridgeSupport.map(snapshot)) } }
     override fun invalidate() { s.close(); super.invalidate() }
     override fun getSnapshot(p: Promise)=s.call(p) { r.external.linkSnapshot() }
     override fun readAccounts(v: ReadableMap, p: Promise)=s.call(p) {
@@ -50,11 +58,20 @@ class AccountsModule(context: ReactApplicationContext, private val r: NativeServ
         BridgePayloads.accountPage(r.container.accountRepository.listAccounts(AccountPageRequest(v.text("cursor")?.let(::AccountCursor), limit)))
     }
     override fun readConnections(p: Promise)=s.call(p) { r.container.accountRepository.listConnections().map(BridgePayloads::connection) }
-    override fun readLunchFlowAccounts(p: Promise)=s.call(p) {
-        BridgePayloads.lunchFlowAccounts(r.container.accountRepository.readLunchFlowAccounts())
+    override fun readLunchFlowConnection(p: Promise)=s.call(p) { BridgePayloads.lunchFlowConnection(r.lunchFlow.connection()) }
+    override fun startLunchFlowAuthorization(p: Promise)=s.call(p) { r.lunchFlow.start(); true }
+    override fun cancelLunchFlowAuthorization(p: Promise)=s.call(p) { r.lunchFlow.cancel(); true }
+    override fun disconnectLunchFlow(v: ReadableMap,p: Promise)=s.call(p) {
+        val binding=lunchFlowBinding(v)
+        r.write(WriteRequest(requireNotNull(v.text("operationId")),"lunchflow_disconnect",binding.toString(),expectedOwner=requireNotNull(coroutineContext[OwnerWork]).binding.epoch) {
+            r.container.accountRepository.disconnectLunchFlow(binding); null
+        })
     }
-    override fun readLunchFlowStatus(p: Promise)=s.call(p) {
-        BridgePayloads.lunchFlowAccounts(r.container.accountRepository.readLunchFlowStatus())
+    override fun readLunchFlowAccounts(v: ReadableMap,p: Promise)=s.call(p) {
+        BridgePayloads.lunchFlowAccounts(r.container.accountRepository.readLunchFlowAccounts(lunchFlowBinding(v)))
+    }
+    override fun readLunchFlowStatus(v: ReadableMap,p: Promise)=s.call(p) {
+        BridgePayloads.lunchFlowAccounts(r.container.accountRepository.readLunchFlowStatus(lunchFlowBinding(v)))
     }
     override fun startConnect(v: ReadableMap, p: Promise)=s.call(p) {
         val op = requireNotNull(v.text("operationId"))
@@ -88,16 +105,18 @@ class AccountsModule(context: ReactApplicationContext, private val r: NativeServ
     override fun startLunchFlowAccountSelection(v: ReadableMap, p: Promise)=s.call(p) {
         val op = requireNotNull(v.text("operationId"))
         val selections = lunchFlowSelections(v)
-        r.write(WriteRequest(op, "lunchflow_account_selection", selections.toString()) {
+        val binding = lunchFlowBinding(v)
+        r.write(WriteRequest(op, "lunchflow_account_selection", binding.toString()+selections.toString(),expectedOwner=requireNotNull(coroutineContext[OwnerWork]).binding.epoch) {
             lunchFlowSelectionResultId(r.container.accountRepository.selectLunchFlowAccounts(
-                LunchFlowSelectionRequest(selections, IdempotencyKey(op)),
+                LunchFlowSelectionRequest(binding,selections, IdempotencyKey(op)),
             ))
         })
     }
     override fun startLunchFlowSync(v: ReadableMap, p: Promise)=s.call(p) {
         val op = requireNotNull(v.text("operationId"))
-        r.write(WriteRequest(op, "lunchflow_sync", "") {
-            lunchFlowSyncResultId(r.container.accountRepository.syncLunchFlow(LunchFlowSyncRequest(IdempotencyKey(op))))
+        val binding=lunchFlowBinding(v)
+        r.write(WriteRequest(op, "lunchflow_sync", binding.toString(),expectedOwner=requireNotNull(coroutineContext[OwnerWork]).binding.epoch) {
+            lunchFlowSyncResultId(r.container.accountRepository.syncLunchFlow(LunchFlowSyncRequest(IdempotencyKey(op),binding)))
         })
     }
     override fun startDisconnect(v: ReadableMap, p: Promise)=s.call(p) {

@@ -14,6 +14,9 @@ export type SafeSessionState =
   | 'storage_failure';
 
 export type SafeSessionSnapshot = {
+  userId?: string | null;
+  ledgerId?: string | null;
+  sessionEpoch?: string | null;
   state: SafeSessionState;
   expiresAt: string | null;
   pendingDestination: string | null;
@@ -44,7 +47,7 @@ export function initialAuthControls() {
 }
 
 export function routeForSession(snapshot: SafeSessionSnapshot, previousRoute: 'login' | 'shell' = 'login'): 'login' | 'shell' {
-  return snapshot.state === 'signed_in' || (snapshot.state === 'refreshing' && previousRoute === 'shell')
+  return (snapshot.state === 'signed_in' && !!snapshot.userId && !!snapshot.ledgerId && !!snapshot.sessionEpoch) || (snapshot.state === 'refreshing' && previousRoute === 'shell')
     ? 'shell'
     : 'login';
 }

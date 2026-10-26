@@ -20,6 +20,22 @@ import org.junit.Test
 
 class UploadCoordinatorTest {
     @Test
+    fun lateAcknowledgementAfterAccountSwitchRetainsOriginalQueue() = runTest {
+        val identity = com.lofuyu.borderledger.IdentityFixture()
+        val store = FakeUploadStore(QueuedAlert("local-1", "personal", "event-1", byteArrayOf(1), 10L))
+        val response = kotlinx.coroutines.CompletableDeferred<CaptureUploadResult>()
+        val client = RecordingUploadClient { response.await() }
+        val coordinator = CaptureUploadCoordinator(store, client, CaptureHealthStore(), batchEncoder = { ByteArray(1) }, boundary = identity.boundary)
+        val uploading = async { coordinator.sync() }
+        testScheduler.runCurrent()
+        identity.binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("b", "b-ledger"), "b-session")
+        response.complete(CaptureUploadResult.Success(listOf(CaptureEventAcknowledgement("event-1", "accepted", "provisional", emptyList()))))
+        assertTrue(uploading.await() is UploadSyncResult.PairingRequired)
+        assertEquals(listOf("event-1"), store.pending.map { it.eventId })
+        assertTrue(store.operations.isEmpty())
+    }
+
+    @Test
     fun concurrentForegroundAndBackgroundSyncShareOneImmutableUpload() = runTest {
         val store = FakeUploadStore(
             QueuedAlert("local-1", "personal", "event-1", byteArrayOf(1, 2), 10L),
@@ -30,7 +46,7 @@ class UploadCoordinatorTest {
                 listOf(CaptureEventAcknowledgement("event-1", "accepted", "provisional", listOf("accepted"))),
             )
         }
-        val coordinator = CaptureUploadCoordinator(store, client, CaptureHealthStore(), batchEncoder = { ByteArray(1) })
+        val coordinator = CaptureUploadCoordinator(store, client, CaptureHealthStore(), batchEncoder = { ByteArray(1) }, boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
 
         listOf(async { coordinator.sync() }, async { coordinator.sync() }).awaitAll()
 
@@ -51,7 +67,7 @@ class UploadCoordinatorTest {
                 listOf(CaptureEventAcknowledgement("event-1", "accepted", "non_spending", listOf("non_spending"))),
             )
         }
-        val coordinator = CaptureUploadCoordinator(store, client, CaptureHealthStore(), batchEncoder = { ByteArray(1) })
+        val coordinator = CaptureUploadCoordinator(store, client, CaptureHealthStore(), batchEncoder = { ByteArray(1) }, boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
 
         val result = coordinator.sync()
 
@@ -72,7 +88,7 @@ class UploadCoordinatorTest {
             ),
         )
         val health = CaptureHealthStore()
-        val coordinator = CaptureUploadCoordinator(store, client, health, batchEncoder = { ByteArray(1) })
+        val coordinator = CaptureUploadCoordinator(store, client, health, batchEncoder = { ByteArray(1) }, boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
 
         assertTrue(coordinator.sync() is UploadSyncResult.Retry)
         assertEquals(listOf("event-1"), store.pending.map(QueuedAlert::eventId))
@@ -93,7 +109,7 @@ class UploadCoordinatorTest {
             RecordingUploadClient(CaptureUploadResult.PairingRequired("capture_credential_expired")),
             health,
             batchEncoder = { ByteArray(1) },
-        )
+         boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
 
         assertTrue(coordinator.sync() is UploadSyncResult.PairingRequired)
         assertEquals(1, store.pending.size)
@@ -111,7 +127,7 @@ class UploadCoordinatorTest {
             health,
             clock = { 1_000L },
             batchEncoder = { ByteArray(1) },
-        )
+         boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
 
         assertTrue(coordinator.sync() is UploadSyncResult.Retry)
         assertEquals(3_600_000L, health.state.value.uploadRetryAtMillis!! - 1_000L)
@@ -125,7 +141,7 @@ class UploadCoordinatorTest {
             RecordingUploadClient(CaptureUploadResult.Permanent(listOf("event-1"), "idempotency_conflict")),
             CaptureHealthStore(),
             batchEncoder = { ByteArray(1) },
-        )
+         boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
 
         assertTrue(coordinator.sync() is UploadSyncResult.Quarantined)
         assertEquals(CaptureAcknowledgementDisposition.REVIEW, store.applied.single().single().disposition)

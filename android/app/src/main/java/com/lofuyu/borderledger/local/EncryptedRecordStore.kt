@@ -43,7 +43,7 @@ class FileEncryptedRecordStore(
     }
 
     override suspend fun write(record: String, value: ByteArray) = synchronized(this) {
-        val maximum = if (record == LedgerRecord.CAPTURE_INTAKE) MAX_CAPTURE_INTAKE_RECORD_BYTES else MAX_RECORD_BYTES
+        val maximum = if (record == LedgerRecord.CAPTURE_INTAKE || record.startsWith("${LedgerRecord.CAPTURE_INTAKE}_")) MAX_CAPTURE_INTAKE_RECORD_BYTES else MAX_RECORD_BYTES
         if (value.size > maximum) throw SecureStorageException("Encrypted storage record is too large.")
         ensureDirectory()
         val encrypted = vault.encrypt(aliasFor(record), value, record.encodeToByteArray())

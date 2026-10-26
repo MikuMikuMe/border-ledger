@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../worker/index';
@@ -81,7 +82,7 @@ function webSelectionRequest(providerAccountId: string) {
   return webRequest('/api/lunchflow/account-selection', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ accounts: [{ providerAccountId, currency: 'CAD', kind: 'chequing' }] }),
+    body: JSON.stringify({ expectedGeneration:1,accounts: [{ providerAccountId, currency: 'CAD', kind: 'chequing' }] }),
   });
 }
 
@@ -197,7 +198,7 @@ describe('Lunch Flow web route boundaries', () => {
         origin: 'https://evil.example',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] }),
+      body: JSON.stringify({ expectedGeneration:1,accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] }),
     }), webEnv(value.db) as never);
 
     expect(response.status).toBe(403);
@@ -363,7 +364,7 @@ describe('Lunch Flow mobile route boundaries', () => {
     const response = await worker.fetch(mobileRequest('/api/mobile/v1/lunchflow/account-selection', token, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] }),
+      body: JSON.stringify({ expectedGeneration:1,accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] }),
     }), mobileEnv(value.db, { send: async () => undefined }) as never);
 
     expect(response.status).toBe(400);

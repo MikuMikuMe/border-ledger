@@ -1,3 +1,4 @@
+import { bindWebResponse, matchesExpectedWebSession, webIdentityHeaders } from './client-identity';
 import { runLunchFlowJob, scheduleLunchFlow } from './lunchflow-jobs';
 import { handleLunchFlowHttp } from './lunchflow-http';
 import { lunchFlowHash } from './lunchflow-crypto';
@@ -1095,6 +1096,15 @@ async function handleQueueMessage(message: { body: unknown; ack(): void; retry()
   }
 }
 
+async function handleSessionApi(request: Request, env: Env, url: URL, context: LedgerContext): Promise<Response> {
+    const identity = await webIdentityHeaders(request, context);
+    if (!matchesExpectedWebSession(request, identity)) return bindWebResponse(json({ error: 'Your session changed. Sign in again.', code: 'session_changed', retryable: false }, { status: 409 }), identity);
+    const response = url.pathname === '/api/session' && request.method === 'GET'
+      ? json({ userId: context.userId, ledgerId: context.ledgerId })
+      : await handleAuthorizedApiRequest(request, env, url, context);
+    return bindWebResponse(response, identity);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -1157,7 +1167,7 @@ export default {
     const context = await authorizeWebLedger(request, env);
     if (context instanceof Response) return context;
 
-    return handleAuthorizedApiRequest(request, env, url, context);
+    return handleSessionApi(request, env, url, context);
   },
 
   async scheduled(controller: { scheduledTime: number }, env: Env) {

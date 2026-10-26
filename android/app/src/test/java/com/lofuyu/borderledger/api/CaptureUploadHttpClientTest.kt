@@ -26,7 +26,7 @@ class CaptureUploadHttpClientTest {
     }
 
     @Test
-    fun http200PerItemConflictIsParsedAsAStableQuarantineableAck() = runTest {
+    fun http200PerItemConflictIsParsedAsAStableQuarantineableAck() = runTest(kotlinx.coroutines.test.StandardTestDispatcher() + com.lofuyu.borderledger.auth.CaptureWork(CaptureCredentialRecord("capture", "device", 1, "2099-01-01T00:00:00Z", "revoke", com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session"))) {
         val client = client(CaptureHttpResponse(
             200,
             """
@@ -43,7 +43,7 @@ class CaptureUploadHttpClientTest {
     }
 
     @Test
-    fun httpClassificationPreservesRetryAfterAndCredentialPause() = runTest {
+    fun httpClassificationPreservesRetryAfterAndCredentialPause() = runTest(kotlinx.coroutines.test.StandardTestDispatcher() + com.lofuyu.borderledger.auth.CaptureWork(CaptureCredentialRecord("capture", "device", 1, "2099-01-01T00:00:00Z", "revoke", com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session"))) {
         val rateLimited = client(CaptureHttpResponse(429, ByteArray(0), mapOf("Retry-After" to "42")))
         val retry = rateLimited.upload(listOf(event())) as CaptureUploadResult.Retryable
         assertEquals("rate_limited", retry.code)
@@ -57,7 +57,7 @@ class CaptureUploadHttpClientTest {
     }
 
     @Test
-    fun malformedSuccessResponseIsRetryableAndDoesNotPretendToAck() = runTest {
+    fun malformedSuccessResponseIsRetryableAndDoesNotPretendToAck() = runTest(kotlinx.coroutines.test.StandardTestDispatcher() + com.lofuyu.borderledger.auth.CaptureWork(CaptureCredentialRecord("capture", "device", 1, "2099-01-01T00:00:00Z", "revoke", com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session"))) {
         val client = client(CaptureHttpResponse(200, "not-json".encodeToByteArray()))
         val result = client.upload(listOf(event()))
         assertEquals("malformed_response", (result as CaptureUploadResult.Retryable).code)
@@ -105,7 +105,7 @@ class CaptureUploadHttpClientTest {
 }
 
 private class FakeCaptureCredentials : CaptureCredentialProvider {
-    override suspend fun current() = CaptureCredentialRecord("capture", "device", 1, "2099-01-01T00:00:00Z", "revoke")
+    override suspend fun current() = CaptureCredentialRecord("capture", "device", 1, "2099-01-01T00:00:00Z", "revoke", identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), sessionEpoch = "test-session")
     override suspend fun save(value: CaptureCredentialRecord) = Unit
     override suspend fun clear() = Unit
 }

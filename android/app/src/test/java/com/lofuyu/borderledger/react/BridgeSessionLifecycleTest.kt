@@ -44,7 +44,7 @@ class BridgeSessionLifecycleTest {
     }
 
     private class Fixture: OwnerSessionStore, OwnerLoginClient, CaptureCredentialProvider, LocalDataPolicy, CoreClock, CoreCrypto {
-        var session: OwnerSessionRecord?=OwnerSessionRecord("native-secret-access","native-secret-refresh","future",listOf("owner"),1,"native-secret-revoke","device")
+        var session: OwnerSessionRecord?=OwnerSessionRecord("native-secret-access","native-secret-refresh","future",listOf("owner"),1,"native-secret-revoke","device", identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), epoch = "test-session")
         var valid=true
         var refreshes=0
         var refreshGate: CompletableDeferred<Unit>?=null
@@ -79,7 +79,7 @@ class BridgeSessionLifecycleTest {
         override suspend fun pendingRevocationCount()=0
         override suspend fun startLogin(input: OwnerLoginStartRequest)=error("Not called")
         override suspend fun exchangeCode(input: OwnerCodeExchangeRequest)=error("Not called")
-        override suspend fun refresh(input: OwnerRefreshRequest): OwnerTokenResponse { refreshes++; refreshGate?.await(); return OwnerTokenResponse("native-secret-new-access","native-secret-new-refresh","future",listOf("owner"),2,"native-secret-new-revoke") }
+        override suspend fun refresh(input: OwnerRefreshRequest): OwnerTokenResponse { refreshes++; refreshGate?.await(); return OwnerTokenResponse("native-secret-new-access","native-secret-new-refresh","future",listOf("owner"),2,"native-secret-new-revoke", userId = "owner", ledgerId = "personal") }
         override suspend fun logout(accessToken: String) { }
         override suspend fun revoke(intent: RevocationIntent) { }
     }

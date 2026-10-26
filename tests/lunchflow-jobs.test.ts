@@ -29,7 +29,7 @@ it('acknowledges forged, old and disconnected jobs without provider reads',async
  const f=await jobFixture();try{
   const fetcher=providerFetch(),{connectionId:_,generation:__,...legacy}=f.body;
   for(const body of [legacy,{...f.body,generation:1},{...f.body,userId:'owner',ledgerId:'personal'},{...f.body,connectionId:'absent'}])expect(await deliver(f,body)).toEqual({acked:1,retried:0});
-  await f.connections.disconnect(SECOND_LEDGER,f.id);expect(await deliver(f,f.body)).toEqual({acked:1,retried:0});expect(fetcher).not.toHaveBeenCalled();
+  await f.connections.disconnect(SECOND_LEDGER,f.id,(await f.connections.status(SECOND_LEDGER)).generation!);expect(await deliver(f,f.body)).toEqual({acked:1,retried:0});expect(fetcher).not.toHaveBeenCalled();
  }finally{f.close();}
 });
 it('retries a busy connection and schedules only active connection generations',async()=>{
@@ -39,6 +39,6 @@ it('retries a busy connection and schedules only active connection generations',
   expect(await deliver(f,f.body)).toEqual({acked:0,retried:1});expect(fetcher).not.toHaveBeenCalled();
   await f.db.prepare('UPDATE lunchflow_connections SET operation_id=NULL,operation_kind=NULL,operation_expires_at=NULL WHERE id=?').bind(f.id).run();
   f.messages.length=0;await scheduleLunchFlow(f.env);expect(f.messages).toEqual([f.body]);
-  await f.connections.disconnect(SECOND_LEDGER,f.id);f.messages.length=0;await scheduleLunchFlow(f.env);expect(f.messages).toEqual([]);
+  await f.connections.disconnect(SECOND_LEDGER,f.id,(await f.connections.status(SECOND_LEDGER)).generation!);f.messages.length=0;await scheduleLunchFlow(f.env);expect(f.messages).toEqual([]);
  }finally{f.close();}
 });

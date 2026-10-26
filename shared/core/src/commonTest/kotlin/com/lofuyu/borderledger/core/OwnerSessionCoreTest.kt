@@ -9,6 +9,16 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 class OwnerSessionCoreTest {
+    @Test fun legacySessionRequiresReloginAndRetainsRevocation() = runTest {
+        val store = MemorySessionStore().apply { session = record("future").copy(identity = null, epoch = null) }
+        val policy = LogoutPolicy()
+        val manager = Session(store, LoginClient(), policy = policy)
+        manager.restore()
+        assertIs<OwnerSessionState.SignedOut>(manager.state.value)
+        assertNull(manager.accessToken())
+        assertEquals("owner-revoke", policy.queued.single().capability)
+    }
+
     @Test fun malformedCallbackInputIsRejectedWithoutLosingPendingLogin() = runTest {
         val store = MemorySessionStore()
         val client = LoginClient()
@@ -65,7 +75,7 @@ class OwnerSessionCoreTest {
 
     @Test fun offlineSignOutPausesCaptureClearsReadCacheAndRetainsOutbox() = runTest {
         val store = MemorySessionStore().apply { session = record("future") }
-        val capture = CaptureProvider(CaptureCredentialRecord("capture", "device", 4, "future", "capture-revoke"))
+        val capture = CaptureProvider(CaptureCredentialRecord("capture", "device", 4, "future", "capture-revoke", identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), sessionEpoch = "test-session"))
         val policy = LogoutPolicy()
         val manager = Session(store, LoginClient(offline = true), capture, policy)
         manager.signOut()
@@ -99,7 +109,7 @@ class OwnerSessionCoreTest {
     }
 }
 
-private fun record(expiry: String) = OwnerSessionRecord("old-access", "refresh", expiry, listOf("ledger:read"), 1, "owner-revoke", "device")
+private fun record(expiry: String) = OwnerSessionRecord("old-access", "refresh", expiry, listOf("ledger:read"), 1, "owner-revoke", "device", identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), epoch = "test-session")
 private val testClock = object : CoreClock {
     override fun nowIso() = "2026-10-16T12:00:00Z"
     override fun isAfterNow(iso: String) = iso == "future"
@@ -158,5 +168,5 @@ private class LoginClient(val offline: Boolean = false) : OwnerLoginClient {
     override suspend fun refresh(input: OwnerRefreshRequest): OwnerTokenResponse { rotationKeys += input.idempotencyKey; return token() }
     override suspend fun logout(accessToken: String) { if (offline) throw TransportFailure.Offline }
     override suspend fun revoke(intent: RevocationIntent) { if (offline) throw TransportFailure.Offline }
-    private fun token() = OwnerTokenResponse("new-access", "new-refresh", "future", listOf("ledger:read"), 2, "revoke")
+    private fun token() = OwnerTokenResponse("new-access", "new-refresh", "future", listOf("ledger:read"), 2, "revoke", userId = "owner", ledgerId = "personal")
 }

@@ -65,6 +65,15 @@ it.each(['generation','environment','scope','expired'] as const)('denies pairing
   expect(await db.prepare('SELECT ledger_id,status FROM hosted_device_pairings').first()).toEqual({ledger_id:null,status:'pending'});
   expect(await db.prepare('SELECT COUNT(*) AS n FROM mobile_devices').first()).toEqual({n:2});
 });
+it('returns trusted identity when a claimed pairing is retried after replay expiry', async () => {
+  const { db, tokens } = await setup();
+  const { started, input } = await pendingPairing(db, tokens.get('second')!);
+  await approvePairing(db, input, routeConfig);
+  const claim = { pairingId: started.pairingId, verifier, credentialHash: await hashSecret('repeat-capture') };
+  await claimPairing(db, claim, routeConfig);
+  await db.prepare("UPDATE owner_replay_records SET expires_at='2000-01-01T00:00:00Z' WHERE request_kind='pairing-claim'").run();
+  expect(await claimPairing(db, claim, routeConfig)).toMatchObject({ state: 'claimed', userId: 'second', ledgerId: 'second-ledger' });
+});
 it('revalidates a pairing claim replay after its decryption await',async()=>{
   const {db,tokens}=await setup();const {started,input}=await pendingPairing(db,tokens.get('second')!);
   await approvePairing(db,input,routeConfig);

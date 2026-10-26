@@ -17,6 +17,9 @@ import com.lofuyu.borderledger.ui.ledger.LedgerSnapshotDecoder
 import com.lofuyu.borderledger.ui.ledger.LedgerTransactionPage
 import com.lofuyu.borderledger.ui.ledger.LedgerTransactionPageDecodeResult
 import java.time.Instant
+import com.lofuyu.borderledger.auth.binding
+import com.lofuyu.borderledger.auth.OwnerWork
+import kotlinx.coroutines.withContext
 import com.lofuyu.borderledger.core.OwnerReadResult
 import com.lofuyu.borderledger.core.OwnerReadRequest
 import com.lofuyu.borderledger.core.ownerRead
@@ -58,15 +61,20 @@ class LedgerRepository(
             readCache.clear()
             return null
         }
-        return readCache.readIfUsable(now)?.also { entry ->
-            health.cacheSnapshotRecorded(runCatching { Instant.parse(entry.snapshotAt).toEpochMilli() }.getOrDefault(now.toEpochMilli()))
+        val expected = ownerSession.binding() ?: return null
+        val entry = readCache.readIfUsable(now, expected) ?: return null
+        if (ownerSession.binding() != expected) return null
+        return entry.also { entry ->
+            health.cacheSnapshotRecorded(runCatching { Instant.parse(entry.snapshotAt).toEpochMilli() }.getOrDefault(now.toEpochMilli()), expected)
         }
     }
 
     suspend fun writeOwnerSnapshot(entry: OwnerReadCacheEntry): Boolean {
-        if (ownerSession.state.value !is OwnerSessionState.SignedIn) return false
-        readCache.write(entry)
-        health.cacheSnapshotRecorded(runCatching { Instant.parse(entry.snapshotAt).toEpochMilli() }.getOrDefault(System.currentTimeMillis()))
+        val binding = ownerSession.binding() ?: return false
+        if (!entry.belongsTo(binding)) return false
+        if (!ownerSession.commitIfCurrent(binding) { readCache.write(entry) }) return false
+        if (ownerSession.binding() != binding) return false
+        health.cacheSnapshotRecorded(runCatching { Instant.parse(entry.snapshotAt).toEpochMilli() }.getOrDefault(System.currentTimeMillis()), binding)
         return true
     }
 
@@ -85,16 +93,14 @@ class LedgerRepository(
         now: Instant,
     ): SnapshotRefreshResult {
         return try {
-            val payload = api.readSnapshot()
-            if (!payload.isUsableSnapshot()) {
-                SnapshotRefreshResult.Unavailable
-            } else {
-                writeOwnerSnapshot(snapshotEntry(payload, signedIn, now))
-                SnapshotRefreshResult.Refreshed
-            }
+            val binding = signedIn.binding ?: return SnapshotRefreshResult.NotSignedIn
+            val payload = withContext(OwnerWork(binding)) { api.readSnapshot() }
+            if (ownerSession.binding() != binding) return SnapshotRefreshResult.NotSignedIn
+            storeSnapshotResult(payload, signedIn, now)
         } catch (_: TransportFailure.Offline) {
             SnapshotRefreshResult.Offline
         } catch (_: TransportFailure.Unauthorized) {
+            if (ownerSession.binding() != signedIn.binding) return SnapshotRefreshResult.NotSignedIn
             readCache.clear()
             ownerSession.markRemoteAuthorizationFailure()
             SnapshotRefreshResult.Unauthorized
@@ -103,12 +109,22 @@ class LedgerRepository(
         }
     }
 
+    private fun OwnerReadCacheEntry.belongsTo(binding: com.lofuyu.borderledger.auth.SessionBinding): Boolean =
+        ownerUserId == binding.identity.userId && ownerLedgerId == binding.identity.ledgerId && sessionEpoch == binding.epoch
+
+    private suspend fun storeSnapshotResult(payload: ByteArray, signedIn: OwnerSessionState.SignedIn, now: Instant): SnapshotRefreshResult {
+        if (!payload.isUsableSnapshot()) return SnapshotRefreshResult.Unavailable
+        return if (writeOwnerSnapshot(snapshotEntry(payload, signedIn, now))) SnapshotRefreshResult.Refreshed else SnapshotRefreshResult.NotSignedIn
+    }
+
     private fun snapshotEntry(
         payload: ByteArray,
         signedIn: OwnerSessionState.SignedIn,
         now: Instant,
     ) = OwnerReadCacheEntry(
-        ownerLedgerId = "personal",
+        ownerLedgerId = requireNotNull(signedIn.binding).identity.ledgerId,
+        ownerUserId = requireNotNull(signedIn.binding).identity.userId,
+        sessionEpoch = requireNotNull(signedIn.binding).epoch,
         snapshotAt = now.toString(),
         lastAuthenticatedAt = now.toString(),
         refreshExpiresAt = signedIn.refreshExpiresAt ?: signedIn.expiresAt,
@@ -137,17 +153,19 @@ class LedgerRepository(
         read: suspend () -> ByteArray,
         decode: suspend (ByteArray) -> Value?,
         result: (OwnerReadResult<Value>) -> Result,
-    ): Result = result(
-        ownerRead(
-            OwnerReadRequest(
-                signedIn = ownerSession.state.value is OwnerSessionState.SignedIn,
+    ): Result {
+        val binding = ownerSession.binding() ?: return result(OwnerReadResult.NotSignedIn)
+        val outcome = withContext(OwnerWork(binding)) {
+            ownerRead(OwnerReadRequest(
+                signedIn = true,
                 available = ownerLedgerApi != null,
-                unauthorized = ::invalidateOwnerAuthorization,
+                unauthorized = { if (ownerSession.binding() == binding) invalidateOwnerAuthorization() },
                 read = read,
                 decode = decode,
-            ),
-        ),
-    )
+            ))
+        }
+        return result(if (ownerSession.binding() == binding) outcome else OwnerReadResult.NotSignedIn)
+    }
 
     private fun reportRefreshResult(result: OwnerReadResult<LedgerReport>): ReportRefreshResult = when (result) {
         is OwnerReadResult.Ready -> ReportRefreshResult.Refreshed(result.value)

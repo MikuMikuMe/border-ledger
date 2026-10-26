@@ -27,7 +27,7 @@ import java.security.SecureRandom
 class HttpWorkerCaptureApi(
     private val origin: String,
     private val environment: String,
-    ownerCredentials: OwnerCredentialProvider,
+    private val ownerCredentials: OwnerCredentialProvider,
     private val captureCredentials: CaptureCredentialProvider,
     private val random: SecureRandom = SecureRandom(),
 ) : CaptureApi {
@@ -79,10 +79,16 @@ class HttpWorkerCaptureApi(
             generation = response.optInt("generation", 1).also { require(it > 0) },
             expiresAt = expiresAt,
             revocationCapability = revocationCapability,
+            identity = com.lofuyu.borderledger.auth.LedgerIdentity(
+                requireNotNull(response.firstString("userId")), requireNotNull(response.firstString("ledgerId"))),
         )
     }
 
     override suspend fun health(): CaptureApiHealth {
+        val boundary = com.lofuyu.borderledger.auth.CaptureWorkBoundary(captureCredentials, ownerCredentials::currentBinding)
+        return boundary.run(CaptureApiHealth.Unavailable) { healthBound() }
+    }
+    private suspend fun healthBound(): CaptureApiHealth {
         val hasCredential = try {
             captureCredentials.current() != null
         } catch (_: Exception) {

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.withTimeout
 import com.lofuyu.borderledger.core.CoreClock
 import com.lofuyu.borderledger.core.CoreCrypto
@@ -50,6 +51,7 @@ open class OwnerSessionCore(
             _state.value = OwnerSessionState.Restoring
             try {
                 session = store.readSession()
+                retireAmbiguousCredentials()
                 pendingLogin = store.readPendingLogin()
                 completedCallback = store.readCompletedCallback()
                 restoreStoredState(store.readPendingRotation())
@@ -59,6 +61,28 @@ open class OwnerSessionCore(
             }
         }
     }
+
+    private suspend fun retireAmbiguousCredentials() {
+        val old = session
+        val capture = captureCredentials.current()
+        if (old != null && old.requiresIdentityUpgrade()) {
+            localData.pauseMonitoring()
+            localData.clearOwnerReadCache()
+            localData.queueRevocation(RevocationIntent(RevocationGrantType.OwnerFamily, old.revision, old.revocationCapability, clock.nowIso()))
+            store.clearSession()
+            store.clearPendingLogin()
+            store.clearPendingRotation()
+            session = null
+        }
+        if (capture != null && capture.requiresIdentityUpgrade()) {
+            localData.pauseMonitoring()
+            localData.queueRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, capture.generation, capture.revocationCapability, clock.nowIso()))
+            captureCredentials.clear()
+        }
+    }
+
+    private fun OwnerSessionRecord.requiresIdentityUpgrade() = identity == null || epoch == null
+    private fun CaptureCredentialRecord.requiresIdentityUpgrade() = identity == null || sessionEpoch == null
 
     private suspend fun restoreStoredState(pendingRotation: PendingOwnerRotation?) {
         val current = session
@@ -90,7 +114,11 @@ open class OwnerSessionCore(
     }
 
     suspend fun beginLogin(staySignedIn: Boolean, pendingDestination: String?): LoginLaunch {
+        prepareLogin()
         mutex.withLock {
+            check(session == null) { "Sign out before changing accounts." }
+            localData.pauseMonitoring()
+            localData.clearOwnerReadCache()
             _state.value = OwnerSessionState.SigningIn
             val stateToken = randomToken(32)
             val verifier = randomToken(48)
@@ -124,6 +152,11 @@ open class OwnerSessionCore(
                 throw error
             }
         }
+    }
+
+    private suspend fun prepareLogin() {
+        if (!initialized) restore()
+        if (session != null) signOut()
     }
 
     private suspend fun startLogin(request: OwnerLoginStartRequest): OwnerLoginStartResponse = try {
@@ -247,7 +280,7 @@ open class OwnerSessionCore(
     }
 
     private suspend fun commitExchange(response: OwnerTokenResponse, pending: PendingOwnerLogin): CallbackResult = try {
-        val record = response.toRecord(pending.pendingDestination, pending.deviceId)
+        val record = response.toRecord(pending.pendingDestination, pending.deviceId, randomToken(24))
         store.writeSession(record)
         val marker = CompletedCallbackMarker(stateDigest(pending.state), clock.nowIso())
         store.writeCompletedCallback(marker)
@@ -265,19 +298,44 @@ open class OwnerSessionCore(
 
     suspend fun <T> withOwnerAuthorization(block: suspend (String) -> T): T? {
         if (!initialized) restore()
+        val expected = coroutineContext[OwnerWork]?.binding ?: currentBinding() ?: return null
         return mutex.withLock {
+            if (currentBinding() != expected) return@withLock null
             val current = ensureAccessLocked() ?: return@withLock null
+            if (currentBinding() != expected) return@withLock null
             block(current.accessToken)
         }
     }
 
+    /** Serializes local commits with logout and session replacement. Never hold this across HTTP. */
+    override suspend fun commitIfCurrent(expected: SessionBinding, block: suspend () -> Unit): Boolean = mutex.withLock {
+        if (currentBinding() != expected) return@withLock false
+        block()
+        true
+    }
+
+    override fun currentBinding(): SessionBinding? {
+        val current = session ?: return null
+        if (_state.value !is OwnerSessionState.SignedIn && _state.value !is OwnerSessionState.Refreshing) return null
+        return current.identity?.let { identity -> current.epoch?.let { SessionBinding(identity, it) } }
+    }
+
+    override suspend fun accessTokenFor(expected: SessionBinding): String? = mutex.withLock {
+        if (currentBinding() != expected) return@withLock null
+        val current = ensureAccessLocked() ?: return@withLock null
+        if (currentBinding() == expected) current.accessToken else null
+    }
+
     override suspend fun accessToken(): String? {
         if (!initialized) restore()
-        return mutex.withLock { ensureAccessLocked()?.accessToken }
+        val expected = coroutineContext[OwnerWork]?.binding ?: currentBinding() ?: return null
+        return accessTokenFor(expected)
     }
 
     override suspend fun markRemoteAuthorizationFailure() {
         mutex.withLock {
+            val expected = coroutineContext[OwnerWork]?.binding
+            if (expected != null && currentBinding() != expected) return@withLock
             if (_state.value !is OwnerSessionState.SignedIn && _state.value !is OwnerSessionState.Refreshing) return@withLock
             try {
                 _state.value = OwnerSessionState.Expired(store.readPendingRevocations().size)
@@ -446,7 +504,8 @@ open class OwnerSessionCore(
                 idempotencyKey = pending.idempotencyKey,
             ),
         )
-        val updated = response.toRecord(current.pendingDestination, current.deviceId)
+        val updated = response.toRecord(current.pendingDestination, current.deviceId, requireNotNull(current.epoch))
+        if (updated.identity != current.identity) throw TransportFailure.Unauthorized
         store.writeSession(updated)
         store.clearPendingRotation()
         session = updated
@@ -470,7 +529,7 @@ open class OwnerSessionCore(
     }
 
     private fun publishSignedIn(value: OwnerSessionRecord) {
-        _state.value = OwnerSessionState.SignedIn(value.expiresAt, value.scopes, value.pendingDestination)
+        _state.value = OwnerSessionState.SignedIn(value.expiresAt, value.scopes, value.pendingDestination, binding = SessionBinding(requireNotNull(value.identity), requireNotNull(value.epoch)))
     }
 
     private suspend fun publishSignedOut(reason: SignedOutReason, pendingOverride: Int? = null) {
@@ -478,7 +537,7 @@ open class OwnerSessionCore(
         _state.value = OwnerSessionState.SignedOut(pending, reason)
     }
 
-    private fun accessIsValid(value: OwnerSessionRecord): Boolean = com.lofuyu.borderledger.core.accessIsValid(value.expiresAt, clock)
+    private fun accessIsValid(value: OwnerSessionRecord): Boolean = value.identity != null && value.epoch != null && com.lofuyu.borderledger.core.accessIsValid(value.expiresAt, clock)
 
     private suspend fun isCompletedState(value: String): Boolean {
         val marker = completedCallback ?: store.readCompletedCallback()
@@ -494,7 +553,7 @@ open class OwnerSessionCore(
 
 
 
-        fun OwnerTokenResponse.toRecord(destination: String?, deviceId: String?): OwnerSessionRecord = OwnerSessionRecord(
+        fun OwnerTokenResponse.toRecord(destination: String?, deviceId: String?, epoch: String): OwnerSessionRecord = OwnerSessionRecord(
             accessToken = accessToken,
             refreshToken = refreshToken,
             expiresAt = expiresAt,
@@ -503,6 +562,8 @@ open class OwnerSessionCore(
             revocationCapability = revocationCapability,
             deviceId = deviceId,
             pendingDestination = destination,
+            identity = LedgerIdentity(requireNotNull(userId), requireNotNull(ledgerId)),
+            epoch = epoch,
         )
 
     }

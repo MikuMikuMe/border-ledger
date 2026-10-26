@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './client-request';
 import { afterEach } from 'vitest';
 import { applyMigrations, createD1Fixture, task18MigrationNames, task24MigrationNames } from './d1';
 import { hashSecret } from '../../worker/mobile-auth';

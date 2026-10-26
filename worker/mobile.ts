@@ -1,3 +1,4 @@
+import { nativeCompatibilityResponse } from './client-identity';
 import { handleLunchFlowHttp } from './lunchflow-http';
 import { PlaidOwnershipConflictError } from './plaid-connection-store';
 import { LedgerAccessError } from './tenant-context';
@@ -464,6 +465,8 @@ function isAccessApprovalPath(pathname: string) {
 export async function handleMobileRequest(request: Request, env: MobileRouteEnv, accessIdentity: AccessIdentity | null = null): Promise<Response | null> {
   const url = new URL(request.url);
   if (!isMobileAuthPath(url.pathname)) return null;
+  const compatibility = nativeCompatibilityResponse(request);
+  if (compatibility) return compatibility;
   const config = configFromEnv(env);
   try {
     if (isAccessApprovalPath(url.pathname)) {
