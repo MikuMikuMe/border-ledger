@@ -7,6 +7,14 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
+      # Consolidate routine updates, including dependencies added in the future.
+      web-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      # Keep related major upgrades together, outside the routine batch.
       web-react-stack:
         patterns:
           - react
@@ -14,6 +22,8 @@ updates:
           - "@types/react"
           - "@types/react-dom"
           - lucide-react
+        update-types:
+          - major
       web-toolchain:
         patterns:
           - vite
@@ -23,12 +33,16 @@ updates:
           - typescript
           - jsdom
           - "@types/node"
+        update-types:
+          - major
       cloudflare-toolchain:
         patterns:
           - wrangler
           - miniflare
           - workerd
           - "@cloudflare/*"
+        update-types:
+          - major
 
   - package-ecosystem: npm
     directory: /mobile
@@ -37,6 +51,29 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
+      mobile-minor-patch:
+        patterns:
+          - "*"
+        # React Native 0.x minor releases can require a paired React major.
+        # Keep the core and Reanimated/Worklets together across update types.
+        exclude-patterns:
+          - react
+          - react-native
+          - react-test-renderer
+          - "@types/react"
+          - "@types/react-test-renderer"
+          - "@react-native/babel-preset"
+          - "@react-native/metro-config"
+          - "@react-native/typescript-config"
+          - "@react-native-community/cli"
+          - "@react-native-community/cli-platform-android"
+          - "@react-native-community/cli-platform-ios"
+          - typescript
+          - react-native-reanimated
+          - react-native-worklets
+        update-types:
+          - minor
+          - patch
       react-native-core:
         patterns:
           - react
@@ -51,30 +88,28 @@ updates:
           - "@react-native-community/cli-platform-android"
           - "@react-native-community/cli-platform-ios"
           - typescript
-      babel-tooling:
-        patterns:
-          - "@babel/*"
-        update-types:
-          - minor
-          - patch
-      react-native-animation:
-        patterns:
           - react-native-reanimated
           - react-native-worklets
       react-native-navigation:
         patterns:
           - "@react-navigation/*"
+        update-types:
+          - major
       react-native-runtime-modules:
         patterns:
           - react-native-gesture-handler
           - react-native-safe-area-context
           - react-native-screens
           - "@shopify/react-native-skia"
+        update-types:
+          - major
       react-native-styling:
         patterns:
           - uniwind
           - tailwindcss
           - tailwind-merge
+        update-types:
+          - major
     ignore:
       - dependency-name: "@babel/core"
         update-types:
@@ -87,6 +122,12 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
       workflow-toolchain:
         patterns:
           - actions/checkout
@@ -94,7 +135,17 @@ updates:
           - actions/setup-java
           - gradle/actions/setup-gradle
           - android-actions/setup-android
+        update-types:
+          - major
       artifact-actions:
         patterns:
           - actions/upload-artifact
           - actions/download-artifact
+        update-types:
+          - major
+      codeql:
+        patterns:
+          - github/codeql-action
+          - "github/codeql-action/*"
+        update-types:
+          - major
