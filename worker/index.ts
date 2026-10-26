@@ -1,3 +1,4 @@
+import { NATIVE_PROTOCOL } from './client-identity';
 import { bindWebResponse, matchesExpectedWebSession, webIdentityHeaders } from './client-identity';
 import { runLunchFlowJob, scheduleLunchFlow } from './lunchflow-jobs';
 import { handleLunchFlowHttp } from './lunchflow-http';
@@ -1143,6 +1144,7 @@ export default {
       service: 'border-ledger-api',
       deploymentRevision: env.DEPLOYMENT_REVISION ?? null,
       mobileAuthConfigured: isMobileAuthConfigured(env),
+      mobileProtocol: Number(NATIVE_PROTOCOL),
       time: new Date().toISOString(),
     });
     if (url.pathname === '/api/webhooks/plaid' && request.method === 'POST') {

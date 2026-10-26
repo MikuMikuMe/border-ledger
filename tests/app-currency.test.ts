@@ -29,6 +29,7 @@ describe('registered extra-currency workspace data', () => {
       }
       if (String(input).includes('/api/reports/summary')) {
         return new Response(JSON.stringify({
+          ledgerId: 'personal',
           from: '2026-10-01',
           to: '2026-10-14',
           includeProvisional: false,
@@ -84,10 +85,10 @@ describe('registered extra-currency workspace data', () => {
       }
       if (url.includes('/api/reports/summary')) {
         return new Response(JSON.stringify({
-          ledgerId: 'personal',
           asOf: '2026-10-14T12:00:00.000Z',
           timeBasis: 'accounting_date',
           timeZone: 'America/Toronto',
+          ledgerId: 'personal',
           from: '2026-10-01',
           to: '2026-10-14',
           includeProvisional: false,

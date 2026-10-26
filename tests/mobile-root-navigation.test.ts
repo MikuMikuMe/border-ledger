@@ -87,7 +87,7 @@ describe('native app root navigation', () => {
     act(() => tree.root.findByType('About').props.onBack());
     expect(tree.root.findByType('Login').props.session.state).toBe('signed_out');
 
-    await act(async () => native.listener?.({ ...native.session, state: 'signed_in' }));
+    await act(async () => native.listener?.({ ...native.session, state: 'signed_in', userId: 'owner', ledgerId: 'personal', sessionEpoch: 'synthetic-session' }));
     expect(tree.root.findByType('Shell').props.initialDestination).toBe('overview');
     expect(tree.root.findAllByType('Login')).toHaveLength(0);
     expect(tree.root.findAllByType('About')).toHaveLength(0);

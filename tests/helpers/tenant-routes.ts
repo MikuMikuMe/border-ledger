@@ -45,7 +45,7 @@ export async function seedRouteTenants(db: D1Database) {
 
 export function routeRequest(path:string, identity:{web:string}|{token:string}, ...operation:[method?:string, body?:unknown, key?:string]) {
   const [method='GET',body,key]=operation;
-  const headers = new Headers({'content-type':'application/json',origin:routeOrigin});
+  const headers = new Headers({'content-type':'application/json',origin:routeOrigin,'X-Ledger-Protocol':'2'});
   if ('web' in identity) headers.set('Cf-Access-Jwt-Assertion',identity.web);
   else headers.set('authorization',`Bearer ${identity.token}`);
   if (key) headers.set('Idempotency-Key',key);

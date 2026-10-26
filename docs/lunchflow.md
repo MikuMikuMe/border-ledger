@@ -91,3 +91,7 @@ The maintained Android client has a separate `/android/lunchflow/callback` app-l
 Web and native controls honor configuration, Personal operator-only restoration, canReconnect, retryable, and pending/failed/uncertain remote removal. Disconnect explains application-wide access removal and retained history before confirmation. Reconnect requires an explicit account-selection save. Client/session isolation and capture-intake storage stay separate. Real-provider end-to-end verification remains external.
 
 Platform client credentials, encryption-key installation, provider callback registration, and production rollout remain external setup. Tests use synthetic credentials and fake provider transport; no real bank/provider mutation is part of implementation validation.
+
+## Hosted-user deployment boundary
+
+Initial rollout must follow [the maintenance and activation runbook](hosted-users-rollout.md), including all migrations through 0027 and a durable activation receipt. Normal CI cannot bootstrap a legacy database. Local synthetic provider tests do not prove live Platform OAuth, bank eligibility, or a successful production connection. Keep the original owner Personal feed until its explicit transition is verified; never reuse that key for another user. Stale/disconnected generations cannot publish sync results.

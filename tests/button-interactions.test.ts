@@ -51,6 +51,7 @@ describe('button interactions', () => {
         reportCalls.push(url);
         const target = url.searchParams.get('reportingCurrency');
         return new Response(JSON.stringify({
+          ledgerId: 'personal',
           from: '2026-10-01',
           to: '2026-10-14',
           includeProvisional: false,

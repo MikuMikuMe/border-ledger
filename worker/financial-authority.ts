@@ -3,7 +3,7 @@ import type { OwnerContext } from './mobile-auth';
 import { LedgerAccessError, type LedgerContext } from './tenant-context';
 
 export type FinancialContext = LedgerContext | OwnerContext;
-type FinancialScope = 'devices:manage' | 'ledger:review' | 'ledger:read' | 'imports:write' | 'exports:read' | 'recurring:classify' | 'connections:manage';
+type FinancialScope = 'devices:manage' | 'ledger:review' | 'ledger:read' | 'imports:write' | 'exports:read' | 'recurring:classify' | 'connections:manage' | 'preferences:write';
 
 function validAuthorityString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;

@@ -4,7 +4,7 @@
 
 ## Platform
 
-web
+web and Android
 
 ## Stack
 
@@ -12,7 +12,7 @@ delegated: React + TypeScript + Vite served from a Cloudflare Worker with D1 and
 
 ## Users
 
-One private user managing personal spending across a Canadian RBC account and a Bank of China account.
+Explicitly provisioned hosted users, each with a private ledger. Public registration is closed; the production cutover initially provisions only the existing owner managing Canadian and Chinese accounts.
 
 ## Product Purpose
 
@@ -24,7 +24,7 @@ This is a reconciliation-first personal ledger: automatic bank records and provi
 
 ## Operating Context
 
-The user checks the app on desktop and phone, imports CSV/XLSX statements, reviews uncertain records, and eventually connects RBC through Plaid. Bank of China notifications may arrive through a separate Android companion later; the web app does not assume it can read phone notifications.
+Users check the web app or Android app, import statements, review uncertain records, and manage supported bank connections. Lunch Flow Platform connections are isolated per provisioned user; the original owner retains an explicitly owner-only Personal feed. Android supports capture permissions and review; the web app does not read phone notifications. Live provider eligibility and real OAuth remain operator verification prerequisites.
 
 ## Capabilities and Constraints
 
@@ -40,7 +40,7 @@ The user checks the app on desktop and phone, imports CSV/XLSX statements, revie
 
 ## Evidence on Hand
 
-The approved cross-border spending tracker plan is recorded in the referenced planning chat. No real bank statement, Plaid credential, or notification sample is available in the repository; all displayed transactions are labeled demo data until replaced by an import.
+The approved cross-border spending tracker plan is recorded in the referenced planning chat. Synthetic tests cover ledger isolation, owner-history migration, provider lifecycle and client session separation. Real financial data and credentials stay outside the repository. Local validation does not establish production migration, real OAuth or successful live bank synchronization.
 
 ## Product Principles
 

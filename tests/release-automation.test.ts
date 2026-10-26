@@ -126,7 +126,9 @@ describe('release automation contract', () => {
     expect(deployWorkflow).toContain('MOBILE_SESSION_ENCRYPTION_KEY');
     expect(deployWorkflow).toContain('MOBILE_APPROVED_ACCESS_ISSUERS');
     expect(deployWorkflow).toContain('MOBILE_APPROVED_ACCESS_AUDIENCES');
-    expect(deployWorkflow).toContain('MOBILE_APPROVED_ACCESS_SUBJECTS');
+    expect(deployWorkflow).not.toContain('MOBILE_APPROVED_ACCESS_SUBJECTS');
+    expect(deployWorkflow).toContain('node scripts/hosted-users-cutover.mjs preflight');
+    expect(deployWorkflow.indexOf('node scripts/hosted-users-cutover.mjs preflight')).toBeLessThan(deployWorkflow.indexOf('d1 migrations apply'));
     expect(deployWorkflow).toContain('Missing required production Worker secret');
     expect(deployWorkflow).toContain('CLOUDFLARE_ACCESS_CLIENT_ID');
     expect(deployWorkflow).toContain('CLOUDFLARE_ACCESS_CLIENT_SECRET');

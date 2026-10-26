@@ -1,0 +1,14 @@
+export function parsePrivateJson(bytes: string | Uint8Array): unknown;
+export function checkWindow(manifest: unknown, now: number): void;
+export function checkManifest(manifest: unknown, target: unknown, now?: number): void;
+export function readPrivateFile(path: string, repository: string): Promise<Buffer>;
+export function verifyEvidenceFiles(manifest: unknown, directory: string, repository: string): Promise<Record<string, Buffer>>;
+export function checkSnapshots(files: unknown, live: unknown): void;
+export function checkAttestation(bytes: string | Uint8Array, manifest: unknown, checks: string[]): unknown;
+export function validatePreparation(input: unknown): void;
+export function loadManifest(path: string, target: unknown, repository: string): Promise<unknown>;
+export function validateCompletion(bytes: string | Uint8Array, manifest: unknown, digest: string, liveSnapshot?: unknown): string;
+export function sqlValue(value: unknown): string;
+export function ownerGuard(state: unknown): string;
+export function preparationSql(manifest: unknown, digest: string, state: unknown, now: string): string;
+export function activationSql(digest: string, completion: string, state: unknown, now: string): string;

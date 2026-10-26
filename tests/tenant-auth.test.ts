@@ -5,12 +5,14 @@ import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import { authenticateOwner, pkceChallenge, type MobileAuthConfig } from '../worker/mobile-auth';
 import { approveOwnerLogin, exchangeOwnerCode, refreshOwnerSession, startOwnerLogin, logoutOwnerSession } from '../worker/mobile-owner-auth';
 
+// Keep application time aligned with SQLite's execution-time expiry guards.
+const fixtureNow = new Date();
 const config: MobileAuthConfig = {
   canonicalOrigin: 'https://pf.example.com', callbackUrl: 'https://pf.example.com/android/auth/callback',
   environment: 'test', accessAuthorizationUrl: 'https://pf.example.com/authorize',
   sessionEncryptionKey: 'tenant-auth-synthetic-encryption-key',
   approvedAccessIssuers: ['https://access.example.com'], approvedAccessAudiences: ['test-audience'],
-  now: () => new Date('2026-10-24T12:00:00Z'),
+  now: () => fixtureNow,
 };
 const identity = (subject: string) => ({ issuer: 'https://access.example.com', audience: 'test-audience', subject });
 const verifier = 'tenant-auth-test-verifier-012345678901234567890123456789';

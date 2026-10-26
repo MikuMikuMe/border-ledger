@@ -25,3 +25,7 @@ android/**/.cxx/
 task-*-report.md
 
 
+
+# Wrangler local secrets (including per-environment variants).
+.dev.vars
+.dev.vars.*

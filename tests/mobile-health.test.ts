@@ -23,6 +23,7 @@ describe('production health mobile-auth configuration signal', () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       mobileAuthConfigured: true,
+      mobileProtocol: 2,
     });
   });
 

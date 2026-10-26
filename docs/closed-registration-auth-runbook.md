@@ -1,6 +1,6 @@
 # Closed-registration authentication operations
 
-This is the Task 2A authentication foundation, not deployment approval. Financial tenant scoping in Tasks 2B/2C is still required. Do not deploy this intermediate branch or broaden Cloudflare Access policies. No production data was changed during implementation.
+The closed-registration runtime now scopes financial routes, providers, queues and clients to provisioned users and ledgers. Production cutover remains pending: follow [the hosted-user rollout](hosted-users-rollout.md), keep the Access allowlist unchanged, and do not treat local tests as live login evidence. No production data was changed during implementation.
 
 ## Identity enrollment
 
@@ -41,6 +41,10 @@ Owner access and refresh credentials carry an authenticated family ID, generatio
 
 Disabling a user rejects subsequent access, refresh, pairing claims and replay responses. Session revocation rejects session replay; capture revocation rejects pairing claim replay. Existing owner data IDs and historical financial rows remain unchanged.
 
-## Intermediate route restriction
+## Final route and client policy
 
-Until Tasks 2B/2C finish, non-personal financial web/mobile requests receive 503 before calling the legacy financial handlers. This is an explicit temporary restriction, not completed multi-user runtime support. Remove the restrictions only when each data consumer receives and enforces its trusted `LedgerContext`; see the Task 2A report's remaining checklist. Health remains public and does not enroll anyone.
+The temporary non-personal 503 gate is removed. Every financial request uses the trusted ledger context and active authority; unknown identities remain denied without creating users, ledgers, sessions or connections. Native auth requires protocol version 2; unsupported clients receive update-required behavior and must update/re-login. Browser/native caches, drafts and capture partitions are keyed to the authenticated identity, with stale-response fencing.
+
+Migration preserves legacy session/history rows. It does **not** revoke production sessions automatically. During the approved maintenance window, revoke legacy owner session families, clear replay responses, revoke pending legacy auth requests and pending/approved pairings, and require controlled owner re-login. The preparation tool measures that reset before a prepared receipt can be written. Preserve devices, capture credentials and historical capture events according to their existing ledger ownership; do not erase capture history to reset login. Independently verify the owner's upstream Access challenge before invalidating sessions.
+
+Health `mobileAuthConfigured` verifies cryptographic configuration only. The CI protocol-2 request smoke verifies an unbound authorization launch only; it does not approve/exchange a provisioned identity or prove ledger access.
