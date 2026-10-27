@@ -176,6 +176,13 @@ describe('Android release change detector', () => {
     })).toBe(true);
   });
 
+  it('publishes when the shared Vitest configuration changes', () => {
+    expect(shouldPublishAndroidRelease({
+      eventName: 'push',
+      changedPaths: ['vitest.config.ts'],
+    })).toBe(true);
+  });
+
   it('skips automatic release when only backend npm scripts change', () => {
     expect(shouldPublishAndroidRelease({
       eventName: 'push',
