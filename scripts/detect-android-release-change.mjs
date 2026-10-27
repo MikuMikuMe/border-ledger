@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const APP_SOURCE_PATH = /^(?:android\/|mobile\/|shared\/|src\/|contracts\/|index\.html$|tsconfig\.json$|vite\.config\.ts$|public\/)/;
+const APP_SOURCE_PATH = /^(?:android\/|mobile\/|shared\/|src\/|contracts\/|index\.html$|tsconfig\.json$|vite\.config\.ts$|vitest\.config\.ts$|public\/)/;
 const FRONTEND_BUILD_SCRIPTS = new Set(['build']);
 const FRONTEND_BUILD_DEPENDENCIES = new Set(['@types/react', '@types/react-dom', '@vitejs/plugin-react', 'vite', 'typescript']);
 
