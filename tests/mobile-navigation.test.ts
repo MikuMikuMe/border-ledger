@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -23,7 +24,7 @@ describe('mobile navigation dismissal', () => {
   });
 
   beforeEach(() => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       if (String(input).endsWith('/api/accounts')) return new Response(JSON.stringify({ accounts: demoAccounts.map((account) => ({ ...account, last_synced_at: account.lastSyncedAt, plaid_item_id: account.plaidItemId ?? null })) }));
       return new Response(JSON.stringify({ transactions: demoTransactions.map((transaction) => ({ ...transaction, account_id: transaction.accountId, amount_minor: transaction.amountMinor })) }));
     });

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -22,12 +23,13 @@ describe('registered extra-currency workspace data', () => {
   });
 
   it('keeps registered extra currencies in source totals, chart legends, and filters without FX conversion', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       if (String(input).endsWith('/api/accounts')) {
         return new Response(JSON.stringify({ accounts: [{ id: 'usd-account', name: 'USD account', institution: 'Synthetic bank', currency: 'USD', kind: 'chequing', status: 'import_only', last_synced_at: null, plaid_item_id: null }] }), { status: 200 });
       }
       if (String(input).includes('/api/reports/summary')) {
         return new Response(JSON.stringify({
+          ledgerId: 'personal',
           from: '2026-10-01',
           to: '2026-10-14',
           includeProvisional: false,
@@ -76,17 +78,17 @@ describe('registered extra-currency workspace data', () => {
   });
 
   it('renders an overview for a USD/HKD-only ledger without inventing a CAD total', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes('/api/accounts')) {
         return new Response(JSON.stringify({ accounts: [{ id: 'usd-account', name: 'USD account', institution: 'Synthetic bank', currency: 'USD', kind: 'chequing', status: 'import_only', last_synced_at: null, plaid_item_id: null }] }), { status: 200, headers: { 'content-type': 'application/json' } });
       }
       if (url.includes('/api/reports/summary')) {
         return new Response(JSON.stringify({
-          ledgerId: 'personal',
           asOf: '2026-10-14T12:00:00.000Z',
           timeBasis: 'accounting_date',
           timeZone: 'America/Toronto',
+          ledgerId: 'personal',
           from: '2026-10-01',
           to: '2026-10-14',
           includeProvisional: false,

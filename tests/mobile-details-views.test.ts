@@ -71,3 +71,69 @@ describe('detail view fixtures and accessibility',()=>{
     expect(button(unsafe,'Cancel bank authorization')).toBeFalsy();
   });
 });
+
+const lunchFlowConnection={userId:'owner',ledgerId:'ledger',connectionId:'lunch_1',generation:3,adapter:'platform',configured:true,connected:true,reconnectRequired:false,canReconnect:true,remoteRevocation:'not_requested',reason:'',retryable:false};
+const lunchFlowData={page:{accounts:[account],nextCursor:null,limit:50},connections:[connection],link,lunchFlow:{configured:true,accounts:[],connectionId:'lunch_1',generation:3},lunchFlowConnection};
+
+describe('account optional actions and confirmation lifecycle',()=>{
+  it('keeps omitted Lunch Flow callbacks safe when their controls are pressed',()=>{
+    const props={...actions,dark:false,state:ready(lunchFlowData),mutation};
+    const tree=render(AccountsView,props);
+    expect(button(tree,'Save Lunch Flow selection').props.disabled).toBe(false);
+    act(()=>button(tree,'Save Lunch Flow selection').props.onPress());
+    act(()=>button(tree,'Refresh Lunch Flow').props.onPress());
+    act(()=>button(tree,'Cancel Lunch Flow browser handoff').props.onPress());
+    act(()=>button(tree,'Disconnect Lunch Flow').props.onPress());
+    act(()=>button(tree,'Confirm Lunch Flow disconnect').props.onPress());
+    expect(button(tree,'Confirm Lunch Flow disconnect')).toBeUndefined();
+    act(()=>tree.update(React.createElement(AccountsView,{...props,state:ready({...lunchFlowData,lunchFlowConnection:{...lunchFlowConnection,connected:false}})})));
+    act(()=>button(tree,'Connect Lunch Flow').props.onPress());
+  });
+  it('preserves supplied Lunch Flow actions, message and busy state on rerender',()=>{
+    const events:unknown[]=[];
+    const props={...actions,dark:false,state:ready(lunchFlowData),mutation,lunchFlowMessage:'Authorization expired',lunchFlowBusy:true,onLunchFlowSelection:(value:unknown)=>events.push(value),onLunchFlowSync:()=>events.push('sync'),onLunchFlowCancel:()=>events.push('cancel'),onLunchFlowDisconnect:(value:unknown)=>events.push(value),onLunchFlowAuthorize:()=>events.push('authorize')};
+    const tree=render(AccountsView,props);
+    expect(json(tree)).toContain('Authorization expired');
+    expect(button(tree,'Refresh Lunch Flow').props.disabled).toBe(true);
+    expect(button(tree,'Request bank sync').props.disabled).toBe(false);
+    act(()=>tree.update(React.createElement(AccountsView,{...props,lunchFlowBusy:undefined,lunchFlowMessage:null})));
+    expect(json(tree)).not.toContain('Authorization expired');
+    expect(button(tree,'Refresh Lunch Flow').props.disabled).toBe(false);
+    act(()=>button(tree,'Save Lunch Flow selection').props.onPress());
+    act(()=>button(tree,'Refresh Lunch Flow').props.onPress());
+    act(()=>button(tree,'Cancel Lunch Flow browser handoff').props.onPress());
+    act(()=>button(tree,'Disconnect Lunch Flow').props.onPress());
+    act(()=>button(tree,'Confirm Lunch Flow disconnect').props.onPress());
+    act(()=>tree.update(React.createElement(AccountsView,{...props,lunchFlowBusy:false,state:ready({...lunchFlowData,lunchFlowConnection:{...lunchFlowConnection,connected:false}})})));
+    act(()=>button(tree,'Connect Lunch Flow').props.onPress());
+    expect(events).toEqual([[],'sync','cancel',{connectionId:'lunch_1',expectedGeneration:3},'authorize']);
+  });
+  it('confirms against the callback captured by that render and clears the dialog',()=>{
+    const events:string[]=[];
+    const props={...actions,dark:false,state:ready(lunchFlowData),mutation,onDisconnect:(id:string)=>events.push('first:'+id)};
+    const tree=render(AccountsView,props);
+    act(()=>button(tree,'Disconnect Fixture Bank').props.onPress());
+    const captured=button(tree,'Confirm disconnect').props.onPress;
+    act(()=>tree.update(React.createElement(AccountsView,{...props,onDisconnect:(id:string)=>events.push('second:'+id)})));
+    act(()=>captured());
+    expect(events).toEqual(['first:connection_1']);
+    expect(button(tree,'Confirm disconnect')).toBeUndefined();
+    act(()=>button(tree,'Disconnect Fixture Bank').props.onPress());
+    act(()=>button(tree,'Confirm disconnect').props.onPress());
+    expect(events).toEqual(['first:connection_1','second:connection_1']);
+  });
+  it('clears account and disconnect dialogs together with selections when locked',()=>{
+    const props={...actions,dark:false,state:ready({...lunchFlowData,link:{...link,state:'pending',pendingConnectionId:'pending_1',accounts:[account]}}),mutation};
+    const tree=render(AccountsView,props);
+    act(()=>button(tree,'Select account Everyday CAD, CAD, ending 1234').props.onPress());
+    act(()=>button(tree,'Open account Everyday CAD').props.onPress());
+    act(()=>button(tree,'Disconnect Fixture Bank').props.onPress());
+    act(()=>tree.update(React.createElement(AccountsView,{...props,state:{phase:'locked',data:null,message:'Renew session'}})));
+    expect(button(tree,'Close account detail')).toBeUndefined();
+    expect(button(tree,'Confirm disconnect')).toBeUndefined();
+    act(()=>tree.update(React.createElement(AccountsView,props)));
+    expect(button(tree,'Close account detail')).toBeUndefined();
+    expect(button(tree,'Confirm disconnect')).toBeUndefined();
+    expect(button(tree,'Confirm selected accounts').props.disabled).toBe(true);
+  });
+});

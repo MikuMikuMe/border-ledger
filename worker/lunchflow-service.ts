@@ -1,3 +1,9 @@
+import { assertConnectionApp,readLunchFlowConnection } from './lunchflow-connection-store';
+import { assertLunchFlowScope, connectionBinding, resolveLunchFlowScope, type LunchFlowBinding, type LunchFlowScope } from './lunchflow-scope';
+import { createLunchFlowConnections, oauthConfigured, type LunchFlowConnectionEnv } from './lunchflow-connections';
+import { createLunchFlowPlatform } from './lunchflow-platform';
+import type { LedgerContext } from './tenant-context';
+import { assertFinancialAuthority, type FinancialContext } from './financial-authority';
 import { getCurrencyMeta } from '../src/domain/currencies';
 import type { D1Database } from './db-types';
 import {
@@ -28,7 +34,7 @@ export interface LunchFlowProvider {
   listTransactions(providerAccountId: string): Promise<LunchFlowTransaction[]>;
 }
 
-export interface LunchFlowServiceEnv extends LunchFlowApiEnv {
+export interface LunchFlowServiceEnv extends LunchFlowApiEnv, LunchFlowConnectionEnv {
   DB: D1Database;
   SYNC_QUEUE?: { send(message: unknown): Promise<void> };
   now?: () => Date;
@@ -49,6 +55,8 @@ export interface LunchFlowRevisionMessage extends LunchFlowRevision {
 }
 
 export interface LunchFlowAccountsResponse {
+  connectionId?:string;
+  generation?:number;
   configured: boolean;
   archivedAccountCount?: number;
   accounts: Array<{
@@ -76,8 +84,9 @@ function now(env: LunchFlowServiceEnv) {
   return (env.now?.() ?? new Date()).toISOString();
 }
 
-function configured(env: LunchFlowServiceEnv) {
-  return Boolean(env.LUNCHFLOW_API_KEY?.trim());
+function configured(env: LunchFlowServiceEnv, context: LunchFlowBinding) {
+  if(context.connection?.adapter==='platform')return oauthConfigured(env);
+  return context.userId === 'owner' && context.ledgerId === 'personal' && Boolean(env.LUNCHFLOW_API_KEY?.trim());
 }
 
 function safeProviderError(error: unknown) {
@@ -127,6 +136,8 @@ function accountDto(account: LunchFlowAccount, mapping: LunchFlowMapping | null,
   const statusError = account.status.toUpperCase() === 'ACTIVE' ? null : 'Account is not active in Lunch Flow.';
   return {
     providerAccountId: account.id,
+    providerBankConnectionId: account.bankConnectionId??null,
+
     name: account.name,
     institution: account.institutionName,
     currencies: [...new Set(currencies)].sort(),
@@ -142,6 +153,8 @@ function accountDto(account: LunchFlowAccount, mapping: LunchFlowMapping | null,
 function mappingDto(mapping: LunchFlowMapping, lastError = mapping.lastError) {
   return {
     providerAccountId: mapping.providerAccountId,
+    providerBankConnectionId:mapping.providerBankConnectionId??null,
+    connectionId:mapping.connectionId??null,
     name: mapping.name,
     institution: mapping.institution,
     currencies: mapping.currency ? [mapping.currency] : [],
@@ -172,8 +185,8 @@ function cappedAccounts<T>(accounts: readonly T[]) {
   return archivedAccountCount > 0 ? { accounts: visible, archivedAccountCount } : { accounts: visible };
 }
 
-function queueMessage(revisions: readonly LunchFlowRevision[]) {
-  return { type: 'lunchflow-sync' as const, accounts: revisions.map(({ providerAccountId, revision }) => ({ providerAccountId, revision })) };
+function queueMessage(context: LedgerContext, revisions: readonly LunchFlowRevision[]) {
+  return { type: 'lunchflow-sync' as const, connectionId:connectionBinding(context).id,generation:connectionBinding(context).generation,userId: context.userId, ledgerId: context.ledgerId, accounts: revisions.map(({ providerAccountId, revision }) => ({ providerAccountId, revision })) };
 }
 
 async function mapWithConcurrency<T, R>(values: readonly T[], limit: number, mapper: (value: T) => Promise<R>) {
@@ -191,7 +204,8 @@ async function mapWithConcurrency<T, R>(values: readonly T[], limit: number, map
   return results;
 }
 
-async function queueSync(env: LunchFlowServiceEnv, revisions: readonly LunchFlowRevision[]) {
+async function queueSync(env: LunchFlowServiceEnv, context: FinancialContext, revisions: readonly LunchFlowRevision[]) {
+  await assertLunchFlowScope(env.DB, context);
   if (revisions.length === 0) return false;
   if (revisions.length > MAX_LUNCHFLOW_ACCOUNTS) {
     throw new LunchFlowServiceError(
@@ -203,7 +217,7 @@ async function queueSync(env: LunchFlowServiceEnv, revisions: readonly LunchFlow
   }
   if (!env.SYNC_QUEUE) throw new LunchFlowServiceError('queue_unavailable', 'The Lunch Flow sync could not be queued.', 503, true);
   try {
-    await env.SYNC_QUEUE.send(queueMessage(revisions));
+    await env.SYNC_QUEUE.send(queueMessage(context, revisions));
     return true;
   } catch {
     throw new LunchFlowServiceError('queue_unavailable', 'The Lunch Flow sync could not be queued.', 503, true);
@@ -235,8 +249,8 @@ interface NormalizedSelectionRequest {
   }>;
 }
 
-function requireConfigured(env: LunchFlowServiceEnv) {
-  if (!configured(env)) throw new LunchFlowServiceError('configuration', 'Lunch Flow is not configured on the Worker.', 503, false);
+function requireConfigured(env: LunchFlowServiceEnv, context: LedgerContext) {
+  if (!configured(env, context)) throw new LunchFlowServiceError('configuration', 'Lunch Flow is not configured on the Worker.', 503, false);
 }
 
 async function normalizeSelectionInput(input: LunchFlowSelectionInput): Promise<NormalizedSelectionRequest> {
@@ -255,20 +269,20 @@ async function normalizeSelectionInput(input: LunchFlowSelectionInput): Promise<
   };
 }
 
-async function replaySelection(env: LunchFlowServiceEnv, request: NormalizedSelectionRequest) {
+async function replaySelection(env: LunchFlowServiceEnv, context: FinancialContext, request: NormalizedSelectionRequest) {
   if (!request.idempotencyKey) return null;
-  const record = await readLunchFlowOperationRecord(env.DB, {
+  const record = await readLunchFlowOperationRecord(env.DB, context, {
     ownerSubjectHash: request.ownerSubjectHash,
     operationKind: 'account-selection',
     idempotencyKey: request.idempotencyKey,
   }, request.requestDigest);
   if (!record || record.pending) return null;
-  requireConfigured(env);
-  await queueSync(env, record.revisions);
+  requireConfigured(env, context);
+  await queueSync(env, context, record.revisions);
   return record.response as { selected: number; queued: boolean };
 }
 
-async function loadSelection(provider: LunchFlowProvider, requested: NormalizedSelectionRequest['requested']) {
+async function loadSelection(db:D1Database,context: LunchFlowScope, provider: LunchFlowProvider, requested: NormalizedSelectionRequest['requested']) {
   let providerAccounts: LunchFlowAccount[];
   try {
     providerAccounts = await provider.listAccounts();
@@ -287,9 +301,13 @@ async function loadSelection(provider: LunchFlowProvider, requested: NormalizedS
     } catch (error) {
       throw safeProviderError(error);
     }
+    const mapping=await readLunchFlowMapping(db,context,account.id);
+    if(mapping&&(mapping.providerBankConnectionId??null)!==(account.bankConnectionId??null))throw selectionError('bank_connection_changed','The provider bank connection changed. Contact the operator to verify the existing account mapping.',409);
     selection.push({
       providerAccountId: account.id,
-      accountId: await lunchFlowLedgerAccountId(account.id),
+    providerBankConnectionId: account.bankConnectionId??null,
+    connectionId:context.connection.id,
+      accountId: mapping?.accountId??await lunchFlowLedgerAccountId(context, account.id),
       name: account.name,
       institution: account.institutionName,
       currency: item.currency,
@@ -299,17 +317,19 @@ async function loadSelection(provider: LunchFlowProvider, requested: NormalizedS
   return selection;
 }
 
-async function syncRevision(env: LunchFlowServiceEnv, provider: LunchFlowProvider, revision: LunchFlowRevision) {
-  const mapping = await readLunchFlowMapping(env.DB, revision.providerAccountId);
+async function syncRevision(env: LunchFlowServiceEnv, context: FinancialContext, provider: LunchFlowProvider, revision: LunchFlowRevision) {
+  const mapping = await readLunchFlowMapping(env.DB, context, revision.providerAccountId);
   if (!isCurrentSyncMapping(mapping, revision)) return null;
   try {
+    const current=(await provider.listAccounts()).find(account=>account.id===revision.providerAccountId);
+    if(!current || (current.bankConnectionId??null)!==(mapping.providerBankConnectionId??null))throw selectionError('bank_connection_changed','The provider bank connection changed. Contact the operator to verify the existing account mapping.',409);
     const rows = await provider.listTransactions(revision.providerAccountId);
     const mapped = await Promise.all(rows.map((row) => mapLunchFlowTransaction(row, revision.providerAccountId, mapping.accountId)));
-    await publishLunchFlowSnapshot(env.DB, revision, mapped, now(env));
+    await publishLunchFlowSnapshot(env.DB, context, { revision: revision, transactions: mapped, syncedAt: now(env) });
     return null;
   } catch (error) {
     const normalized = safeProviderError(error);
-    await recordLunchFlowError(env.DB, revision, normalized.message);
+    await recordLunchFlowError(env.DB, context, revision, normalized.message);
     return normalized;
   }
 }
@@ -318,11 +338,30 @@ function isCurrentSyncMapping(mapping: LunchFlowMapping | null, revision: LunchF
   return Boolean(mapping?.enabled && mapping.revision === revision.revision && mapping.accountId && mapping.currency);
 }
 
-export function createLunchFlowService(env: LunchFlowServiceEnv, suppliedProvider?: LunchFlowProvider) {
-  const provider = suppliedProvider ?? createLunchFlowProvider(env);
+function createBoundLunchFlowService(env: LunchFlowServiceEnv, binding: LunchFlowScope, suppliedProvider?: LunchFlowProvider) {
+  const context: LunchFlowScope = Object.freeze({ ...binding,
+    ...('scopes' in binding ? { scopes: Object.freeze([...binding.scopes]) } : {}),
+  });
+  async function activeProvider() {
+    await assertLunchFlowScope(env.DB, context);
+    requireConfigured(env, context);
+    const row=await readLunchFlowConnection(env.DB,context,context.connection.id);
+    if(!row)throw selectionError('connection_not_found','Lunch Flow connection not found.',404);
+    assertConnectionApp(row,env.LUNCHFLOW_CLIENT_ID);
+    if(suppliedProvider)return suppliedProvider;
+    if(context.connection.adapter==='personal')return createLunchFlowProvider(env);
+    const access=await createLunchFlowConnections(env).accessToken(context,context.connection.id,context.connection.generation),platform=createLunchFlowPlatform(env);
+    await assertLunchFlowScope(env.DB,context);
+    return {listAccounts:()=>platform.listAccounts(access),listTransactions:(id:string)=>platform.listTransactions(access,id)};
+  }
+  const provider: LunchFlowProvider = {
+    listAccounts: async () => (await activeProvider()).listAccounts(),
+    listTransactions: async id => (await activeProvider()).listTransactions(id),
+  };
 
   async function readAccounts(): Promise<LunchFlowAccountsResponse> {
-    if (!configured(env)) return { configured: false, accounts: [] };
+    await assertFinancialAuthority(env.DB, context, 'connections:manage');
+    if (!configured(env, context)) return { configured: false, accounts: [] };
     let providerAccounts: LunchFlowAccount[];
     try {
       providerAccounts = await provider.listAccounts();
@@ -330,9 +369,13 @@ export function createLunchFlowService(env: LunchFlowServiceEnv, suppliedProvide
       throw safeProviderError(error);
     }
     assertProviderAccountCount(providerAccounts);
-    const mappings = await readLunchFlowMappings(env.DB);
+    const mappings = await readLunchFlowMappings(env.DB, context);
     const byId = new Map(mappings.map((mapping) => [mapping.providerAccountId, mapping]));
-    for (const account of providerAccounts) byId.delete(account.id);
+    for (const account of providerAccounts) {
+      const mapping=byId.get(account.id);
+      if(mapping&&(mapping.providerBankConnectionId??null)!==(account.bankConnectionId??null))throw selectionError('bank_connection_changed','The provider bank connection changed. Contact the operator to verify the existing account mapping.',409);
+      byId.delete(account.id);
+    }
     const result = await mapWithConcurrency(providerAccounts, DISCOVERY_CONCURRENCY, (account) => (
       discoveredAccountDto(provider, account, mappings.find((value) => value.providerAccountId === account.id) ?? null)
     ));
@@ -341,25 +384,31 @@ export function createLunchFlowService(env: LunchFlowServiceEnv, suppliedProvide
     const staleDisabled = staleMappings.filter((mapping) => !mapping.enabled).sort(newestFirst).map(staleAccountDto);
     const providerSelected = result.filter((account) => account.selected);
     const providerAvailable = result.filter((account) => !account.selected);
-    return { configured: true, ...cappedAccounts([...providerSelected, ...staleEnabled, ...providerAvailable, ...staleDisabled]) };
+    await assertFinancialAuthority(env.DB, context, 'connections:manage');
+    await assertLunchFlowScope(env.DB,context);
+    return { configured: true,connectionId:context.connection.id,generation:context.connection.generation, ...cappedAccounts([...providerSelected, ...staleEnabled, ...providerAvailable, ...staleDisabled].map(account=>({...account,connectionId:context.connection.id}))) };
   }
 
   async function readStatus(): Promise<LunchFlowAccountsResponse> {
-    const mappings = await readLunchFlowMappings(env.DB);
+    await assertFinancialAuthority(env.DB, context, 'connections:manage');
+    const mappings = await readLunchFlowMappings(env.DB, context);
     const enabled = mappings.filter((mapping) => mapping.enabled).sort(newestFirst).map(localMappingDto);
     const disabled = mappings.filter((mapping) => !mapping.enabled).sort(newestFirst).map(localMappingDto);
-    return { configured: configured(env), ...cappedAccounts([...enabled, ...disabled]) };
+    await assertFinancialAuthority(env.DB, context, 'connections:manage');
+    return { configured: configured(env, context),connectionId:context.connection.id,generation:context.connection.generation, ...cappedAccounts([...enabled, ...disabled]) };
   }
 
   async function selectAccounts(input: LunchFlowSelectionInput) {
+    await assertFinancialAuthority(env.DB, context, 'connections:manage');
+    await assertLunchFlowScope(env.DB,context);
     const request = await normalizeSelectionInput(input);
-    const replay = await replaySelection(env, request);
+    const replay = await replaySelection(env, context, request);
     if (replay) return replay;
-    requireConfigured(env);
+    requireConfigured(env, context);
     if (request.requested.length > 0 && !env.SYNC_QUEUE) throw new LunchFlowServiceError('queue_unavailable', 'The Lunch Flow sync could not be queued.', 503, true);
-    const selection = await loadSelection(provider, request.requested);
+    const selection = await loadSelection(env.DB,context, provider, request.requested);
     const operationResponse = { selected: selection.length, queued: selection.length > 0 };
-    const publication = await publishLunchFlowSelection(env.DB, selection, request.idempotencyKey ? {
+    const publication = await publishLunchFlowSelection(env.DB, context, selection, request.idempotencyKey ? {
       ownerSubjectHash: request.ownerSubjectHash,
       operationKind: 'account-selection',
       idempotencyKey: request.idempotencyKey,
@@ -368,46 +417,50 @@ export function createLunchFlowService(env: LunchFlowServiceEnv, suppliedProvide
       selection,
     } : undefined);
     if (publication.operation) {
-      await queueSync(env, publication.operation.revisions);
+      await queueSync(env, context, publication.operation.revisions);
       return publication.operation.response as { selected: number; queued: boolean };
     }
-    const queued = await queueSync(env, publication.revisions);
+    const queued = await queueSync(env, context, publication.revisions);
     return { selected: selection.length, queued };
   }
 
   async function requestSync(ownerSubjectHash = 'web-owner', idempotencyKey?: string) {
+    await assertFinancialAuthority(env.DB, context, 'connections:manage');
+    await assertLunchFlowScope(env.DB,context);
     const requestDigest = await lunchFlowRequestDigest({});
     if (idempotencyKey) {
-      const record = await readLunchFlowOperationRecord(env.DB, {
+      const record = await readLunchFlowOperationRecord(env.DB, context, {
         ownerSubjectHash,
         operationKind: 'sync',
         idempotencyKey,
       }, requestDigest);
       if (record && !record.pending) {
-        requireConfigured(env);
-        await queueSync(env, record.revisions);
+        requireConfigured(env, context);
+        await queueSync(env, context, record.revisions);
         return record.response as { queued: boolean; accounts: number };
       }
     }
-    requireConfigured(env);
-    const mappings = await readLunchFlowMappings(env.DB, true);
+    requireConfigured(env, context);
+    const mappings = await readLunchFlowMappings(env.DB, context, true);
     const revisions = mappings.map(({ providerAccountId, revision }) => ({ providerAccountId, revision }));
     const response = { queued: revisions.length > 0, accounts: mappings.length };
-    if (idempotencyKey) await rememberLunchFlowOperation(env.DB, {
+    if (idempotencyKey) await rememberLunchFlowOperation(env.DB, context, {
       ownerSubjectHash,
       operationKind: 'sync',
       idempotencyKey,
     }, { response, requestDigest, revisions });
-    const queued = await queueSync(env, revisions);
+    const queued = await queueSync(env, context, revisions);
     return { ...response, queued };
   }
 
   async function sync(revisions?: readonly LunchFlowRevision[]) {
-    requireConfigured(env);
-    const selected = revisions ?? (await readLunchFlowMappings(env.DB, true)).map(({ providerAccountId, revision }) => ({ providerAccountId, revision }));
+    await assertFinancialAuthority(env.DB, context, 'connections:manage');
+    requireConfigured(env, context);
+    await assertLunchFlowScope(env.DB,context);
+    const selected = revisions ?? (await readLunchFlowMappings(env.DB, context, true)).map(({ providerAccountId, revision }) => ({ providerAccountId, revision }));
     const failures: LunchFlowError[] = [];
     for (const revision of selected) {
-      const failure = await syncRevision(env, provider, revision);
+      const failure = await syncRevision(env, context, provider, revision);
       if (failure) failures.push(failure);
     }
     if (failures.length > 0) throw failures.find((failure) => failure.retryable) ?? failures[0];
@@ -417,10 +470,38 @@ export function createLunchFlowService(env: LunchFlowServiceEnv, suppliedProvide
   return { readAccounts, readStatus, selectAccounts, requestSync, sync, provider };
 }
 
+function requestedConnection(connection:string|{connectionId?:string;expectedGeneration:number}|undefined) {
+  if(typeof connection==='string')return {connectionId:connection,expectedGeneration:undefined};
+  return connection??{};
+}
+
+export function createLunchFlowService(env:LunchFlowServiceEnv,binding:LunchFlowBinding,provider?:LunchFlowProvider,connection?:string|{connectionId?:string;expectedGeneration:number}) {
+  const context=Object.freeze({...binding,...('scopes' in binding?{scopes:Object.freeze([...binding.scopes])}:{}),...(binding.connection?{connection:Object.freeze({...binding.connection})}:{})});
+  const {connectionId,expectedGeneration}=requestedConnection(connection);
+  let resolved:Promise<ReturnType<typeof createBoundLunchFlowService>|null>|undefined;
+  async function service() {
+    resolved??=resolveLunchFlowScope(env.DB,context,connectionId,expectedGeneration).then(scope=>scope?createBoundLunchFlowService(env,scope,provider):null);
+    return resolved;
+  }
+  async function required() {
+    const found=await service();
+    if(!found)throw selectionError('connection_required','Select a Lunch Flow connection first.',400);
+    return found;
+  }
+  return {
+    readAccounts:async()=>await (await service())?.readAccounts()??{configured:false,accounts:[]},
+    readStatus:async()=>await (await service())?.readStatus()??{configured:false,accounts:[]},
+    selectAccounts:async(input:LunchFlowSelectionInput)=>(await required()).selectAccounts(input),
+    requestSync:async(subject?:string,key?:string)=>(await required()).requestSync(subject,key),
+    sync:async(revisions?:readonly LunchFlowRevision[])=>(await required()).sync(revisions),
+    provider:{listAccounts:async()=>(await required()).provider.listAccounts(),listTransactions:async(id:string)=>(await required()).provider.listTransactions(id)},
+  };
+}
+
 export async function processLunchFlowSync(service: ReturnType<typeof createLunchFlowService>, revisions: readonly LunchFlowRevision[]) {
   return service.sync(revisions);
 }
 
-export async function readLunchFlowAccounts(env: LunchFlowServiceEnv, provider?: LunchFlowProvider) {
-  return createLunchFlowService(env, provider).readAccounts();
+export async function readLunchFlowAccounts(env: LunchFlowServiceEnv, context: FinancialContext, provider?: LunchFlowProvider) {
+  return createLunchFlowService(env, context, provider).readAccounts();
 }

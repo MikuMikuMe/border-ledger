@@ -1,6 +1,9 @@
+import {connectionApi,type LunchFlowConnection} from './domain/lunchflow-connection';
+import {LunchFlowConnectionControls,useLunchFlowConnection} from './components/LunchFlowConnectionControls';
+import { useLedgerApi } from './components/PrivateSession';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpRight, BadgeCheck, CircleAlert, CircleHelp, RefreshCw, Save, ShieldCheck } from 'lucide-react';
-import { ledgerApi, LedgerApiError } from './domain/api';
+import { LedgerApiError, type LedgerApi } from './domain/api';
 import { getCurrencyMeta } from './domain/currencies';
 
 export type LunchFlowKind = 'chequing' | 'savings' | 'credit';
@@ -124,7 +127,7 @@ function mapLunchFlowResponse(value: unknown): LunchFlowResponse | null {
   };
 }
 
-async function fetchLunchFlowAccounts(status?: 'local') {
+async function fetchLunchFlowAccounts(ledgerApi: LedgerApi, status?: 'local') {
   const path = status === 'local' ? '/api/lunchflow/accounts?status=local' : '/api/lunchflow/accounts';
   const response = mapLunchFlowResponse(await ledgerApi<unknown>(path));
   if (!response) throw new Error('The Lunch Flow account response was incomplete.');
@@ -247,6 +250,7 @@ function selectionOutcome(response: LunchFlowSelectionResponse, selectedCount: n
 }
 
 interface LunchFlowPollingDependencies {
+  api: LedgerApi;
   providerAccountIds: string[];
   baseline: ReadonlyMap<string, LunchFlowSyncBaseline>;
   operationId: number;
@@ -301,7 +305,7 @@ function waitForPollInterval(pollTimerRef: { current: number | null }, milliseco
 
 async function checkQueuedSync(dependencies: LunchFlowPollingDependencies): Promise<LunchFlowPollResult> {
   try {
-    const response = await fetchLunchFlowAccounts('local');
+    const response = await fetchLunchFlowAccounts(dependencies.api, 'local');
     if (!dependencies.isCurrentOperation(dependencies.operationId)) return 'stopped';
     const progress = syncProgress(response.accounts, dependencies.providerAccountIds, dependencies.baseline);
     if (progress.state === 'pending') return 'pending';
@@ -311,7 +315,7 @@ async function checkQueuedSync(dependencies: LunchFlowPollingDependencies): Prom
   }
 }
 
-async function waitForQueuedSyncTask({ providerAccountIds, baseline, operationId, pendingMessage, isCurrentOperation, applyResponse, notifyWorkspaceRefresh, setNotice, pollTimerRef }: LunchFlowPollingDependencies) {
+async function waitForQueuedSyncTask({ api, providerAccountIds, baseline, operationId, pendingMessage, isCurrentOperation, applyResponse, notifyWorkspaceRefresh, setNotice, pollTimerRef }: LunchFlowPollingDependencies) {
   if (!isCurrentOperation(operationId)) return;
   setNotice({ tone: 'info', message: pendingMessage });
   const deadline = Date.now() + lunchFlowPollDeadlineMs;
@@ -320,7 +324,7 @@ async function waitForQueuedSyncTask({ providerAccountIds, baseline, operationId
     if (remainingBeforeCheck <= 0) break;
     await waitForPollInterval(pollTimerRef, Math.min(lunchFlowPollIntervalMs, remainingBeforeCheck));
     if (!isCurrentOperation(operationId)) return;
-    const result = await checkQueuedSync({ providerAccountIds, baseline, operationId, pendingMessage, isCurrentOperation, applyResponse, notifyWorkspaceRefresh, setNotice, pollTimerRef });
+    const result = await checkQueuedSync({ api, providerAccountIds, baseline, operationId, pendingMessage, isCurrentOperation, applyResponse, notifyWorkspaceRefresh, setNotice, pollTimerRef });
     if (result !== 'pending') return;
   }
   if (!isCurrentOperation(operationId)) return;
@@ -354,13 +358,13 @@ function applyLunchFlowResponse(response: LunchFlowResponse, mountedRef: { curre
   setLoadError(null);
 }
 
-async function loadLunchFlowAccounts(mountedRef: { current: boolean }, applyResponse: (response: LunchFlowResponse, mode?: 'discovery' | 'local') => void, setLoadState: (value: 'loading' | 'ready' | 'error') => void, setLoadError: (value: string | null) => void) {
+async function loadLunchFlowAccounts(api: LedgerApi, mountedRef: { current: boolean }, applyResponse: (response: LunchFlowResponse, mode?: 'discovery' | 'local') => void, setLoadState: (value: 'loading' | 'ready' | 'error') => void, setLoadError: (value: string | null) => void) {
   if (mountedRef.current) {
     setLoadState('loading');
     setLoadError(null);
   }
   try {
-    const response = await fetchLunchFlowAccounts();
+    const response = await fetchLunchFlowAccounts(api);
     applyResponse(response);
     return response;
   } catch (error) {
@@ -383,7 +387,21 @@ async function notifyWorkspaceRefreshTask(onWorkspaceRefresh: LunchFlowSectionPr
   }
 }
 
-export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) {
+function useBoundConnectionApi(api:LedgerApi,connection:LunchFlowConnection|null) {
+  const {connectionId,generation,connected}=connection??{};
+  // Status-only refreshes must retain the account loader and its unsaved drafts.
+  return useMemo(()=>connection?.connected?connectionApi(api,connection):null,[api,connectionId,generation,connected]);
+}
+
+export function LunchFlowSection({onWorkspaceRefresh}:LunchFlowSectionProps) {
+  const api=useLedgerApi(),{connection,error,refresh}=useLunchFlowConnection(api);
+  const bound=useBoundConnectionApi(api,connection);
+  return <section className="panel lunchflow-panel" aria-label="Lunch Flow connection">
+    <h2>Lunch Flow</h2><LunchFlowConnectionControls api={api} value={connection} error={error} refresh={refresh}/>
+    {bound&&connection?<LunchFlowAccountsSection key={`${connection.connectionId}:${connection.generation}`} api={bound} onWorkspaceRefresh={onWorkspaceRefresh}/>:null}
+  </section>;
+}
+function LunchFlowAccountsSection({ onWorkspaceRefresh,api:ledgerApi }: LunchFlowSectionProps&{api:LedgerApi}) {
   const [accounts, setAccounts] = useState<LunchFlowAccount[]>([]);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [drafts, setDrafts] = useState<Record<string, LunchFlowDraft>>({});
@@ -410,7 +428,7 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
     applyLunchFlowResponse(nextResponse, mountedRef, setConfigured, setAccounts, setDrafts, setLoadState, setLoadError);
   }, [mountedRef]);
 
-  const loadAccounts = useCallback(() => loadLunchFlowAccounts(mountedRef, applyResponse, setLoadState, setLoadError), [applyResponse, mountedRef]);
+  const loadAccounts = useCallback(() => loadLunchFlowAccounts(ledgerApi, mountedRef, applyResponse, setLoadState, setLoadError), [ledgerApi, applyResponse, mountedRef]);
 
   useEffect(() => {
     void loadAccounts().catch(() => undefined);
@@ -441,7 +459,7 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
     return () => window.removeEventListener('focus', handleFocus);
   }, [notifyWorkspaceRefresh]);
 
-  const waitForQueuedSync = useCallback((providerAccountIds: string[], baseline: ReadonlyMap<string, LunchFlowSyncBaseline>, operationId: number, pendingMessage: string) => waitForQueuedSyncTask({ providerAccountIds, baseline, operationId, pendingMessage, isCurrentOperation, applyResponse, notifyWorkspaceRefresh, setNotice: (nextNotice) => setNotice(nextNotice), pollTimerRef }), [applyResponse, isCurrentOperation, notifyWorkspaceRefresh]);
+  const waitForQueuedSync = useCallback((providerAccountIds: string[], baseline: ReadonlyMap<string, LunchFlowSyncBaseline>, operationId: number, pendingMessage: string) => waitForQueuedSyncTask({ api: ledgerApi, providerAccountIds, baseline, operationId, pendingMessage, isCurrentOperation, applyResponse, notifyWorkspaceRefresh, setNotice: (nextNotice) => setNotice(nextNotice), pollTimerRef }), [ledgerApi, applyResponse, isCurrentOperation, notifyWorkspaceRefresh]);
 
   const updateDraft = (providerAccountId: string, update: Partial<LunchFlowDraft>) => {
     setDrafts((current) => ({
@@ -449,6 +467,8 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
       [providerAccountId]: { ...current[providerAccountId], ...update },
     }));
   };
+
+  const showActionError = (error:unknown,operationId:number) => { if(isCurrentOperation(operationId))setNotice({tone:'error',message:lunchFlowErrorMessage(error)}); };
 
   const saveSelection = async () => {
     const invalidAccount = invalidSelectionAccount(selectedAccounts, drafts);
@@ -471,6 +491,7 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
           }),
         }),
       });
+      if (!isCurrentOperation(operationId)) return;
       await loadAccounts();
       const workspaceRefreshed = await notifyWorkspaceRefresh();
       const selectedCount = safeCount(response.selected);
@@ -478,7 +499,7 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
       if (outcome.poll && outcome.pendingMessage) await waitForQueuedSync(providerAccountIds, baseline, operationId, outcome.pendingMessage);
       else if (outcome.notice && workspaceRefreshed) setNotice(outcome.notice);
     } catch (error) {
-      setNotice({ tone: 'error', message: lunchFlowErrorMessage(error) });
+      showActionError(error,operationId);
     } finally {
       if (isCurrentOperation(operationId)) setBusyAction(null);
     }
@@ -495,18 +516,19 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
         method: 'POST',
         body: JSON.stringify({}),
       });
+      if (!isCurrentOperation(operationId)) return;
       await loadAccounts();
       const workspaceRefreshed = await notifyWorkspaceRefresh();
       const accountCount = safeCount(response.accounts);
       if (response.queued && accountCount > 0) {
         await waitForQueuedSync(providerAccountIds, baseline, operationId, `Lunch Flow refresh queued for ${accountCountLabel(accountCount)}. This page shows the last known data until the queued sync completes. Waiting for completion…`);
-      } else if (!response.queued && accountCount > 0) {
+      } else if (accountCount > 0) {
         if (workspaceRefreshed) setNotice({ tone: 'error', message: `Lunch Flow reported ${accountCountLabel(accountCount)} but did not queue a sync. No new data was imported.` });
       } else if (workspaceRefreshed) {
         setNotice({ tone: 'info', message: 'Lunch Flow has no selected accounts to refresh. Existing history remains in the ledger.' });
       }
     } catch (error) {
-      setNotice({ tone: 'error', message: lunchFlowErrorMessage(error) });
+      showActionError(error,operationId);
     } finally {
       if (isCurrentOperation(operationId)) setBusyAction(null);
     }
@@ -515,10 +537,9 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
   const actionsDisabled = busyAction !== null || loadState !== 'ready' || configured !== true;
 
   return (
-    <section className="panel lunchflow-panel" aria-labelledby="lunchflow-heading">
+    <div aria-labelledby="lunchflow-heading">
       <div className="section-heading lunchflow-heading">
         <div>
-          <p className="eyebrow">LUNCH FLOW · RBC SOURCE</p>
           <h2 id="lunchflow-heading">Choose what Lunch Flow brings into the ledger</h2>
         </div>
         <span className="lunchflow-mark" aria-hidden="true">LF</span>
@@ -542,7 +563,7 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
 
       {loadState === 'loading' ? <div className="lunchflow-state" role="status" aria-live="polite"><RefreshCw size={18} className="is-spinning" /><span>Reading Lunch Flow accounts…</span></div> : null}
       {loadState === 'error' ? <div className="lunchflow-state is-error" role="alert"><CircleAlert size={18} /><div><strong>Lunch Flow account discovery failed.</strong><span>{loadError}</span><button type="button" className="quiet-button" onClick={() => { void loadAccounts().catch(() => undefined); }}>Try again</button></div></div> : null}
-      {loadState === 'ready' && configured === false ? <div className="lunchflow-state is-error" role="alert"><CircleAlert size={18} /><div><strong>Lunch Flow is not configured on this Worker.</strong><span>The server needs its LUNCHFLOW_API_KEY before this private connection can be read. No key belongs in the browser.</span></div></div> : null}
+      {loadState === 'ready' && configured === false ? <div className="lunchflow-state is-error" role="alert"><CircleAlert size={18} /><div><strong>Lunch Flow is not configured.</strong><span>Ask the operator to finish connection setup. No secret belongs in the browser.</span></div></div> : null}
       {loadState === 'ready' && configured === true && accounts.length === 0 ? <div className="lunchflow-state"><ShieldCheck size={18} /><div><strong>No Lunch Flow accounts are available yet.</strong><span>Manage the connection in Lunch Flow, then refresh this section to discover accounts.</span></div></div> : null}
       {loadState === 'ready' && configured === true && accounts.length > 0 ? <div className="lunchflow-account-list">{accounts.map((account) => {
         const draft = drafts[account.providerAccountId] ?? draftForAccount(account);
@@ -562,6 +583,6 @@ export function LunchFlowSection({ onWorkspaceRefresh }: LunchFlowSectionProps) 
           {account.lastError ? <p className="lunchflow-account-error" role="alert"><CircleAlert size={14} /><span><strong>Last provider error:</strong> {account.lastError}{!draft.selected ? ' This account stays deselected until the provider recovers.' : ''}</span></p> : null}
         </article>;
       })}</div> : null}
-    </section>
+    </div>
   );
 }

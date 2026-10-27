@@ -1,3 +1,5 @@
+import type { LedgerContext } from './tenant-context';
+import { assertFinancialAuthority } from './financial-authority';
 import type { D1Database } from './db-types';
 import type { MobileAuthConfig, OwnerContext } from './mobile-auth';
 import { MobileAuthError, requireRecentOwnerApproval } from './mobile-auth';
@@ -58,11 +60,11 @@ function validateFilters(filters: ExportFilters) {
 }
 
 function assertOwner(owner: OwnerContext) {
-  if (owner.credentialType !== 'owner' || owner.ledgerId !== 'personal' || !owner.scopes.includes('exports:read')) throw new MobileAuthError('forbidden', 'The owner exports scope is required.', 403);
+  if (owner.credentialType !== 'owner' || !owner.scopes.includes('exports:read')) throw new MobileAuthError('forbidden', 'The owner exports scope is required.', 403);
 }
 
 async function requireFullLedgerApproval(db: D1Database, owner: OwnerContext, config: Pick<MobileAuthConfig, 'now'>) {
-  const family = await db.prepare(`SELECT created_at FROM owner_session_families WHERE id = ? AND ledger_id = 'personal' AND revoked_at IS NULL`).bind(owner.familyId).first<{ created_at: string }>();
+  const family = await db.prepare(`SELECT created_at FROM owner_session_families WHERE id = ? AND ledger_id = ? AND revoked_at IS NULL`).bind(owner.familyId, owner.ledgerId).first<{ created_at: string }>();
   if (!family) throw new MobileAuthError('unauthorized', 'The owner session is not active.', 401);
   // Owner sessions are issued only after the explicit owner approval flow. The
   // session creation timestamp is therefore the durable approval timestamp.
@@ -85,25 +87,25 @@ interface ExportRow {
   bank_reference: string | null;
 }
 
-async function readPage(db: D1Database, filters: ExportFilters, cursor: { date: string; id: string } | null, pageSize: number) {
-  const { conditions, args } = exportConditions(filters, cursor);
+async function readPage(db: D1Database, context: LedgerContext, filters: ExportFilters, page: {cursor: { date: string; id: string } | null; pageSize: number}) {
+  const { conditions, args } = exportConditions(context, filters, page.cursor);
   const result = await db.prepare(`SELECT t.id, t.account_id, t.date, t.merchant, t.category, t.kind, t.status, t.source,
       t.amount_minor, t.currency, t.note, t.fingerprint, source.bank_reference
     FROM transactions t
     LEFT JOIN (
       SELECT transaction_id, MAX(bank_reference) AS bank_reference
       FROM transaction_source_records
-      WHERE source_kind = 'statement'
+      WHERE source_kind = 'statement' AND ledger_id = ?
       GROUP BY transaction_id
     ) source ON source.transaction_id = t.id
     WHERE ${conditions.join(' AND ')}
-    ORDER BY t.date ASC, t.id ASC LIMIT ?`).bind(...args, pageSize).all<ExportRow>();
+    ORDER BY t.date ASC, t.id ASC LIMIT ?`).bind(context.ledgerId, ...args, page.pageSize).all<ExportRow>();
   return result.results;
 }
 
-function exportConditions(filters: ExportFilters, cursor: { date: string; id: string } | null = null) {
-  const conditions = [notSupersededAlertTransactionPredicate('t')];
-  const args: unknown[] = [];
+function exportConditions(context: LedgerContext, filters: ExportFilters, cursor: { date: string; id: string } | null = null) {
+  const conditions = ['t.ledger_id = ?', notSupersededAlertTransactionPredicate('t')];
+  const args: unknown[] = [context.ledgerId];
   if (filters.currency) { conditions.push('t.currency = ?'); args.push(filters.currency); }
   if (filters.startDate) { conditions.push('t.date >= ?'); args.push(filters.startDate); }
   if (filters.endDate) { conditions.push('t.date <= ?'); args.push(filters.endDate); }
@@ -111,8 +113,8 @@ function exportConditions(filters: ExportFilters, cursor: { date: string; id: st
   return { conditions, args };
 }
 
-async function countExportRows(db: D1Database, filters: ExportFilters) {
-  const { conditions, args } = exportConditions(filters);
+async function countExportRows(db: D1Database, context: LedgerContext, filters: ExportFilters) {
+  const { conditions, args } = exportConditions(context, filters);
   const result = await db.prepare(`SELECT COUNT(*) AS count FROM transactions t WHERE ${conditions.join(' AND ')}`).bind(...args).first<{ count: number }>();
   return result?.count ?? 0;
 }
@@ -143,8 +145,9 @@ export interface CreateLedgerExportInput {
 export async function createLedgerExportResponse(db: D1Database, owner: OwnerContext, config: Pick<MobileAuthConfig, 'now'>, input: CreateLedgerExportInput) {
   assertOwner(owner);
   validateFilters(input.filters);
+  await assertFinancialAuthority(db, owner, 'exports:read');
   if (isFullLedgerSelection(input.selection, input.filters)) await requireFullLedgerApproval(db, owner, config);
-  const exportedRows = await countExportRows(db, input.filters);
+  const exportedRows = await countExportRows(db, owner, input.filters);
   const receiptId = `export-${crypto.randomUUID()}`;
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -153,7 +156,8 @@ export async function createLedgerExportResponse(db: D1Database, owner: OwnerCon
         controller.enqueue(encoder.encode(CANONICAL_EXPORT_HEADER));
         let cursor: { date: string; id: string } | null = null;
         while (true) {
-          const rows = await readPage(db, input.filters, cursor, 250);
+          await assertFinancialAuthority(db, owner, 'exports:read');
+          const rows = await readPage(db, owner, input.filters, {cursor, pageSize:250});
           if (rows.length === 0) break;
           for (const row of rows) controller.enqueue(encoder.encode(rowCsv(row)));
           const last = rows[rows.length - 1];

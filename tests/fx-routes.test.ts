@@ -1,3 +1,5 @@
+import { ClientRequest as Request } from './helpers/client-request';
+import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../worker/index';
 import { createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
@@ -15,8 +17,9 @@ afterEach(() => {
   while (fixtures.length > 0) fixtures.pop()!.close();
 });
 
-function fixture() {
+async function fixture() {
   const value = createSqliteD1Fixture();
+  await provisionWebOwner(value.db);
   fixtures.push(value);
   return value;
 }
@@ -25,7 +28,7 @@ function env(db: D1Database) {
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
-    LEDGER_API_KEY: 'route-key',
+    ...VERIFIED_WEB_ENV,
     LEDGER_APP_ORIGIN: ORIGIN,
     MOBILE_ENVIRONMENT: ENVIRONMENT,
     MOBILE_ACCESS_AUTHORIZATION_URL: `${ORIGIN}/mobile/authorize`,
@@ -62,10 +65,10 @@ async function ownerCredential(db: D1Database, scopes: readonly string[] = ['led
 
 describe('FX report route contracts', () => {
   it('accepts a bounded registered browser reporting target and preserves source-only omission', async () => {
-    const { db } = fixture();
+    const { db } = await fixture();
     const runtime = env(db);
     const request = (query: string) => new Request(`${ORIGIN}/api/reports/summary${query}`, {
-      headers: { authorization: 'Bearer route-key', origin: ORIGIN },
+      headers: { ...VERIFIED_WEB_HEADERS, origin: ORIGIN },
     });
 
     const selected = await worker.fetch(request('?reportingCurrency=CAD'), runtime as never);
@@ -86,7 +89,7 @@ describe('FX report route contracts', () => {
   });
 
   it('validates the owner/mobile target and returns additive fields in the wrapper and nested report', async () => {
-    const { db } = fixture();
+    const { db } = await fixture();
     const credential = await ownerCredential(db);
     const runtime = env(db);
     const request = (reportingCurrency: string) => new Request(
@@ -115,7 +118,7 @@ describe('FX report route contracts', () => {
   });
 
   it('keeps browser and mobile authorization/origin guards ahead of report/provider access', async () => {
-    const { db } = fixture();
+    const { db } = await fixture();
     const runtime = env(db);
     const provider = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('provider must not be reached'));
 
@@ -123,7 +126,7 @@ describe('FX report route contracts', () => {
     expect(browserMissing.status).toBe(401);
 
     const browserDisallowed = await worker.fetch(new Request('https://border-ledger.workers.dev/api/reports/summary?reportingCurrency=CAD', {
-      headers: { authorization: 'Bearer route-key' },
+      headers: { ...VERIFIED_WEB_HEADERS },
     }), runtime as never);
     expect(browserDisallowed.status).toBe(404);
 

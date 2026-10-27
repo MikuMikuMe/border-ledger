@@ -23,13 +23,13 @@ describe('production health mobile-auth configuration signal', () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       mobileAuthConfigured: true,
+      mobileProtocol: 2,
     });
   });
 
   it.each([
     'MOBILE_APPROVED_ACCESS_ISSUERS',
     'MOBILE_APPROVED_ACCESS_AUDIENCES',
-    'MOBILE_APPROVED_ACCESS_SUBJECTS',
   ])('reports a missing %s allowlist as unavailable', async (field) => {
     const response = await worker.fetch(
       new Request('https://pf.example.com/api/health'),
@@ -41,6 +41,12 @@ describe('production health mobile-auth configuration signal', () => {
       ok: true,
       mobileAuthConfigured: false,
     });
+  });
+
+  it('does not require the removed subject allowlist when identity enrollment is database-backed', async () => {
+    const response = await worker.fetch(new Request('https://pf.example.com/api/health'), { ...baseEnvironment, MOBILE_APPROVED_ACCESS_SUBJECTS: '' } as never);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, mobileAuthConfigured: true });
   });
 
   it('reports a malformed authorization URL as unavailable', async () => {

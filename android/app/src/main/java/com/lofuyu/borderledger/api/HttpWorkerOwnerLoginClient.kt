@@ -105,6 +105,7 @@ class HttpWorkerOwnerLoginClient(
                 connectTimeout = networkTimeoutMillis
                 readTimeout = networkTimeoutMillis
                 setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Ledger-Protocol", "2")
                 setRequestProperty("Cache-Control", "no-store")
                 if (bearer != null) setRequestProperty("Authorization", "Bearer $bearer")
                 if (idempotencyKey != null) setRequestProperty("Idempotency-Key", idempotencyKey)
@@ -127,6 +128,7 @@ class HttpWorkerOwnerLoginClient(
             if (code !in 200..299) throw when (code) {
                 HttpURLConnection.HTTP_UNAUTHORIZED, HttpURLConnection.HTTP_FORBIDDEN -> TransportFailure.Unauthorized
                 409 -> TransportFailure.StaleRevocation
+                426 -> TransportFailure.UpdateRequired
                 else -> TransportFailure.Retryable
             }
             if (responseText.isBlank()) null else JSONObject(responseText)
@@ -153,6 +155,8 @@ class HttpWorkerOwnerLoginClient(
             scopes = scopes,
             revision = value.optInt("revision", 0).also { require(it > 0) },
             revocationCapability = value.requiredString("revocationCapability"),
+            userId = value.requiredString("userId"),
+            ledgerId = value.requiredString("ledgerId"),
         )
     }
 

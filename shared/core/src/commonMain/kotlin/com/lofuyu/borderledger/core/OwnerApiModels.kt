@@ -37,6 +37,8 @@ data class OwnerTokenResponse(
     val scopes: List<String>,
     val revision: Int,
     val revocationCapability: String,
+    val userId: String? = null,
+    val ledgerId: String? = null,
 )
 
 enum class RevocationGrantType {

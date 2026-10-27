@@ -1,3 +1,5 @@
+Historical Android design: references to the then-current global LEDGER_API_KEY path are historical only. That authorization bypass is retired; current clients require protocol 2 and D1-provisioned identities. See [current authentication operations](../../closed-registration-auth-runbook.md).
+
 # Border Ledger Android — architecture, notification semantics, and UX design
 
 Date: 2026-10-13. Revision 2: animated login, full website feature parity, shared visual identity, and complete dark-mode support. Status: proposed design for the requested planning stage; no application implementation is authorized by this document alone.

@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -53,11 +57,6 @@ jobs:
               exit 1
             fi
           done
-      - name: Apply production D1 migrations
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx wrangler d1 migrations apply border-ledger --remote --env production
-
       - name: Require production mobile authorization secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -71,7 +70,6 @@ jobs:
             'MOBILE_SESSION_ENCRYPTION_KEY',
             'MOBILE_APPROVED_ACCESS_ISSUERS',
             'MOBILE_APPROVED_ACCESS_AUDIENCES',
-            'MOBILE_APPROVED_ACCESS_SUBJECTS',
           ]) {
             if (!names.has(name)) {
               console.error(`::error::Missing required production Worker secret: ${name}`);
@@ -79,6 +77,17 @@ jobs:
             }
           }
           NODE
+
+      - name: Require durable hosted-user activation before production mutations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          HOSTED_USERS_ACTIVATION_SHA256: ${{ secrets.HOSTED_USERS_ACTIVATION_SHA256 }}
+        run: node scripts/hosted-users-cutover.mjs preflight
+
+      - name: Apply production D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler d1 migrations apply border-ledger --remote --env production
 
       - name: Deploy the named production Worker and assets
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
@@ -137,7 +146,7 @@ jobs:
           node scripts/verify-production-app-links.mjs
 
           mobile_status_file="$RUNNER_TEMP/border-ledger-mobile-auth.json"
-          status_code="$(curl --silent --show-error --max-time 30 \
+          status_code="$(curl --silent --show-error --max-time 30 -H 'X-Ledger-Protocol: 2' \
             --output "$mobile_status_file" --write-out '%{http_code}' \
             'https://pf.lofuyu.com/api/mobile/v1/status?eventId=00000000-0000-4000-8000-000000000001')"
           if [[ "$status_code" != 401 ]]; then
@@ -153,7 +162,7 @@ jobs:
           }
           NODE
 
-      - name: Verify owner login from a fresh unpaired installation
+      - name: Verify protocol 2 authorization launch from a fresh unpaired installation
         shell: bash
         run: |
           node --input-type=module - <<'NODE'
@@ -165,7 +174,7 @@ jobs:
             const codeChallenge = createHash('sha256').update(randomBytes(32)).digest('base64url');
             const response = await fetch(origin + '/api/mobile/v1/auth/requests', {
               method: 'POST',
-              headers: { 'content-type': 'application/json' },
+              headers: { 'content-type': 'application/json', 'X-Ledger-Protocol': '2' },
               body: JSON.stringify({ deviceId: randomUUID(), state, codeChallenge, environment: 'production' }),
               redirect: 'manual',
               signal: AbortSignal.timeout(30_000),
@@ -173,21 +182,21 @@ jobs:
             // A request can still reach the previous Worker while deployment propagates.
             // Retry server errors only; malformed responses and client errors fail immediately.
             if (response.status >= 500 && attempt < maxAttempts) {
-              console.log(`Owner login propagation check ${attempt}/${maxAttempts}: HTTP ${response.status}; retrying.`);
+              console.log(`Authorization launch propagation check ${attempt}/${maxAttempts}: HTTP ${response.status}; retrying.`);
               await response.body?.cancel();
               await new Promise((resolve) => setTimeout(resolve, 5_000));
               continue;
             }
-            if (response.status !== 201) throw new Error('Fresh-install owner login returned HTTP ' + response.status);
+            if (response.status !== 201) throw new Error('Fresh-install authorization launch returned HTTP ' + response.status);
             const body = await response.json();
             const authorization = new URL(body.authorizationUrl);
             if (authorization.origin !== origin || authorization.pathname !== '/mobile/authorize'
               || authorization.searchParams.get('request_id') !== body.requestId
               || authorization.searchParams.get('state') !== state
               || !body.requestId || !(Date.parse(body.expiresAt) > Date.now())) {
-              throw new Error('Fresh-install owner login returned an invalid authorization launch.');
+              throw new Error('Fresh-install authorization launch returned an invalid authorization launch.');
             }
-            console.log('Fresh-install owner login reached browser authorization successfully.');
+            console.log('Fresh-install authorization launch created unbound browser authorization; provisioned owner login remains a separate check.');
             break;
           }
           NODE

@@ -20,8 +20,10 @@ class EncryptedCaptureCredentialProvider(private val records: EncryptedRecordSto
 
     private fun decode(bytes: ByteArray): CaptureCredentialRecord = try {
         DataInputStream(ByteArrayInputStream(bytes)).use { input ->
-            if (input.readInt() != FORMAT_VERSION) throw SecureStorageException("Encrypted capture state format is not supported.")
-            CaptureCredentialRecord(input.readUTF(), input.readUTF(), input.readInt(), input.readUTF(), input.readUTF())
+            val version = input.readInt()
+            if (version !in 1..FORMAT_VERSION) throw SecureStorageException("Encrypted capture state format is not supported.")
+            val record = CaptureCredentialRecord(input.readUTF(), input.readUTF(), input.readInt(), input.readUTF(), input.readUTF())
+            if (version == 1) record else record.copy(identity = LedgerIdentity(input.readUTF(), input.readUTF()), sessionEpoch = input.readUTF())
         }
     } catch (error: SecureStorageException) {
         throw error
@@ -37,11 +39,14 @@ class EncryptedCaptureCredentialProvider(private val records: EncryptedRecordSto
             output.writeInt(value.generation)
             output.writeUTF(value.expiresAt)
             output.writeUTF(value.revocationCapability)
+            output.writeUTF(requireNotNull(value.identity).userId)
+            output.writeUTF(requireNotNull(value.identity).ledgerId)
+            output.writeUTF(requireNotNull(value.sessionEpoch))
         }
         bytes.toByteArray()
     }
 
     private companion object {
-        const val FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
     }
 }

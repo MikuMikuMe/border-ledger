@@ -1,6 +1,11 @@
+import { assertPublicationNotExpired, statementPublicationStatements, type ImportPublicationBinding } from './statement-publication';
+import type { LedgerContext } from './tenant-context';
+import { assertFinancialAuthority, immutableFinancialContext, type FinancialContext } from './financial-authority';
+import { resolveAlertEventId } from './alert-identifiers';
+import { reviewStateGuard, publishReview, isReviewStateConflict } from './review-publication';
+import { ledgerScopedIdentifier, statementTransactionIdentifier } from './ledger-identifiers';
 import type { D1Database, D1Statement, CurrencyCode } from './db-types';
 
-const LEDGER_ID = 'personal';
 const MAX_ROWS = 500;
 const MAX_CANDIDATES_PER_ROW = 5;
 const MAX_MERCHANT_LENGTH = 200;
@@ -38,6 +43,7 @@ export interface CommitStatementRowsInput {
   filename: string;
   fileSha256: string;
   rows: readonly StatementCommitRow[];
+  publication?: ImportPublicationBinding;
 }
 
 export interface StatementCandidate {
@@ -241,39 +247,39 @@ function isStrongAlertCandidate(row: StatementCommitRow, candidate: RankedCandid
     candidate.reasonCodes.includes('same_amount');
 }
 
-async function accountAllowsCurrency(db: D1Database, accountId: string, currency: string) {
+async function accountAllowsCurrency(db: D1Database, context: LedgerContext, accountId: string, currency: string) {
   const account = await db.prepare(`SELECT a.id
-    FROM accounts a LEFT JOIN account_currencies c ON c.account_id = a.id
-    WHERE a.id = ? AND (c.currency = ? OR (c.currency IS NULL AND a.currency = ?)) LIMIT 1`).bind(accountId, currency, currency).all<{ id: string }>();
+    FROM accounts a LEFT JOIN account_currencies c ON c.account_id = a.id AND c.ledger_id = a.ledger_id
+    WHERE a.id = ? AND a.ledger_id = ? AND (c.currency = ? OR (c.currency IS NULL AND a.currency = ?)) LIMIT 1`).bind(accountId, context.ledgerId, currency, currency).all<{ id: string }>();
   return account.results.length > 0;
 }
 
-async function existingSource(db: D1Database, identityKey: string) {
+async function existingSource(db: D1Database, context: LedgerContext, identityKey: string) {
   return db.prepare(`SELECT id AS source_record_id, transaction_id, identity_key, content_digest
     FROM transaction_source_records WHERE ledger_id = ? AND source_kind = 'statement' AND identity_key = ? LIMIT 1`)
-    .bind(LEDGER_ID, identityKey).first<ExistingSource>();
+    .bind(context.ledgerId, identityKey).first<ExistingSource>();
 }
 
-async function candidateTransactions(db: D1Database, row: StatementCommitRow) {
+async function candidateTransactions(db: D1Database, context: LedgerContext, row: StatementCommitRow) {
   const reference = row.bankReference?.trim() || null;
   const candidates = await db.prepare(`SELECT DISTINCT t.id, t.account_id, t.date, t.merchant, t.amount_minor, t.currency, t.kind, t.status, t.source,
       sr.id AS source_record_id, sr.source_kind, sr.event_id,
       COALESCE(
         sr.bank_reference,
-        (SELECT ae.bank_reference FROM alert_projections ap JOIN alert_events ae ON ae.event_id = ap.event_id
-          WHERE ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1)
+        (SELECT ae.bank_reference FROM alert_projections ap JOIN alert_events ae ON ae.event_id = ap.event_id AND ae.ledger_id = ap.ledger_id
+          WHERE ap.ledger_id = t.ledger_id AND ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1)
       ) AS bank_reference
     FROM transactions t
-    JOIN transaction_source_records sr ON sr.transaction_id = t.id AND sr.account_id = t.account_id AND sr.ledger_id = ? AND sr.source_kind = 'alert'
+    JOIN transaction_source_records sr ON sr.transaction_id = t.id AND sr.account_id = t.account_id AND sr.ledger_id = ? AND sr.ledger_id = t.ledger_id AND sr.source_kind = 'alert'
     WHERE t.account_id = ? AND t.kind = ? AND t.status IN ('confirmed', 'provisional', 'needs_review')
       AND NOT EXISTS (SELECT 1 FROM alert_projections superseded_alert
-        WHERE superseded_alert.state = 'superseded'
+        WHERE superseded_alert.ledger_id = t.ledger_id AND superseded_alert.state = 'superseded'
           AND (superseded_alert.transaction_id = t.id OR superseded_alert.event_id = sr.event_id))
       AND ( (t.currency = ? AND t.amount_minor = ?)
         OR (? IS NOT NULL AND lower(COALESCE(sr.bank_reference,
-          (SELECT ae.bank_reference FROM alert_projections ap JOIN alert_events ae ON ae.event_id = ap.event_id
-            WHERE ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1))) = lower(?)) )
-    ORDER BY t.date DESC, t.id LIMIT 50`).bind(LEDGER_ID, row.accountId, row.kind, row.currency, row.amountMinor, reference, reference).all<CandidateRow>();
+          (SELECT ae.bank_reference FROM alert_projections ap JOIN alert_events ae ON ae.event_id = ap.event_id AND ae.ledger_id = ap.ledger_id
+            WHERE ap.ledger_id = t.ledger_id AND ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1))) = lower(?)) )
+    ORDER BY t.date DESC, t.id LIMIT 50`).bind(context.ledgerId, row.accountId, row.kind, row.currency, row.amountMinor, reference, reference).all<CandidateRow>();
   return candidates.results
     .map((candidate) => {
       const rank = candidateScore(row, candidate);
@@ -308,7 +314,7 @@ export interface AlertStatementMatch {
  * alert can be auto-confirmed only when exactly one candidate has a bank
  * reference match.
  */
-export async function findAlertStatementMatches(db: D1Database, input: AlertStatementMatchInput): Promise<AlertStatementMatch[]> {
+export async function findAlertStatementMatches(db: D1Database, context: LedgerContext, input: AlertStatementMatchInput): Promise<AlertStatementMatch[]> {
   const feature = await db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'statement_reconciliation_candidates' LIMIT 1`).first<{ name: string }>();
   if (!feature) return [];
   const reference = input.bankReference?.trim() || null;
@@ -316,12 +322,12 @@ export async function findAlertStatementMatches(db: D1Database, input: AlertStat
       sr.id AS source_record_id, sr.source_kind, sr.event_id, sr.bank_reference
     FROM transaction_source_records sr
     JOIN transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id
-    WHERE sr.ledger_id = ? AND sr.source_kind = 'statement' AND sr.account_id = ? AND t.account_id = ?
+    WHERE sr.ledger_id = ? AND sr.ledger_id = t.ledger_id AND sr.source_kind = 'statement' AND sr.account_id = ? AND t.account_id = ?
       AND t.kind = ?
       AND ( (t.currency = ? AND t.amount_minor = ?)
         OR (? IS NOT NULL AND sr.bank_reference IS NOT NULL AND lower(sr.bank_reference) = lower(?)) )
       AND t.status IN ('confirmed', 'provisional', 'needs_review')
-    ORDER BY t.date DESC, t.id LIMIT 50`).bind(LEDGER_ID, input.accountId, input.accountId, input.kind, input.currency, input.amountMinor, reference, reference).all<CandidateRow>();
+    ORDER BY t.date DESC, t.id LIMIT 50`).bind(context.ledgerId, input.accountId, input.accountId, input.kind, input.currency, input.amountMinor, reference, reference).all<CandidateRow>();
   const row = {
     id: '__alert_statement_match__',
     accountId: input.accountId,
@@ -356,14 +362,13 @@ export async function findAlertStatementMatches(db: D1Database, input: AlertStat
     .slice(0, MAX_CANDIDATES_PER_ROW);
 }
 
-async function transactionId(db: D1Database, row: StatementCommitRow, identityKey: string, occupied: Set<string>) {
-  const proposed = bounded(row.id, 'statement transaction id', 160);
-  const proposedExists = occupied.has(proposed) || Boolean(await db.prepare('SELECT id FROM transactions WHERE id = ? LIMIT 1').bind(proposed).first<{ id: string }>());
-  if (!proposedExists) return proposed;
-  const fallback = `statement-${hash(identityKey)}-${row.sourceIdentity.rowIndex}`;
-  const fallbackExists = occupied.has(fallback) || Boolean(await db.prepare('SELECT id FROM transactions WHERE id = ? LIMIT 1').bind(fallback).first<{ id: string }>());
-  if (!fallbackExists) return fallback;
-  return `${fallback}-${hash(`${identityKey}:${proposed}`)}`.slice(0, 160);
+async function publishStatementBatch(db: D1Database, context: FinancialContext, statements: D1Statement[], publication?: ImportPublicationBinding) {
+  try { await db.batch(statements); }
+  catch (error) {
+    await assertFinancialAuthority(db, context, 'imports:write');
+    await assertPublicationNotExpired(db,context,publication);
+    throw error;
+  }
 }
 
 /**
@@ -371,7 +376,8 @@ async function transactionId(db: D1Database, row: StatementCommitRow, identityKe
  * in one D1 batch. Queries happen before the batch; no response reports a row
  * as accepted until all corresponding durable writes succeed.
  */
-export async function commitStatementRows(db: D1Database, input: CommitStatementRowsInput, retryOnUnique = true): Promise<CommitStatementRowsResult> {
+export async function commitStatementRows(db: D1Database, context: FinancialContext, input: CommitStatementRowsInput, retryOnUnique = true): Promise<CommitStatementRowsResult> {
+  await assertFinancialAuthority(db, context, 'imports:write');
   if (input.rows.length < 1 || input.rows.length > MAX_ROWS) throw new RangeError(`Statement imports are limited to ${MAX_ROWS} rows.`);
   const accountId = bounded(input.accountId, 'statement account id', 128);
   const fileSha256 = bounded(input.fileSha256, 'statement file hash', 128).toLowerCase();
@@ -382,14 +388,14 @@ export async function commitStatementRows(db: D1Database, input: CommitStatement
   // A retry without a client operation ID must address the same durable
   // operation. The account is part of the derived key so the same file can be
   // imported independently into two accounts without colliding.
-  const operationId = requestedOperationId || `statement-operation:${hash(`${accountId}:${fileSha256}`)}`;
+  const operationId = await ledgerScopedIdentifier(context, 'statement-operation', requestedOperationId || `statement-operation:${hash(`${accountId}:${fileSha256}`)}`);
   const importId = operationId;
   const previousOperation = await db.prepare(`SELECT id, account_id, file_sha256, status, accepted_count, duplicate_count, review_count
-    FROM import_commit_operations WHERE id = ? LIMIT 1`).bind(operationId).first<ExistingCommitOperation>();
+    FROM import_commit_operations WHERE id = ? AND ledger_id = ? LIMIT 1`).bind(operationId, context.ledgerId).first<ExistingCommitOperation>();
   if (previousOperation && (previousOperation.account_id !== accountId || previousOperation.file_sha256 !== fileSha256)) throw new RangeError('The import operation was reused for a different statement.');
   const replayOperation = previousOperation ?? await db.prepare(`SELECT id, account_id, file_sha256, status, accepted_count, duplicate_count, review_count
     FROM import_commit_operations WHERE ledger_id = ? AND account_id = ? AND file_sha256 = ? LIMIT 1`)
-    .bind(LEDGER_ID, accountId, fileSha256).first<ExistingCommitOperation>();
+    .bind(context.ledgerId, accountId, fileSha256).first<ExistingCommitOperation>();
   if (replayOperation) {
     if (replayOperation.accepted_count + replayOperation.duplicate_count !== input.rows.length) throw sourceConflict(`operation:${replayOperation.id}`);
     const replayIdentities: string[] = [];
@@ -409,18 +415,18 @@ export async function commitStatementRows(db: D1Database, input: CommitStatement
       if (seenReplayIdentities.has(identityKey)) throw new RangeError('Statement rows repeat a source identity.');
       seenReplayIdentities.add(identityKey);
       replayIdentities.push(identityKey);
-      if (!await accountAllowsCurrency(db, accountId, row.currency)) throw new RangeError(`Currency ${row.currency} is not approved for this account.`);
-      const existing = await existingSource(db, identityKey);
+      if (!await accountAllowsCurrency(db, context, accountId, row.currency)) throw new RangeError(`Currency ${row.currency} is not approved for this account.`);
+      const existing = await existingSource(db, context, identityKey);
       const digest = await contentDigest(row);
       if (!existing || existing.content_digest !== digest) throw sourceConflict(identityKey);
     }
     const existingRows = await db.prepare(`SELECT t.id AS transaction_id
-      FROM transaction_source_records r JOIN transactions t ON t.id = r.transaction_id
+      FROM transaction_source_records r JOIN transactions t ON t.id = r.transaction_id AND t.ledger_id = r.ledger_id
       WHERE r.ledger_id = ? AND r.source_kind = 'statement' AND r.account_id = ? AND r.file_sha256 = ?
-      ORDER BY r.row_index, t.id`).bind(LEDGER_ID, accountId, fileSha256).all<{ transaction_id: string }>();
+      ORDER BY r.row_index, t.id`).bind(context.ledgerId, accountId, fileSha256).all<{ transaction_id: string }>();
     const candidateRows = await db.prepare(`SELECT c.id, c.statement_transaction_id, c.candidate_transaction_id, c.score, c.reason_codes_json, c.status
-      FROM statement_reconciliation_candidates c JOIN transaction_source_records r ON r.id = c.source_record_id
-      WHERE r.ledger_id = ? AND r.account_id = ? AND r.file_sha256 = ?`).bind(LEDGER_ID, accountId, fileSha256).all<{ id: string; statement_transaction_id: string; candidate_transaction_id: string; score: number; reason_codes_json: string; status: 'open' | 'accepted' | 'dismissed' }>();
+      FROM statement_reconciliation_candidates c JOIN transaction_source_records r ON r.id = c.source_record_id AND r.ledger_id = c.ledger_id
+      WHERE r.ledger_id = ? AND r.account_id = ? AND r.file_sha256 = ?`).bind(context.ledgerId, accountId, fileSha256).all<{ id: string; statement_transaction_id: string; candidate_transaction_id: string; score: number; reason_codes_json: string; status: 'open' | 'accepted' | 'dismissed' }>();
     return {
       importId: replayOperation.id,
       accepted: 0,
@@ -464,8 +470,8 @@ export async function commitStatementRows(db: D1Database, input: CommitStatement
     const identityKey = statementSourceIdentityKey(identity);
     if (seenIdentity.has(identityKey)) throw new RangeError('Statement rows repeat a source identity.');
     seenIdentity.add(identityKey);
-    if (!await accountAllowsCurrency(db, accountId, row.currency)) throw new RangeError(`Currency ${row.currency} is not approved for this account.`);
-    const existing = await existingSource(db, identityKey);
+    if (!await accountAllowsCurrency(db, context, accountId, row.currency)) throw new RangeError(`Currency ${row.currency} is not approved for this account.`);
+    const existing = await existingSource(db, context, identityKey);
     const digest = await contentDigest(row);
     if (existing) {
       if (existing.content_digest !== digest) throw sourceConflict(identityKey);
@@ -473,9 +479,9 @@ export async function commitStatementRows(db: D1Database, input: CommitStatement
       prepared.push({ row, identityKey, sourceId: existing.source_record_id, transactionId: existing.transaction_id, existing, contentDigest: digest, candidates: [], autoMatch: null, autoLinkId: null });
       continue;
     }
-    const id = await transactionId(db, row, identityKey, occupiedIds);
+    const id = await statementTransactionIdentifier(db, context, { rawId: row.id, identityKey, rowIndex: row.sourceIdentity.rowIndex, occupied: occupiedIds });
     occupiedIds.add(id);
-    const rankedCandidates = await candidateTransactions(db, row);
+    const rankedCandidates = await candidateTransactions(db, context, row);
     const strongCandidates = rankedCandidates.filter((candidate) => isStrongAlertCandidate(row, candidate));
     let autoMatch: RankedCandidate | null = null;
     let autoLinkId: string | null = null;
@@ -485,7 +491,7 @@ export async function commitStatementRows(db: D1Database, input: CommitStatement
       if (eventId && !reservedAlertEvents.has(eventId) && !reservedStatementTargets.has(id)) {
         const occupied = await db.prepare(`SELECT id FROM alert_event_links
           WHERE ledger_id = ? AND relation = 'confirms' AND (from_event_id = ? OR to_transaction_id = ?) LIMIT 1`)
-          .bind(LEDGER_ID, eventId, id).first<{ id: string }>();
+          .bind(context.ledgerId, eventId, id).first<{ id: string }>();
         if (!occupied) {
           autoMatch = candidate;
           autoLinkId = `alert-review:${encodeURIComponent(`${eventId}:${id}`)}`;
@@ -503,14 +509,14 @@ export async function commitStatementRows(db: D1Database, input: CommitStatement
   for (const item of newRows) {
     const requiresReview = item.row.status === 'needs_review' || item.candidates.length > 0;
     statements.push(db.prepare(`INSERT INTO transactions
-      (id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint, note, fx_lock_date)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'statement', ?, ?, ?)`)
-      .bind(item.transactionId, accountId, item.row.date, item.row.merchant, item.row.amountMinor, item.row.currency, item.row.category, item.row.kind, requiresReview ? 'needs_review' : 'confirmed', item.row.fingerprint, item.row.note ?? null, item.row.date));
+      (id, ledger_id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint, note, fx_lock_date)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'statement', ?, ?, ?)`)
+      .bind(item.transactionId, context.ledgerId, accountId, item.row.date, item.row.merchant, item.row.amountMinor, item.row.currency, item.row.category, item.row.kind, requiresReview ? 'needs_review' : 'confirmed', item.row.fingerprint, item.row.note ?? null, item.row.date));
     const identity = item.row.sourceIdentity;
     statements.push(db.prepare(`INSERT INTO transaction_source_records
       (id, ledger_id, source_kind, identity_key, transaction_id, account_id, bank_source_id, bank_row_id, file_sha256, row_index, bank_reference, content_digest)
       VALUES (?, ?, 'statement', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(item.sourceId, LEDGER_ID, item.identityKey, item.transactionId, accountId, identity.bankSourceId ?? null, identity.bankRowId ?? null, fileSha256, identity.rowIndex, item.row.bankReference ?? null, item.contentDigest));
+      .bind(item.sourceId, context.ledgerId, item.identityKey, item.transactionId, accountId, identity.bankSourceId ?? null, identity.bankRowId ?? null, fileSha256, identity.rowIndex, item.row.bankReference ?? null, item.contentDigest));
     for (const candidate of item.candidates) {
       const candidateId = statementCandidateId(item.sourceId, candidate.candidate.id);
       const reasons = candidate.reasonCodes;
@@ -518,82 +524,58 @@ export async function commitStatementRows(db: D1Database, input: CommitStatement
       statements.push(db.prepare(`INSERT INTO statement_reconciliation_candidates
         (id, ledger_id, source_record_id, statement_transaction_id, candidate_transaction_id, score, reason_codes_json, evidence_basis, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')`)
-        .bind(candidateId, LEDGER_ID, item.sourceId, item.transactionId, candidate.candidate.id, candidate.score, JSON.stringify(reasons), isStrongAlertCandidate(item.row, candidate) ? 'bank_reference' : 'candidate_rank'));
+        .bind(candidateId, context.ledgerId, item.sourceId, item.transactionId, candidate.candidate.id, candidate.score, JSON.stringify(reasons), isStrongAlertCandidate(item.row, candidate) ? 'bank_reference' : 'candidate_rank'));
     }
     if (item.autoMatch && item.autoLinkId && item.autoMatch.candidate.event_id) {
       const eventId = item.autoMatch.candidate.event_id;
       const linkId = item.autoLinkId;
-      const linkExists = `(SELECT 1 FROM alert_event_links WHERE id = ? AND relation = 'confirms')`;
+      const linkExists = `(SELECT 1 FROM alert_event_links WHERE id = ? AND ledger_id = ? AND relation = 'confirms')`;
       statements.push(db.prepare(`INSERT INTO alert_event_links
         (id, ledger_id, from_event_id, to_transaction_id, relation, evidence_basis, revision)
-        SELECT ?, 'personal', ?, ?, 'confirms', 'bank_reference', 2
+        SELECT ?, ?, ?, ?, 'confirms', 'bank_reference', 2
         WHERE NOT EXISTS (SELECT 1 FROM alert_event_links existing
-          WHERE existing.ledger_id = 'personal' AND existing.relation = 'confirms'
+          WHERE existing.ledger_id = ? AND existing.relation = 'confirms'
             AND (existing.from_event_id = ? OR existing.to_transaction_id = ?))`)
-        .bind(linkId, eventId, item.transactionId, eventId, item.transactionId));
+        .bind(linkId, context.ledgerId, eventId, item.transactionId, context.ledgerId, eventId, item.transactionId));
       statements.push(db.prepare(`UPDATE alert_projections SET transaction_id = ?, state = 'superseded', reason_codes_json = ?, counted_currency = NULL, counted_amount_minor = NULL, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
-        WHERE event_id = ? AND state <> 'superseded' AND EXISTS ${linkExists}`)
-        .bind(item.transactionId, JSON.stringify(['confirmed_elsewhere']), eventId, linkId));
+        WHERE event_id = ? AND ledger_id = ? AND state <> 'superseded' AND EXISTS ${linkExists}`)
+        .bind(item.transactionId, JSON.stringify(['confirmed_elsewhere']), eventId, context.ledgerId, linkId, context.ledgerId));
       statements.push(db.prepare(`INSERT INTO alert_projection_provenance
         (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
-        SELECT ?, 'personal', p.id, 'statement', ?, 'statement', p.revision
+        SELECT ?, ?, p.id, 'statement', ?, 'statement', p.revision
         FROM alert_projections p
-        WHERE p.event_id = ? AND EXISTS ${linkExists}`)
-        .bind(`${eventId}:statement:${item.sourceId}:2`, item.sourceId, eventId, linkId));
+        WHERE p.event_id = ? AND p.ledger_id = ? AND EXISTS ${linkExists}`)
+        .bind(`${eventId}:statement:${item.sourceId}:2`, context.ledgerId, item.sourceId, eventId, context.ledgerId, linkId, context.ledgerId));
       statements.push(db.prepare(`UPDATE transactions SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND source = 'statement' AND EXISTS ${linkExists}`)
-        .bind(item.transactionId, linkId));
+        WHERE id = ? AND ledger_id = ? AND source = 'statement' AND EXISTS ${linkExists}`)
+        .bind(item.transactionId, context.ledgerId, linkId, context.ledgerId));
       statements.push(db.prepare(`UPDATE transactions SET status = 'needs_review', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND source = 'alert'
-          AND EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ?)
+        WHERE id = ? AND ledger_id = ? AND source = 'alert'
+          AND EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ? AND annotation.ledger_id = transactions.ledger_id)
           AND EXISTS ${linkExists}`)
-        .bind(item.autoMatch.candidate.id, item.autoMatch.candidate.id, linkId));
+        .bind(item.autoMatch.candidate.id, context.ledgerId, item.autoMatch.candidate.id, linkId, context.ledgerId));
       statements.push(db.prepare(`DELETE FROM transactions
-        WHERE id = ? AND source = 'alert'
-          AND NOT EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ?)
+        WHERE id = ? AND ledger_id = ? AND source = 'alert'
+          AND NOT EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ? AND annotation.ledger_id = transactions.ledger_id)
           AND EXISTS ${linkExists}`)
-        .bind(item.autoMatch.candidate.id, item.autoMatch.candidate.id, linkId));
+        .bind(item.autoMatch.candidate.id, context.ledgerId, item.autoMatch.candidate.id, linkId, context.ledgerId));
     }
   }
-  statements.push(db.prepare(`INSERT INTO imports (id, account_id, filename, row_count, accepted_count, error_count, status)
-    VALUES (?, ?, ?, ?, ?, 0, 'committed')`).bind(importId, accountId, filename, input.rows.length, newRows.length));
-  statements.push(db.prepare(`INSERT INTO import_commit_operations
-    (id, ledger_id, account_id, file_sha256, status, requested_count, accepted_count, duplicate_count, review_count)
-    VALUES (?, ?, ?, ?, 'committed', ?, ?, ?, 0)`)
-    .bind(operationId, LEDGER_ID, accountId, fileSha256, input.rows.length, newRows.length, duplicateCount));
-  statements.push(db.prepare(`UPDATE import_commit_operations
-    SET review_count = (
-      SELECT COUNT(*) FROM transactions t
-      JOIN transaction_source_records r ON r.transaction_id = t.id AND r.ledger_id = ?
-      WHERE r.source_kind = 'statement' AND r.account_id = ? AND r.file_sha256 = ?
-        AND (t.status = 'needs_review' OR EXISTS (
-          SELECT 1 FROM statement_reconciliation_candidates c
-          WHERE c.statement_transaction_id = t.id AND c.status = 'open'
-        ))
-    ), status = CASE WHEN (
-      SELECT COUNT(*) FROM transactions t
-      JOIN transaction_source_records r ON r.transaction_id = t.id AND r.ledger_id = ?
-      WHERE r.source_kind = 'statement' AND r.account_id = ? AND r.file_sha256 = ?
-        AND (t.status = 'needs_review' OR EXISTS (
-          SELECT 1 FROM statement_reconciliation_candidates c
-          WHERE c.statement_transaction_id = t.id AND c.status = 'open'
-        ))
-    ) > 0 THEN 'partial_review' ELSE 'committed' END
-    WHERE id = ?`)
-    .bind(LEDGER_ID, accountId, fileSha256, LEDGER_ID, accountId, fileSha256, operationId));
-  if (statements.length > 0) {
-    try {
-      await db.batch(statements);
-    } catch (error) {
-      if (retryOnUnique && isReconciliationUniqueConflict(error)) return commitStatementRows(db, input, false);
-      throw error;
-    }
+  statements.push(...statementPublicationStatements(db, context, {
+    operationId, accountId, fileSha256, filename, requestedCount:input.rows.length,
+    acceptedCount:newRows.length, duplicateCount, publication:input.publication,
+  }));
+  try {
+    await publishStatementBatch(db, context, statements, input.publication);
+  } catch (error) {
+    if (retryOnUnique && isReconciliationUniqueConflict(error)) return commitStatementRows(db, context, input, false);
+    throw error;
   }
-  const operation = await db.prepare(`SELECT review_count FROM import_commit_operations WHERE id = ? LIMIT 1`).bind(operationId).first<{ review_count: number }>();
+  const operation = await db.prepare(`SELECT review_count FROM import_commit_operations WHERE id = ? AND ledger_id = ? LIMIT 1`).bind(operationId, context.ledgerId).first<{ review_count: number }>();
   const committedCandidates = await db.prepare(`SELECT c.id, c.statement_transaction_id, c.candidate_transaction_id, c.score, c.reason_codes_json, c.status
-    FROM statement_reconciliation_candidates c JOIN transaction_source_records r ON r.id = c.source_record_id
+    FROM statement_reconciliation_candidates c JOIN transaction_source_records r ON r.id = c.source_record_id AND r.ledger_id = c.ledger_id
     WHERE r.ledger_id = ? AND r.account_id = ? AND r.file_sha256 = ?`)
-    .bind(LEDGER_ID, accountId, fileSha256).all<{ id: string; statement_transaction_id: string; candidate_transaction_id: string; score: number; reason_codes_json: string; status: 'open' | 'accepted' | 'dismissed' }>();
+    .bind(context.ledgerId, accountId, fileSha256).all<{ id: string; statement_transaction_id: string; candidate_transaction_id: string; score: number; reason_codes_json: string; status: 'open' | 'accepted' | 'dismissed' }>();
   const committedCandidateList = committedCandidates.results.map((item) => ({ id: item.id, statementTransactionId: item.statement_transaction_id, candidateTransactionId: item.candidate_transaction_id, score: item.score, reasonCodes: JSON.parse(item.reason_codes_json) as string[], status: item.status }));
   return {
     importId,
@@ -706,12 +688,12 @@ function equalReviewLink(existing: ReviewLinkRow, input: AlertReviewInput, relat
     existing.revision === input.revision;
 }
 
-async function reviewTargetSource(db: D1Database, transactionId: string) {
+async function reviewTargetSource(db: D1Database, context: FinancialContext, transactionId: string) {
   return db.prepare(`SELECT id, ledger_id, source_kind, account_id, bank_reference
     FROM transaction_source_records
     WHERE ledger_id = ? AND transaction_id = ?
     ORDER BY CASE WHEN source_kind = 'statement' THEN 0 ELSE 1 END, id LIMIT 1`)
-    .bind(LEDGER_ID, transactionId).first<ReviewSourceRow>();
+    .bind(context.ledgerId, transactionId).first<ReviewSourceRow>();
 }
 
 function checkBankReference(evidenceBasis: AlertReviewInput['evidenceBasis'], alert: ReviewAlertRow, source: ReviewSourceRow | null) {
@@ -723,7 +705,7 @@ function checkBankReference(evidenceBasis: AlertReviewInput['evidenceBasis'], al
 
 function checkStatementShape(alert: ReviewAlertRow, target: ExistingTransaction, source: ReviewSourceRow | null) {
   const shape = expectedAlertShape(alert);
-  if (!shape || !source || source.ledger_id !== LEDGER_ID || source.source_kind !== 'statement') reviewReject('target_scope_mismatch', 'The review target is not a statement in the personal ledger.');
+  if (!shape || !source || source.ledger_id !== alert.ledger_id || source.source_kind !== 'statement') reviewReject('target_scope_mismatch', 'The review target is not a statement in this ledger.');
   if (source.account_id !== alert.account_id || target.account_id !== alert.account_id) reviewReject('account_mismatch', 'Alert and statement must belong to the same account.');
   if (target.currency !== shape.currency || target.kind !== shape.kind || Math.sign(target.amount_minor) !== shape.sign || Math.abs(target.amount_minor) !== shape.amountMinor) {
     reviewReject('transaction_mismatch', 'Alert and statement currency, amount, kind, and sign must match exactly.');
@@ -731,7 +713,7 @@ function checkStatementShape(alert: ReviewAlertRow, target: ExistingTransaction,
 }
 
 function checkSameLifecycleScope(left: ReviewAlertRow, right: ReviewAlertRow) {
-  if (left.ledger_id !== LEDGER_ID || right.ledger_id !== LEDGER_ID || !left.account_id || left.account_id !== right.account_id) reviewReject('account_mismatch', 'Lifecycle events must share one personal-ledger account.');
+  if (left.ledger_id !== right.ledger_id || !left.account_id || left.account_id !== right.account_id) reviewReject('account_mismatch', 'Lifecycle events must share one ledger account.');
   if (left.source_profile_id !== right.source_profile_id || !sameNullable(left.instrument_hint_kind, right.instrument_hint_kind) || !sameNullable(left.instrument_hint_value, right.instrument_hint_value)) reviewReject('instrument_mismatch', 'Lifecycle events must share the same source instrument.');
   if (!left.event_money_currency || left.event_money_currency !== right.event_money_currency) reviewReject('currency_mismatch', 'Lifecycle events must share one currency.');
 }
@@ -750,7 +732,46 @@ function validateAllocation(input: AlertReviewInput, required: boolean) {
  * All link, projection, arithmetic, provenance, and candidate changes share
  * one D1 batch so a review never exposes half a match.
  */
-export async function applyAlertReview(db: D1Database, input: AlertReviewInput) {
+export async function applyAlertReview(db: D1Database, suppliedContext: FinancialContext, rawInput: AlertReviewInput) {
+  const context = immutableFinancialContext(suppliedContext);
+  const requested = { ...rawInput };
+  await assertFinancialAuthority(db, context, 'ledger:review');
+  try {
+    const input = { ...requested,
+      id: await ledgerScopedIdentifier(context, 'alert-review', requested.id),
+      alertEventId: await resolveAlertEventId(db, context, requested.alertEventId),
+      targetAlertEventId: requested.targetAlertEventId
+        ? await resolveAlertEventId(db, context, requested.targetAlertEventId) : undefined,
+    };
+    const result = await applyResolvedAlertReview(db, context, input);
+    await assertFinancialAuthority(db, context, 'ledger:review');
+    return { ...result, alertEventId: requested.alertEventId, targetAlertEventId: requested.targetAlertEventId ?? null };
+  } catch (error) {
+    await assertFinancialAuthority(db, context, 'ledger:review');
+    if (isReviewStateConflict(error)) reviewReject('stale_revision', 'The review state changed before publication.');
+    throw error;
+  }
+}
+
+function reviewProjectionGuard(db: D1Database, context: FinancialContext, row: ReviewProjectionRow) {
+  return reviewStateGuard(db, context, `EXISTS (SELECT 1 FROM alert_projections
+    WHERE id=? AND ledger_id=? AND event_id=? AND revision=? AND state=? AND transaction_id IS ?
+      AND counted_currency IS ? AND counted_amount_minor IS ?)`, [
+    row.id, context.ledgerId, row.event_id, row.revision, row.state,
+    row.transaction_id, row.counted_currency, row.counted_amount_minor,
+  ]);
+}
+
+function reviewTransactionGuard(db: D1Database, context: FinancialContext, row: ExistingTransaction) {
+  return reviewStateGuard(db, context, `EXISTS (SELECT 1 FROM transactions
+    WHERE id=? AND ledger_id=? AND account_id=? AND currency=?
+      AND amount_minor=? AND kind=? AND status=? AND source=?)`, [
+    row.id, context.ledgerId, row.account_id, row.currency,
+    row.amount_minor, row.kind, row.status, row.source,
+  ]);
+}
+
+async function applyResolvedAlertReview(db: D1Database, context: FinancialContext, input: AlertReviewInput) {
   const relation = input.relation ?? 'confirms';
   if (!input.id || !input.alertEventId || !Number.isSafeInteger(input.revision) || input.revision < 1) throw new RangeError('A review link needs an event and positive revision.');
   if (!['confirms', 'refund_of', 'cancels', 'partially_reverses', 'possible_duplicate'].includes(relation)) throw new RangeError('Unsupported review relation.');
@@ -770,7 +791,7 @@ export async function applyAlertReview(db: D1Database, input: AlertReviewInput) 
 
   const existingLink = await db.prepare(`SELECT id, from_event_id, to_event_id, to_transaction_id, relation, allocated_currency,
       allocated_amount_minor, evidence_basis, revision
-    FROM alert_event_links WHERE id = ? LIMIT 1`).bind(input.id).first<ReviewLinkRow>();
+    FROM alert_event_links WHERE id = ? AND ledger_id = ? LIMIT 1`).bind(input.id, context.ledgerId).first<ReviewLinkRow>();
   if (existingLink) {
     if (!equalReviewLink(existingLink, input, relation)) throw new ReconciliationConflictError('review_conflict', 'The review ID is already bound to different content.');
     return { alertEventId: input.alertEventId, targetAlertEventId: input.targetAlertEventId ?? null, transactionId: input.statementTransactionId ?? null, relation, replayed: true, projectionSuperseded: relation === 'confirms' };
@@ -778,14 +799,14 @@ export async function applyAlertReview(db: D1Database, input: AlertReviewInput) 
 
   const alert = await db.prepare(`SELECT event_id, ledger_id, account_id, source_profile_id, instrument_hint_kind, instrument_hint_value,
       event_type, direction, event_money_currency, event_money_amount_minor, bank_reference
-    FROM alert_events WHERE event_id = ? LIMIT 1`).bind(input.alertEventId).first<ReviewAlertRow>();
-  if (!alert || alert.ledger_id !== LEDGER_ID || !alert.account_id) reviewReject('alert_scope_mismatch', 'The source alert is not in the personal ledger account scope.');
+    FROM alert_events WHERE event_id = ? AND ledger_id = ? LIMIT 1`).bind(input.alertEventId, context.ledgerId).first<ReviewAlertRow>();
+  if (!alert || !alert.account_id) reviewReject('alert_scope_mismatch', 'The source alert is not in this ledger account scope.');
   const projection = await db.prepare(`SELECT id, event_id, transaction_id, state, revision, counted_currency, counted_amount_minor
-    FROM alert_projections WHERE event_id = ? LIMIT 1`).bind(input.alertEventId).first<ReviewProjectionRow>();
+    FROM alert_projections WHERE event_id = ? AND ledger_id = ? LIMIT 1`).bind(input.alertEventId, context.ledgerId).first<ReviewProjectionRow>();
   if (!projection) reviewReject('projection_missing', 'The source alert has no durable projection.');
   if (input.revision <= projection.revision) reviewReject('stale_revision', 'The review revision must advance the alert projection.');
 
-  const statements: D1Statement[] = [];
+  const statements: D1Statement[] = [reviewProjectionGuard(db, context, projection)];
   let targetTransaction: ExistingTransaction | null = null;
   let targetSource: ReviewSourceRow | null = null;
   let targetProjection: ReviewProjectionRow | null = null;
@@ -795,9 +816,9 @@ export async function applyAlertReview(db: D1Database, input: AlertReviewInput) 
     if (input.targetAlertEventId === input.alertEventId) reviewReject('invalid_target', 'An alert cannot be linked to itself.');
     targetAlert = await db.prepare(`SELECT event_id, ledger_id, account_id, source_profile_id, instrument_hint_kind, instrument_hint_value,
         event_type, direction, event_money_currency, event_money_amount_minor, bank_reference
-      FROM alert_events WHERE event_id = ? LIMIT 1`).bind(input.targetAlertEventId).first<ReviewAlertRow>();
+      FROM alert_events WHERE event_id = ? AND ledger_id = ? LIMIT 1`).bind(input.targetAlertEventId, context.ledgerId).first<ReviewAlertRow>();
     targetProjection = await db.prepare(`SELECT id, event_id, transaction_id, state, revision, counted_currency, counted_amount_minor
-      FROM alert_projections WHERE event_id = ? LIMIT 1`).bind(input.targetAlertEventId).first<ReviewProjectionRow>();
+      FROM alert_projections WHERE event_id = ? AND ledger_id = ? LIMIT 1`).bind(input.targetAlertEventId, context.ledgerId).first<ReviewProjectionRow>();
     if (!targetAlert || !targetProjection) reviewReject('target_missing', 'The lifecycle target alert or projection does not exist.');
     checkSameLifecycleScope(alert, targetAlert);
     if (alert.event_type !== 'authorization_reversal' || alert.direction !== 'none' || targetAlert.event_type !== 'purchase_notice' || targetAlert.direction !== 'outflow') {
@@ -818,59 +839,72 @@ export async function applyAlertReview(db: D1Database, input: AlertReviewInput) 
     const targetTransactionId = targetProjection.transaction_id;
     if (!targetTransactionId) reviewReject('target_missing', 'The lifecycle target has no alert transaction to adjust.');
     targetTransaction = await db.prepare(`SELECT id, account_id, currency, amount_minor, kind, status, source
-      FROM transactions WHERE id = ? LIMIT 1`).bind(targetTransactionId).first<ExistingTransaction>();
+      FROM transactions WHERE id = ? AND ledger_id = ? LIMIT 1`).bind(targetTransactionId, context.ledgerId).first<ExistingTransaction>();
     if (!targetTransaction || targetTransaction.source !== 'alert' || targetTransaction.account_id !== alert.account_id || targetTransaction.currency !== alert.event_money_currency || targetTransaction.kind !== 'expense' || Math.sign(targetTransaction.amount_minor) !== -1) reviewReject('transaction_mismatch', 'The lifecycle target transaction is outside the alert shape.');
     const priorFrom = await db.prepare(`SELECT COALESCE(SUM(allocated_amount_minor), 0) AS amount, COUNT(*) AS count
-      FROM alert_event_links WHERE ledger_id = ? AND from_event_id = ? AND relation IN ('cancels', 'partially_reverses')`).bind(LEDGER_ID, input.alertEventId).first<{ amount: number; count: number }>();
+      FROM alert_event_links WHERE ledger_id = ? AND from_event_id = ? AND relation IN ('cancels', 'partially_reverses')`).bind(context.ledgerId, input.alertEventId).first<{ amount: number; count: number }>();
     if ((priorFrom?.count ?? 0) > 0) reviewReject('duplicate_allocation', 'An authorization reversal may have only one durable allocation.');
     const priorTarget = await db.prepare(`SELECT COALESCE(SUM(allocated_amount_minor), 0) AS amount
-      FROM alert_event_links WHERE ledger_id = ? AND to_event_id = ? AND relation IN ('cancels', 'partially_reverses')`).bind(LEDGER_ID, input.targetAlertEventId).first<{ amount: number }>();
+      FROM alert_event_links WHERE ledger_id = ? AND to_event_id = ? AND relation IN ('cancels', 'partially_reverses')`).bind(context.ledgerId, input.targetAlertEventId).first<{ amount: number }>();
     const previousAllocation = priorTarget?.amount ?? 0;
     const targetAmount = targetAlert.event_money_amount_minor ?? 0;
     if (previousAllocation + allocation > targetAmount) reviewReject('allocation_exceeds_event', 'Lifecycle allocations cannot exceed the purchase amount.');
     const remaining = targetAmount - previousAllocation - allocation;
     if (Math.abs(targetTransaction.amount_minor) !== targetAmount - previousAllocation) reviewReject('arithmetic_conflict', 'The stored alert transaction does not match prior lifecycle allocations.');
+    statements.push(reviewProjectionGuard(db, context, targetProjection), reviewTransactionGuard(db, context, targetTransaction));
+    statements.push(reviewStateGuard(db, context, `NOT EXISTS (SELECT 1 FROM alert_event_links
+      WHERE ledger_id=? AND from_event_id=? AND relation IN ('cancels','partially_reverses'))
+      AND (SELECT COALESCE(SUM(allocated_amount_minor),0) FROM alert_event_links
+        WHERE ledger_id=? AND to_event_id=? AND relation IN ('cancels','partially_reverses'))=?`,
+      [context.ledgerId,input.alertEventId,context.ledgerId,input.targetAlertEventId,previousAllocation]));
     statements.push(db.prepare(`INSERT INTO alert_event_links
       (id, ledger_id, from_event_id, to_event_id, relation, allocated_currency, allocated_amount_minor, evidence_basis, revision)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(input.id, LEDGER_ID, input.alertEventId, input.targetAlertEventId, relation, input.allocatedCurrency, allocation, input.evidenceBasis, input.revision));
+      .bind(input.id, context.ledgerId, input.alertEventId, input.targetAlertEventId, relation, input.allocatedCurrency, allocation, input.evidenceBasis, input.revision));
     statements.push(db.prepare(`UPDATE transactions SET amount_minor = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND source = 'alert' AND account_id = ?`).bind(remaining === 0 ? 0 : -remaining, targetTransaction.id, alert.account_id));
+      WHERE id = ? AND ledger_id = ? AND source = 'alert' AND account_id = ?`).bind(remaining === 0 ? 0 : -remaining, targetTransaction.id, context.ledgerId, alert.account_id));
     if (remaining === 0) {
       statements.push(db.prepare(`UPDATE transactions SET status = 'needs_review', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND source = 'alert' AND account_id = ?`).bind(targetTransaction.id, alert.account_id));
-      statements.push(db.prepare(`UPDATE alert_projections SET state = 'voided', transaction_id = CASE WHEN EXISTS (SELECT 1 FROM annotation_revisions WHERE transaction_id = ?) THEN transaction_id ELSE NULL END,
+        WHERE id = ? AND ledger_id = ? AND source = 'alert' AND account_id = ?`).bind(targetTransaction.id, context.ledgerId, alert.account_id));
+      statements.push(db.prepare(`UPDATE alert_projections SET state = 'voided', transaction_id = CASE WHEN EXISTS (SELECT 1 FROM annotation_revisions WHERE transaction_id = ? AND ledger_id = alert_projections.ledger_id) THEN transaction_id ELSE NULL END,
           reason_codes_json = ?, counted_currency = NULL, counted_amount_minor = NULL, revision = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND revision < ?`).bind(targetTransaction.id, JSON.stringify(['cancelled']), input.revision, targetProjection.id, input.revision));
+        WHERE id = ? AND ledger_id = ? AND revision = ?`).bind(targetTransaction.id, JSON.stringify(['cancelled']), input.revision, targetProjection.id, context.ledgerId, targetProjection.revision));
       statements.push(db.prepare(`DELETE FROM transactions
-        WHERE id = ? AND source = 'alert'
-          AND NOT EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ?)
-          AND NOT EXISTS (SELECT 1 FROM alert_projections other WHERE other.transaction_id = ?)
-          AND NOT EXISTS (SELECT 1 FROM alert_event_links existing WHERE existing.to_transaction_id = ?)`)
-        .bind(targetTransaction.id, targetTransaction.id, targetTransaction.id, targetTransaction.id));
+        WHERE id = ? AND ledger_id = ? AND source = 'alert'
+          AND NOT EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ? AND annotation.ledger_id = transactions.ledger_id)
+          AND NOT EXISTS (SELECT 1 FROM alert_projections other WHERE other.transaction_id = ? AND other.ledger_id = transactions.ledger_id)
+          AND NOT EXISTS (SELECT 1 FROM alert_event_links existing WHERE existing.to_transaction_id = ? AND existing.ledger_id = transactions.ledger_id)`)
+        .bind(targetTransaction.id, context.ledgerId, targetTransaction.id, targetTransaction.id, targetTransaction.id));
     } else {
       statements.push(db.prepare(`UPDATE alert_projections SET state = 'provisional', reason_codes_json = ?, counted_currency = ?, counted_amount_minor = ?, revision = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND revision < ?`).bind(JSON.stringify([]), targetAlert.event_money_currency, remaining, input.revision, targetProjection.id, input.revision));
+        WHERE id = ? AND ledger_id = ? AND revision = ?`).bind(JSON.stringify([]), targetAlert.event_money_currency, remaining, input.revision, targetProjection.id, context.ledgerId, targetProjection.revision));
     }
     statements.push(db.prepare(`INSERT INTO alert_projection_provenance
       (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
       VALUES (?, ?, ?, 'alert', ?, ?, ?)`)
-      .bind(`${targetProjection.id}:lifecycle:${input.alertEventId}:${input.revision}`, LEDGER_ID, targetProjection.id, input.alertEventId, provenanceBasis(input.evidenceBasis), input.revision));
+      .bind(`${targetProjection.id}:lifecycle:${input.alertEventId}:${input.revision}`, context.ledgerId, targetProjection.id, input.alertEventId, provenanceBasis(input.evidenceBasis), input.revision));
     statements.push(db.prepare(`UPDATE alert_projections SET state = 'non_spending', reason_codes_json = ?, counted_currency = NULL, counted_amount_minor = NULL, revision = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND revision < ?`).bind(JSON.stringify(['non_spending_event']), input.revision, projection.id, input.revision));
+      WHERE id = ? AND ledger_id = ? AND revision = ?`).bind(JSON.stringify(['non_spending_event']), input.revision, projection.id, context.ledgerId, projection.revision));
     statements.push(db.prepare(`INSERT INTO alert_projection_provenance
       (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
       VALUES (?, ?, ?, 'review', ?, ?, ?)`)
-      .bind(`${projection.id}:lifecycle:${input.id}:${input.revision}`, LEDGER_ID, projection.id, input.id, provenanceBasis(input.evidenceBasis), input.revision));
-    await db.batch(statements);
+      .bind(`${projection.id}:lifecycle:${input.id}:${input.revision}`, context.ledgerId, projection.id, input.id, provenanceBasis(input.evidenceBasis), input.revision));
+    await publishReview(db, context, statements);
     return { alertEventId: input.alertEventId, targetAlertEventId: input.targetAlertEventId, transactionId: targetTransaction.id, relation, replayed: false, projectionSuperseded: false, remainingAmountMinor: remaining };
   }
 
   targetTransaction = await db.prepare(`SELECT id, account_id, currency, amount_minor, kind, status, source
-    FROM transactions WHERE id = ? LIMIT 1`).bind(input.statementTransactionId).first<ExistingTransaction>();
-  targetSource = targetTransaction ? await reviewTargetSource(db, targetTransaction.id) : null;
+    FROM transactions WHERE id = ? AND ledger_id = ? LIMIT 1`).bind(input.statementTransactionId, context.ledgerId).first<ExistingTransaction>();
+  targetSource = targetTransaction ? await reviewTargetSource(db, context, targetTransaction.id) : null;
   if (!targetTransaction) reviewReject('target_missing', 'The statement target transaction does not exist.');
-  if (targetTransaction.account_id !== alert.account_id || targetSource?.ledger_id !== LEDGER_ID) reviewReject('account_mismatch', 'Alert and statement must share the personal-ledger account.');
+  if (targetTransaction.account_id !== alert.account_id || targetSource?.ledger_id !== context.ledgerId) reviewReject('account_mismatch', 'Alert and statement must share the ledger account.');
+  statements.push(reviewTransactionGuard(db, context, targetTransaction));
+  statements.push(reviewStateGuard(db, context, `EXISTS (SELECT 1 FROM transaction_source_records
+    WHERE id=? AND ledger_id=? AND transaction_id=? AND account_id=?
+      AND source_kind=? AND bank_reference IS ?)`, [
+    targetSource.id, context.ledgerId, targetTransaction.id,
+    targetSource.account_id, targetSource.source_kind, targetSource.bank_reference,
+  ]));
   if (relation === 'confirms' || relation === 'possible_duplicate' || relation === 'refund_of') {
     if (relation === 'refund_of') {
       if (alert.event_type !== 'refund_notice' || alert.direction !== 'inflow' || targetTransaction.source !== 'statement' || !targetSource || !alert.event_money_currency || targetTransaction.currency !== alert.event_money_currency || targetTransaction.kind === 'refund' || targetTransaction.amount_minor >= 0 || allocation === null || allocation > Math.abs(targetTransaction.amount_minor) || allocation !== alert.event_money_amount_minor) reviewReject('transaction_mismatch', 'A refund review requires a positive refund allocated to a matching statement outflow.');
@@ -887,50 +921,60 @@ export async function applyAlertReview(db: D1Database, input: AlertReviewInput) 
   if (input.statementTransactionId && input.candidateTransactionId) {
     const candidate = await db.prepare(`SELECT id FROM statement_reconciliation_candidates
       WHERE ledger_id = ? AND statement_transaction_id = ? AND candidate_transaction_id = ? AND status = 'open' LIMIT 1`)
-      .bind(LEDGER_ID, input.statementTransactionId, input.candidateTransactionId).first<{ id: string }>();
+      .bind(context.ledgerId, input.statementTransactionId, input.candidateTransactionId).first<{ id: string }>();
+    if (!candidate) reviewReject('candidate_mismatch', 'The selected candidate is no longer open.');
     const candidateTransaction = await db.prepare(`SELECT id, account_id, currency, amount_minor, kind, status, source
-      FROM transactions WHERE id = ? LIMIT 1`).bind(input.candidateTransactionId).first<ExistingTransaction>();
+      FROM transactions WHERE id = ? AND ledger_id = ? LIMIT 1`).bind(input.candidateTransactionId, context.ledgerId).first<ExistingTransaction>();
     const shape = expectedAlertShape(alert);
     if (!candidateTransaction || candidateTransaction.account_id !== alert.account_id || candidateTransaction.source !== 'alert' || !shape || candidateTransaction.currency !== shape.currency || candidateTransaction.kind !== shape.kind || Math.sign(candidateTransaction.amount_minor) !== shape.sign || Math.abs(candidateTransaction.amount_minor) !== shape.amountMinor) {
       reviewReject('candidate_mismatch', 'The selected alert candidate does not match the source alert.');
     }
-    if (candidate) statements.push(db.prepare(`UPDATE statement_reconciliation_candidates SET status = 'accepted', evidence_basis = 'user_review', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND status = 'open'`).bind(candidate.id));
+    if (projection.transaction_id !== input.candidateTransactionId) reviewReject('candidate_mismatch', 'The candidate does not belong to this source projection.');
+    statements.push(reviewTransactionGuard(db, context, candidateTransaction));
+    statements.push(reviewStateGuard(db, context, `EXISTS (SELECT 1 FROM statement_reconciliation_candidates
+      WHERE id=? AND ledger_id=? AND statement_transaction_id=? AND candidate_transaction_id=? AND status='open')`, [
+      candidate.id, context.ledgerId, input.statementTransactionId, input.candidateTransactionId,
+    ]));
+    statements.push(db.prepare(`UPDATE statement_reconciliation_candidates SET status = 'accepted', evidence_basis = 'user_review', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND ledger_id = ? AND status = 'open'`).bind(candidate.id, context.ledgerId));
   }
   statements.push(db.prepare(`INSERT INTO alert_event_links
     (id, ledger_id, from_event_id, to_transaction_id, relation, allocated_currency, allocated_amount_minor, evidence_basis, revision)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(input.id, LEDGER_ID, input.alertEventId, targetTransaction.id, relation, input.allocatedCurrency ?? null, allocation, input.evidenceBasis, input.revision));
+    .bind(input.id, context.ledgerId, input.alertEventId, targetTransaction.id, relation, input.allocatedCurrency ?? null, allocation, input.evidenceBasis, input.revision));
   statements.push(db.prepare(`INSERT INTO alert_projection_provenance
     (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
     VALUES (?, ?, ?, 'review', ?, ?, ?)`)
-    .bind(`${projection.id}:review:${input.id}:${input.revision}`, LEDGER_ID, projection.id, input.id, provenanceBasis(input.evidenceBasis), input.revision));
+    .bind(`${projection.id}:review:${input.id}:${input.revision}`, context.ledgerId, projection.id, input.id, provenanceBasis(input.evidenceBasis), input.revision));
   if (relation === 'confirms') {
     statements.push(db.prepare(`UPDATE alert_projections SET state = 'superseded', transaction_id = ?, reason_codes_json = ?, counted_currency = NULL, counted_amount_minor = NULL, revision = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND revision < ?`).bind(targetTransaction.id, JSON.stringify(['confirmed_elsewhere']), input.revision, projection.id, input.revision));
+      WHERE id = ? AND ledger_id = ? AND revision = ?`).bind(targetTransaction.id, JSON.stringify(['confirmed_elsewhere']), input.revision, projection.id, context.ledgerId, projection.revision));
     statements.push(db.prepare(`UPDATE transactions SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND source = 'statement' AND status IN ('needs_review', 'provisional')`).bind(targetTransaction.id));
+      WHERE id = ? AND ledger_id = ? AND source = 'statement' AND status IN ('needs_review', 'provisional')`).bind(targetTransaction.id, context.ledgerId));
     if (targetSource) statements.push(db.prepare(`INSERT INTO alert_projection_provenance
       (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
       VALUES (?, ?, ?, 'statement', ?, 'statement', ?)`)
-      .bind(`${projection.id}:statement:${targetSource.id}:${input.revision}`, LEDGER_ID, projection.id, targetSource.id, input.revision));
+      .bind(`${projection.id}:statement:${targetSource.id}:${input.revision}`, context.ledgerId, projection.id, targetSource.id, input.revision));
     const priorAlertTransactionId = projection.transaction_id;
     if (priorAlertTransactionId && priorAlertTransactionId !== targetTransaction.id) {
       statements.push(db.prepare(`UPDATE transactions SET status = 'needs_review', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND source = 'alert'
-          AND EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ?)`)
-        .bind(priorAlertTransactionId, priorAlertTransactionId));
+        WHERE id = ? AND ledger_id = ? AND source = 'alert'
+          AND EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ? AND annotation.ledger_id = transactions.ledger_id)`)
+        .bind(priorAlertTransactionId, context.ledgerId, priorAlertTransactionId));
       statements.push(db.prepare(`DELETE FROM transactions
-        WHERE id = ? AND source = 'alert'
-          AND NOT EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ?)
-          AND NOT EXISTS (SELECT 1 FROM alert_projections other WHERE other.transaction_id = ? AND other.id <> ?)
-          AND NOT EXISTS (SELECT 1 FROM alert_event_links existing WHERE existing.to_transaction_id = ?)
-          AND EXISTS (SELECT 1 FROM alert_event_links confirmed WHERE confirmed.id = ? AND confirmed.relation = 'confirms')`)
-        .bind(priorAlertTransactionId, priorAlertTransactionId, priorAlertTransactionId, projection.id, priorAlertTransactionId, input.id));
+        WHERE id = ? AND ledger_id = ? AND source = 'alert'
+          AND NOT EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ? AND annotation.ledger_id = transactions.ledger_id)
+          AND NOT EXISTS (SELECT 1 FROM alert_projections other WHERE other.transaction_id = ? AND other.id <> ? AND other.ledger_id = transactions.ledger_id)
+          AND NOT EXISTS (SELECT 1 FROM alert_event_links existing WHERE existing.to_transaction_id = ? AND existing.ledger_id = transactions.ledger_id)
+          AND EXISTS (SELECT 1 FROM alert_event_links confirmed WHERE confirmed.id = ? AND confirmed.relation = 'confirms' AND confirmed.ledger_id = transactions.ledger_id)`)
+        .bind(priorAlertTransactionId, context.ledgerId, priorAlertTransactionId, priorAlertTransactionId, projection.id, priorAlertTransactionId, input.id));
     }
+  } else {
+    statements.push(db.prepare(`UPDATE alert_projections SET revision=?, updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND ledger_id=? AND revision=?`).bind(input.revision, projection.id, context.ledgerId, projection.revision));
   }
   try {
-    await db.batch(statements);
+    await publishReview(db, context, statements);
   } catch (error) {
     if (isReconciliationUniqueConflict(error)) {
       if (relation === 'confirms') reviewReject('target_already_confirmed', 'The alert or statement already has a durable confirmation. Review the existing link before retrying.');

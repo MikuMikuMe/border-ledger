@@ -8,7 +8,10 @@ import {
   ReconciliationReviewError,
 } from './reconciliation-store';
 
-const LEDGER_ID = 'personal' as const;
+import { assertFinancialAuthority, immutableFinancialContext, type FinancialContext } from './financial-authority';
+import type { OwnerContext } from './mobile-auth';
+import { resolveAlertEventId } from './alert-identifiers';
+import { reviewStateGuard, publishReview, isReviewStateConflict } from './review-publication';
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
 const MAX_CURSOR_LENGTH = 512;
@@ -44,6 +47,7 @@ interface AlertProjectionRow {
 }
 
 interface AlertPageRow extends AlertProjectionRow {
+  raw_event_id: string;
   event_type: string;
   event_time_basis: string;
   notification_posted_at: string | null;
@@ -99,6 +103,7 @@ interface LinkPageRow {
   id: string;
   from_event_id: string;
   to_event_id: string | null;
+  raw_target_event_id: string | null;
   to_transaction_id: string | null;
   relation: string;
   allocated_currency: string | null;
@@ -247,8 +252,26 @@ async function tableExists(db: D1Database, name: string) {
   return row?.name === name;
 }
 
-async function readAlertEvidence(db: D1Database, rows: readonly AlertPageRow[]) {
-  const provenanceByProjection = new Map<string, ProvenanceRow[]>();
+async function readProvenance(db: D1Database, context: FinancialContext, projectionIds: string[]) {
+  const grouped = new Map<string, ProvenanceRow[]>();
+  if (projectionIds.length === 0) return grouped;
+  const provenance = await db.prepare(`SELECT p.projection_id, p.source_kind,
+      CASE WHEN p.source_kind='alert' THEN COALESCE(e.raw_event_id,e.event_id) ELSE p.source_id END AS source_id,
+      p.basis, p.revision
+    FROM alert_projection_provenance p
+    LEFT JOIN alert_events e ON p.source_kind='alert' AND e.event_id=p.source_id AND e.ledger_id=p.ledger_id
+    WHERE p.ledger_id = ? AND p.projection_id IN (${placeholders(projectionIds.length)})
+    ORDER BY p.projection_id, p.revision ASC, p.id ASC
+    LIMIT ?`).bind(context.ledgerId, ...projectionIds, projectionIds.length * MAX_PROVENANCE_PER_ALERT).all<ProvenanceRow>();
+  for (const item of provenance.results) {
+    const list = grouped.get(item.projection_id) ?? [];
+    if (list.length < MAX_PROVENANCE_PER_ALERT) list.push(item);
+    grouped.set(item.projection_id, list);
+  }
+  return grouped;
+}
+
+async function readAlertEvidence(db: D1Database, context: FinancialContext, rows: readonly AlertPageRow[]) {
   const linksByEvent = new Map<string, LinkPageRow[]>();
   const candidatesByAlertTransaction = new Map<string, CandidatePageRow[]>();
   const annotationsByTransaction = new Map<string, {
@@ -261,26 +284,17 @@ async function readAlertEvidence(db: D1Database, rows: readonly AlertPageRow[]) 
   const eventIds = rows.map((row) => row.event_id);
   const transactionIds = rows.flatMap((row) => row.transaction_id ? [row.transaction_id] : []);
 
-  if (projectionIds.length > 0) {
-    const provenance = await db.prepare(`SELECT projection_id, source_kind, source_id, basis, revision
-      FROM alert_projection_provenance
-      WHERE ledger_id = 'personal' AND projection_id IN (${placeholders(projectionIds.length)})
-      ORDER BY projection_id, revision ASC, id ASC
-      LIMIT ?`).bind(...projectionIds, projectionIds.length * MAX_PROVENANCE_PER_ALERT).all<ProvenanceRow>();
-    for (const item of provenance.results ?? []) {
-      const list = provenanceByProjection.get(item.projection_id) ?? [];
-      if (list.length < MAX_PROVENANCE_PER_ALERT) list.push(item);
-      provenanceByProjection.set(item.projection_id, list);
-    }
-  }
+  const provenanceByProjection = await readProvenance(db, context, projectionIds);
 
   if (eventIds.length > 0) {
-    const links = await db.prepare(`SELECT id, from_event_id, to_event_id, to_transaction_id, relation,
-        allocated_currency, allocated_amount_minor, evidence_basis, revision
-      FROM alert_event_links
-      WHERE ledger_id = 'personal' AND from_event_id IN (${placeholders(eventIds.length)})
-      ORDER BY from_event_id, revision ASC, id ASC
-      LIMIT ?`).bind(...eventIds, eventIds.length * MAX_LINKS_PER_ALERT).all<LinkPageRow>();
+    const links = await db.prepare(`SELECT links.id, from_event_id, to_event_id, to_transaction_id, relation,
+        allocated_currency, allocated_amount_minor, evidence_basis, revision,
+        COALESCE(target.raw_event_id,target.event_id) AS raw_target_event_id
+      FROM alert_event_links links
+      LEFT JOIN alert_events target ON target.event_id=links.to_event_id AND target.ledger_id=links.ledger_id
+      WHERE links.ledger_id = ? AND from_event_id IN (${placeholders(eventIds.length)})
+      ORDER BY from_event_id, revision ASC, links.id ASC
+      LIMIT ?`).bind(context.ledgerId, ...eventIds, eventIds.length * MAX_LINKS_PER_ALERT).all<LinkPageRow>();
     for (const item of links.results ?? []) {
       const list = linksByEvent.get(item.from_event_id) ?? [];
       if (list.length < MAX_LINKS_PER_ALERT) list.push(item);
@@ -295,19 +309,19 @@ async function readAlertEvidence(db: D1Database, rows: readonly AlertPageRow[]) 
         t.amount_minor AS target_amount_minor, t.currency AS target_currency, t.kind AS target_kind,
         t.status AS target_status, t.source AS target_source
       FROM statement_reconciliation_candidates c
-      JOIN transactions t ON t.id = c.statement_transaction_id
-      WHERE c.ledger_id = 'personal'
+      JOIN transactions t ON t.id = c.statement_transaction_id AND t.ledger_id = c.ledger_id
+      WHERE c.ledger_id = ?
         AND c.candidate_transaction_id IN (${placeholders(transactionIds.length)})
         AND t.source = 'statement'
         AND EXISTS (
           SELECT 1 FROM transaction_source_records source
-          WHERE source.ledger_id = 'personal' AND source.source_kind = 'statement'
+          WHERE source.ledger_id = c.ledger_id AND source.source_kind = 'statement'
             AND source.transaction_id = t.id AND source.account_id = t.account_id
         )
       ORDER BY c.candidate_transaction_id,
         CASE c.status WHEN 'open' THEN 0 WHEN 'accepted' THEN 1 ELSE 2 END,
         c.score DESC, c.id ASC
-      LIMIT ?`).bind(...transactionIds, transactionIds.length * MAX_CANDIDATES_PER_ALERT).all<CandidatePageRow>();
+      LIMIT ?`).bind(context.ledgerId, ...transactionIds, transactionIds.length * MAX_CANDIDATES_PER_ALERT).all<CandidatePageRow>();
     for (const item of candidates.results ?? []) {
       const list = candidatesByAlertTransaction.get(item.candidate_transaction_id) ?? [];
       if (list.length < MAX_CANDIDATES_PER_ALERT) list.push(item);
@@ -322,17 +336,17 @@ async function readAlertEvidence(db: D1Database, rows: readonly AlertPageRow[]) 
       LEFT JOIN annotation_revisions latest ON latest.id = (
         SELECT candidate.id
         FROM annotation_revisions candidate
-        WHERE candidate.ledger_id = 'personal' AND candidate.transaction_id = t.id
+        WHERE candidate.ledger_id = t.ledger_id AND candidate.transaction_id = t.id
         ORDER BY candidate.revision DESC, candidate.id DESC
         LIMIT 1
       )
-      WHERE t.id IN (${placeholders(transactionIds.length)})
+      WHERE t.ledger_id = ? AND t.id IN (${placeholders(transactionIds.length)})
         AND EXISTS (
           SELECT 1 FROM transaction_source_records source
-          WHERE source.ledger_id = 'personal'
+          WHERE source.ledger_id = t.ledger_id
             AND source.transaction_id = t.id
             AND source.account_id = t.account_id
-        )`).bind(...transactionIds).all<AnnotationPageRow>();
+        )`).bind(context.ledgerId, ...transactionIds).all<AnnotationPageRow>();
     for (const item of annotations.results ?? []) {
       const category = boundedText(item.annotation_category ?? item.transaction_category, MAX_CATEGORY_LENGTH);
       const note = item.annotation_note === null ? null : boundedText(item.annotation_note, MAX_NOTE_LENGTH);
@@ -368,33 +382,42 @@ function normalizeTimestamp(value: string | null | undefined) {
   return timestamp.toISOString();
 }
 
-export async function readMobileAlertPage(db: D1Database, params: URLSearchParams) {
-  const { limit, cursor } = pageQuery(params);
+async function readAlertPageRows(db: D1Database, context: FinancialContext, query: ReturnType<typeof pageQuery>) {
+  const { limit, cursor } = query;
   const clauses = [
-    "p.ledger_id = 'personal'",
-    "e.ledger_id = 'personal'",
+    'p.ledger_id = ?',
+    'e.ledger_id = p.ledger_id',
   ];
-  const bindings: unknown[] = [];
+  const bindings: unknown[] = [context.ledgerId];
   if (cursor) {
-    clauses.push('(e.created_at < ? OR (e.created_at = ? AND e.event_id < ?))');
+    clauses.push('(e.created_at < ? OR (e.created_at = ? AND COALESCE(e.raw_event_id,e.event_id) < ?))');
     bindings.push(cursor.createdAt, cursor.createdAt, cursor.eventId);
   }
-  const result = await db.prepare(`SELECT p.id, p.event_id, p.transaction_id, p.state, p.revision, p.updated_at,
+  const result = await db.prepare(`SELECT p.id, p.event_id, COALESCE(e.raw_event_id,e.event_id) AS raw_event_id, p.transaction_id, p.state, p.revision, p.updated_at,
       p.reason_codes_json, p.counted_currency, p.counted_amount_minor, e.event_type, e.event_time_basis,
       e.notification_posted_at, e.captured_at, e.source_profile_id, e.parser_version, e.bank_reference,
       e.merchant, e.account_id, e.direction, e.event_money_currency, e.event_money_amount_minor,
       t.date AS transaction_date, e.created_at
     FROM alert_projections p
-    JOIN alert_events e ON e.event_id = p.event_id
-    LEFT JOIN transactions t ON t.id = p.transaction_id AND t.account_id = e.account_id
+    JOIN alert_events e ON e.event_id = p.event_id AND e.ledger_id = p.ledger_id
+    LEFT JOIN transactions t ON t.id = p.transaction_id AND t.account_id = e.account_id AND t.ledger_id = p.ledger_id
     WHERE ${clauses.join(' AND ')}
-    ORDER BY e.created_at DESC, e.event_id DESC
+    ORDER BY e.created_at DESC, COALESCE(e.raw_event_id,e.event_id) DESC
     LIMIT ?`).bind(...bindings, limit + 1).all<AlertPageRow>();
-  const rows = result.results ?? [];
+  return result.results ?? [];
+}
+
+export async function readMobileAlertPage(db: D1Database, suppliedContext: FinancialContext, params: URLSearchParams) {
+  const context = immutableFinancialContext(suppliedContext);
+  await assertFinancialAuthority(db, context, 'ledger:read');
+  const query = pageQuery(params);
+  const { limit } = query;
+  const rows = await readAlertPageRows(db, context, query);
   const hasMore = rows.length > limit;
   const visibleRows = hasMore ? rows.slice(0, limit) : rows;
   const last = visibleRows.at(-1);
-  const evidence = await readAlertEvidence(db, visibleRows);
+  const evidence = await readAlertEvidence(db, context, visibleRows);
+  await assertFinancialAuthority(db, context, 'ledger:read');
   return {
     items: visibleRows.map((row) => {
       const provenance = (evidence.provenanceByProjection.get(row.id) ?? []).map((item) => ({
@@ -405,7 +428,7 @@ export async function readMobileAlertPage(db: D1Database, params: URLSearchParam
       }));
       const links = (evidence.linksByEvent.get(row.event_id) ?? []).map((item) => ({
         id: boundedText(item.id, MAX_ID_LENGTH) ?? 'unknown',
-        targetEventId: item.to_event_id,
+        targetEventId: item.raw_target_event_id,
         targetTransactionId: item.to_transaction_id,
         relation: boundedText(item.relation, 64) ?? 'unknown',
         allocatedMoney: item.allocated_currency && Number.isSafeInteger(item.allocated_amount_minor) && (item.allocated_amount_minor as number) > 0
@@ -464,7 +487,7 @@ export async function readMobileAlertPage(db: D1Database, params: URLSearchParam
                   ? 'Link disabled: the candidate does not match the alert account, amount, currency, or relation rules.'
                   : null;
       return {
-        eventId: row.event_id,
+        eventId: row.raw_event_id,
         transactionId: hasPersonalTransaction ? row.transaction_id : null,
         eventType: row.event_type,
         state: row.state,
@@ -493,18 +516,19 @@ export async function readMobileAlertPage(db: D1Database, params: URLSearchParam
       };
     }),
     page: {
-      nextCursor: hasMore && last ? encodeCursor({ createdAt: last.created_at, eventId: last.event_id }) : null,
+      nextCursor: hasMore && last ? encodeCursor({ createdAt: last.created_at, eventId: last.raw_event_id }) : null,
       limit,
     },
   };
 }
 
-async function readAlertProjection(db: D1Database, eventId: string) {
+async function readAlertProjection(db: D1Database, context: FinancialContext, eventId: string) {
   const row = await db.prepare(`SELECT p.id, p.event_id, p.transaction_id, p.state, p.revision, p.updated_at,
       p.reason_codes_json, p.counted_currency, p.counted_amount_minor
     FROM alert_projections p
-    JOIN alert_events e ON e.event_id = p.event_id
-    WHERE p.ledger_id = 'personal' AND e.ledger_id = 'personal' AND p.event_id = ? LIMIT 1`).bind(eventId).first<AlertProjectionRow>();
+    JOIN alert_events e ON e.event_id = p.event_id AND e.ledger_id = p.ledger_id
+    WHERE p.ledger_id = ? AND p.event_id = ? LIMIT 1`).bind(context.ledgerId, eventId).first<AlertProjectionRow>();
+  await assertFinancialAuthority(db, context, 'ledger:review');
   return row;
 }
 
@@ -527,23 +551,24 @@ function reviewTarget(relation: AlertReviewRelation, targetId: string, candidate
   return { statementTransactionId: targetId, ...(candidateTransactionId ? { candidateTransactionId } : {}) };
 }
 
-async function openCandidateForReview(db: D1Database, row: AlertProjectionRow, targetId: string, candidateTransactionId: string | null) {
+async function openCandidateForReview(db: D1Database, context: FinancialContext, row: AlertProjectionRow, target: { targetId: string; candidateTransactionId: string | null }) {
   if (!row.transaction_id || !(await tableExists(db, 'statement_reconciliation_candidates'))) {
     throw new MobileReviewError('candidate_missing', 'A link review requires an open reconciliation candidate for this alert.', 409, row.revision);
   }
-  const candidateId = candidateTransactionId ?? row.transaction_id;
+  const candidateId = target.candidateTransactionId ?? row.transaction_id;
   const candidate = await db.prepare(`SELECT c.id
     FROM statement_reconciliation_candidates c
-    JOIN transactions target ON target.id = c.statement_transaction_id
-    WHERE c.ledger_id = 'personal' AND c.status = 'open'
+    JOIN transactions target ON target.id = c.statement_transaction_id AND target.ledger_id = c.ledger_id
+    WHERE c.ledger_id = ? AND c.status = 'open'
       AND c.statement_transaction_id = ? AND c.candidate_transaction_id = ?
       AND target.source = 'statement'
       AND EXISTS (
         SELECT 1 FROM transaction_source_records source
-        WHERE source.ledger_id = 'personal' AND source.source_kind = 'statement'
+        WHERE source.ledger_id = c.ledger_id AND source.source_kind = 'statement'
           AND source.transaction_id = target.id AND source.account_id = target.account_id
       )
-    LIMIT 1`).bind(targetId, candidateId).first<{ id: string }>();
+    LIMIT 1`).bind(context.ledgerId, target.targetId, candidateId).first<{ id: string }>();
+  await assertFinancialAuthority(db, context, 'ledger:review');
   if (!candidate) throw new MobileReviewError('candidate_missing', 'The selected candidate is no longer open for this alert.', 409, row.revision);
   return candidateId;
 }
@@ -577,50 +602,40 @@ function parseReviewBody(body: unknown) {
   return { expectedRevision, decision, targetId, candidateTransactionId, relation: relation as AlertReviewRelation | null, allocatedMoney };
 }
 
-async function standaloneDecision(db: D1Database, row: AlertProjectionRow, expectedRevision: number, decision: 'keep_separate' | 'ignore') {
+async function standaloneDecision(db: D1Database, context: FinancialContext, row: AlertProjectionRow, expectedRevision: number, decision: 'keep_separate' | 'ignore') {
   const revision = expectedRevision + 1;
   const nextState = decision === 'ignore' ? 'non_spending' : 'provisional';
   const reasonCodes = JSON.stringify([decision === 'ignore' ? 'ignored_by_owner' : 'kept_separate']);
   const reviewId = `mobile-review:${row.event_id}:${revision}`;
   const statements: D1Statement[] = [
+    reviewStateGuard(db, context, `EXISTS (SELECT 1 FROM alert_projections
+      WHERE id=? AND ledger_id=? AND revision=? AND state='needs_review' AND transaction_id IS ?)`,
+      [row.id, context.ledgerId, expectedRevision, row.transaction_id]),
     db.prepare(`UPDATE alert_projections SET state = ?, reason_codes_json = ?,
         counted_currency = CASE WHEN ? = 'keep_separate' THEN counted_currency ELSE NULL END,
         counted_amount_minor = CASE WHEN ? = 'keep_separate' THEN counted_amount_minor ELSE NULL END,
         revision = revision + 1, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND ledger_id = 'personal' AND revision = ? AND state = 'needs_review'`)
-      .bind(nextState, reasonCodes, decision, decision, row.id, expectedRevision),
+      WHERE id = ? AND ledger_id = ? AND revision = ? AND state = 'needs_review'`)
+      .bind(nextState, reasonCodes, decision, decision, row.id, context.ledgerId, expectedRevision),
     db.prepare(`UPDATE transactions SET status = CASE WHEN ? = 'ignore' THEN 'needs_review' ELSE 'provisional' END,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = (SELECT transaction_id FROM alert_projections WHERE id = ? AND ledger_id = 'personal' AND revision = ?)
-        AND source = 'alert'`)
-      .bind(decision, row.id, revision),
+      WHERE id = (SELECT transaction_id FROM alert_projections WHERE id = ? AND ledger_id = ? AND revision = ?)
+        AND source = 'alert' AND ledger_id = ?`)
+      .bind(decision, row.id, context.ledgerId, revision, context.ledgerId),
     db.prepare(`INSERT INTO alert_projection_provenance
         (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
-      SELECT ?, 'personal', id, 'review', ?, 'user_review', ?
+      SELECT ?, ?, id, 'review', ?, 'user_review', ?
       FROM alert_projections
-      WHERE id = ? AND ledger_id = 'personal' AND revision = ?
-        AND NOT EXISTS (SELECT 1 FROM alert_projection_provenance WHERE id = ?)`)
-      .bind(reviewId, reviewId, revision, row.id, revision, reviewId),
+      WHERE id = ? AND ledger_id = ? AND revision = ?`)
+      .bind(reviewId, context.ledgerId, reviewId, revision, row.id, context.ledgerId, revision),
   ];
-  const results = await db.batch(statements);
-  if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
-    const current = await readAlertProjection(db, row.event_id);
+  try { await publishReview(db, context, statements); }
+  catch (error) {
+    if (!isReviewStateConflict(error)) throw error;
+    const current = await readAlertProjection(db, context, row.event_id);
     if (!current) throw new MobileReviewError('not_found', 'The alert was not found in the personal ledger.', 404);
     conflict(current.revision);
   }
-}
-
-async function advanceUnresolvedLinkReview(db: D1Database, row: AlertProjectionRow, expectedRevision: number) {
-  const revision = expectedRevision + 1;
-  const result = await db.prepare(`UPDATE alert_projections
-    SET revision = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND ledger_id = 'personal' AND revision = ? AND state IN ('needs_review', 'provisional')`)
-    .bind(revision, row.id, expectedRevision).run();
-  if (Number(result.meta?.changes ?? 0) === 1) return;
-  const current = await readAlertProjection(db, row.event_id);
-  if (!current) throw new MobileReviewError('not_found', 'The alert was not found in the personal ledger.', 404);
-  if (current.revision === revision) return;
-  conflict(current.revision);
 }
 
 function mapReconciliationError(error: unknown): never {
@@ -633,22 +648,41 @@ function mapReconciliationError(error: unknown): never {
   throw error;
 }
 
-export async function applyMobileAlertReview(db: D1Database, eventId: string, body: unknown) {
+export async function applyMobileAlertReview(db: D1Database, suppliedContext: FinancialContext, eventId: string, body: unknown) {
+  const context = immutableFinancialContext(suppliedContext);
+  await assertFinancialAuthority(db, context, 'ledger:review');
+  try { return await applyAuthorizedMobileReview(db, context, eventId, body); }
+  catch (error) {
+    await assertFinancialAuthority(db, context, 'ledger:review');
+    throw error;
+  }
+}
+
+async function resolveReviewEvent(db: D1Database, context: FinancialContext, eventId: string) {
+  try { return await resolveAlertEventId(db, context, eventId); }
+  catch (error) {
+    if (error instanceof RangeError) throw new MobileReviewError('not_found', 'The alert was not found.', 404);
+    throw error;
+  }
+}
+
+async function applyAuthorizedMobileReview(db: D1Database, context: FinancialContext, eventId: string, body: unknown) {
   boundedId(eventId, 'eventId');
   const input = parseReviewBody(body);
-  const row = await readAlertProjection(db, eventId);
+  const internalEventId = await resolveReviewEvent(db, context, eventId);
+  const row = await readAlertProjection(db, context, internalEventId);
   if (!row) throw new MobileReviewError('not_found', 'The alert was not found in the personal ledger.', 404);
   reviewable(row, input.expectedRevision, input.decision);
 
   if (input.decision === 'keep_separate' || input.decision === 'ignore') {
-    await standaloneDecision(db, row, input.expectedRevision, input.decision);
+    await standaloneDecision(db, context, row, input.expectedRevision, input.decision);
   } else {
     const candidateTransactionId = input.relation && !LIFECYCLE_RELATIONS.has(input.relation)
-      ? await openCandidateForReview(db, row, input.targetId!, input.candidateTransactionId)
+      ? await openCandidateForReview(db, context, row, { targetId: input.targetId!, candidateTransactionId: input.candidateTransactionId })
       : null;
     const target = reviewTarget(input.relation!, input.targetId!, candidateTransactionId);
     try {
-      await applyAlertReview(db, {
+      await applyAlertReview(db, context, {
         id: `mobile-review:${eventId}:${input.expectedRevision + 1}`,
         alertEventId: eventId,
         ...target,
@@ -659,18 +693,15 @@ export async function applyMobileAlertReview(db: D1Database, eventId: string, bo
       });
     } catch (error) {
       if (error instanceof ReconciliationReviewError && error.code === 'stale_revision') {
-        const current = await readAlertProjection(db, eventId);
+        const current = await readAlertProjection(db, context, internalEventId);
         if (!current) throw new MobileReviewError('not_found', 'The alert was not found in the personal ledger.', 404);
         conflict(current.revision);
       }
       mapReconciliationError(error);
     }
-    if (input.relation === 'refund_of' || input.relation === 'possible_duplicate') {
-      await advanceUnresolvedLinkReview(db, row, input.expectedRevision);
-    }
   }
 
-  const acknowledged = await readAlertProjection(db, eventId);
+  const acknowledged = await readAlertProjection(db, context, internalEventId);
   if (!acknowledged || acknowledged.revision !== input.expectedRevision + 1) {
     throw new MobileReviewError('temporarily_unavailable', 'The durable review acknowledgement is unavailable.', 503);
   }
@@ -681,22 +712,22 @@ export async function applyMobileAlertReview(db: D1Database, eventId: string, bo
   };
 }
 
-async function readPersonalTransaction(db: D1Database, transactionId: string) {
+async function readPersonalTransaction(db: D1Database, context: FinancialContext, transactionId: string) {
   return db.prepare(`SELECT t.id
     FROM transactions t
-    WHERE t.id = ? AND EXISTS (
+    WHERE t.id = ? AND t.ledger_id = ? AND EXISTS (
       SELECT 1 FROM transaction_source_records source
       WHERE source.transaction_id = t.id
         AND source.account_id = t.account_id
-        AND source.ledger_id = 'personal'
-    ) LIMIT 1`).bind(transactionId).first<{ id: string }>();
+        AND source.ledger_id = t.ledger_id
+    ) LIMIT 1`).bind(transactionId, context.ledgerId).first<{ id: string }>();
 }
 
-async function readLatestPersonalAnnotation(db: D1Database, transactionId: string) {
+async function readLatestPersonalAnnotation(db: D1Database, context: FinancialContext, transactionId: string) {
   return db.prepare(`SELECT id, ledger_id, transaction_id, revision, created_at
     FROM annotation_revisions
-    WHERE ledger_id = 'personal' AND transaction_id = ?
-    ORDER BY revision DESC, id DESC LIMIT 1`).bind(transactionId).first<AnnotationRow>();
+    WHERE ledger_id = ? AND transaction_id = ?
+    ORDER BY revision DESC, id DESC LIMIT 1`).bind(context.ledgerId, transactionId).first<AnnotationRow>();
 }
 
 function annotationBody(body: unknown) {
@@ -715,37 +746,46 @@ function isUniqueConflict(error: unknown) {
   return /unique constraint failed|sqlite_constraint.*unique|constraint failed.*unique/i.test(message);
 }
 
-export async function annotateMobileTransaction(db: D1Database, transactionId: string, body: unknown, authorSubjectHash: string) {
+function isAnnotationConflict(error: unknown) {
+  return isUniqueConflict(error) || isReviewStateConflict(error);
+}
+
+export async function annotateMobileTransaction(db: D1Database, suppliedContext: OwnerContext, transactionId: string, body: unknown) {
+  const context = immutableFinancialContext(suppliedContext);
+  await assertFinancialAuthority(db, context, 'ledger:review');
   boundedId(transactionId, 'transactionId');
   const input = annotationBody(body);
-  const transaction = await readPersonalTransaction(db, transactionId);
+  const transaction = await readPersonalTransaction(db, context, transactionId);
+  await assertFinancialAuthority(db, context, 'ledger:review');
   if (!transaction) throw new MobileReviewError('not_found', 'The transaction was not found in the personal ledger.', 404);
-  const current = await readLatestPersonalAnnotation(db, transactionId);
+  const current = await readLatestPersonalAnnotation(db, context, transactionId);
+  await assertFinancialAuthority(db, context, 'ledger:review');
   const currentRevision = current?.revision ?? 0;
   if (currentRevision !== input.expectedRevision) conflict(currentRevision);
   const revision = input.expectedRevision + 1;
-  const annotationId = `mobile-annotation:${transactionId}:${revision}`;
+  let annotationId = `mobile-annotation:${transactionId}:${revision}`;
   try {
-    await appendAnnotationRevision(db, {
+    annotationId = await appendAnnotationRevision(db, context, {
       id: annotationId,
-      ledgerId: LEDGER_ID,
       transactionId,
-      authorSubjectHash,
+      authorSubjectHash: context.subjectHash,
       revision,
       category: input.category,
       note: input.note,
     });
   } catch (error) {
-    if (isUniqueConflict(error)) {
-      const latest = await readLatestPersonalAnnotation(db, transactionId);
+    if (isAnnotationConflict(error)) {
+      const latest = await readLatestPersonalAnnotation(db, context, transactionId);
+      await assertFinancialAuthority(db, context, 'ledger:review');
       conflict(latest?.revision ?? revision);
     }
     throw error;
   }
   const acknowledged = await db.prepare(`SELECT id, ledger_id, transaction_id, revision, created_at
     FROM annotation_revisions
-    WHERE id = ? AND ledger_id = 'personal' AND transaction_id = ? AND revision = ? LIMIT 1`)
-    .bind(annotationId, transactionId, revision).first<AnnotationRow>();
+    WHERE id = ? AND ledger_id = ? AND transaction_id = ? AND revision = ? LIMIT 1`)
+    .bind(annotationId, context.ledgerId, transactionId, revision).first<AnnotationRow>();
+  await assertFinancialAuthority(db, context, 'ledger:review');
   if (!acknowledged) throw new MobileReviewError('temporarily_unavailable', 'The durable annotation acknowledgement is unavailable.', 503);
   return {
     id: acknowledged.transaction_id,

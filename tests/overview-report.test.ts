@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -33,7 +34,7 @@ describe('full-window Overview report', () => {
 
   it('uses full-window totals and daily data instead of the bounded transaction list', async () => {
     const reportCalls: URL[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       const url = new URL(String(input), 'https://ledger.example.test');
       if (url.pathname === '/api/accounts') {
         return jsonResponse({ accounts: [{ id: 'usd-account', name: 'USD account', institution: 'Synthetic bank', currency: 'USD', kind: 'chequing', status: 'import_only', last_synced_at: null, plaid_item_id: null }] });
@@ -100,7 +101,7 @@ describe('full-window Overview report', () => {
 
   it('makes a partial converted total primary while keeping source lanes and the eligible bank estimate visible', async () => {
     const reportCalls: URL[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       const url = new URL(String(input), 'https://ledger.example.test');
       if (url.pathname === '/api/accounts') {
         return jsonResponse({ accounts: [{ id: 'usd-account', name: 'USD account', institution: 'Bank of China', currency: 'USD', kind: 'chequing', status: 'import_only', last_synced_at: null, plaid_item_id: null }] });
@@ -171,7 +172,7 @@ describe('full-window Overview report', () => {
   });
 
   it('keeps refund direction in the chart and exposes a signed accessible data table', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       const url = new URL(String(input), 'https://ledger.example.test');
       if (url.pathname === '/api/accounts') {
         return jsonResponse({ accounts: [{ id: 'cad-account', name: 'CAD account', institution: 'Synthetic bank', currency: 'CAD', kind: 'chequing', status: 'import_only', last_synced_at: null, plaid_item_id: null }] });

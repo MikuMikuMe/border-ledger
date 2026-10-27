@@ -1,3 +1,4 @@
+import { PrivateSession, useLedgerApi } from './components/PrivateSession';
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import {
   ArrowDownLeft,
@@ -36,7 +37,7 @@ import { calculateSpending, filterTransactions } from './domain/ledger';
 import { parseStatementCsv } from './domain/imports';
 import { demoAccounts, demoDaily, demoTransactions } from './domain/demo-data';
 import { formatDate, formatMoney } from './domain/format';
-import { ledgerApi, LedgerApiError } from './domain/api';
+import { LedgerApiError } from './domain/api';
 import { serializeTransactionsCsv } from './domain/export';
 import { openPlaidLink, type PlaidAccountMetadata, type PlaidInstitutionMetadata } from './plaid-link';
 import { formatReportingDay, getReportWindows, type ReportingTimezone, type WeekStartsOn } from './domain/reporting';
@@ -495,8 +496,9 @@ export function mapApiReport(value: unknown): OverviewReport | null {
       return safeCount === null ? [] : [[source, safeCount]];
     }))
     : {};
+  if (typeof report.ledgerId !== 'string' || !report.ledgerId) return null;
   return {
-    ledgerId: typeof report.ledgerId === 'string' ? report.ledgerId : 'personal',
+    ledgerId: report.ledgerId as string,
     asOf: typeof report.asOf === 'string' ? report.asOf : null,
     timeBasis: typeof report.timeBasis === 'string' ? report.timeBasis : 'accounting_date',
     timeZone: typeof report.timeZone === 'string' ? report.timeZone : null,
@@ -550,10 +552,11 @@ function App({ initialRoute = 'workspace', authorizationRequestId = null, author
   if (initialRoute === 'mobile-authorization') {
     return <MobileAuthorizationPage requestId={authorizationRequestId} state={authorizationState} />;
   }
-  return <WorkspaceApp />;
+  return <PrivateSession><WorkspaceApp /></PrivateSession>;
 }
 
 function WorkspaceApp() {
+  const ledgerApi = useLedgerApi();
   const [activeView, setActiveView] = useState<View>('overview');
   const [selectedWindowKey, setSelectedWindowKey] = useState<ReportWindow['key']>('month');
   const [reportingNow, setReportingNow] = useState(() => new Date());

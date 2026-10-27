@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -35,7 +36,7 @@ describe('private workspace data states', () => {
   it('does not show demo transactions while private data is still loading', () => {
     let resolveAccounts: ((response: Response) => void) | undefined;
     const accountsResponse = new Promise<Response>((resolve) => { resolveAccounts = resolve; });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const fetchMock = privateFetchSpy().mockImplementation((input) => {
       if (String(input).endsWith('/api/accounts')) return accountsResponse;
       return Promise.resolve(jsonResponse({ transactions: [] }));
     });
@@ -49,7 +50,7 @@ describe('private workspace data states', () => {
   });
 
   it('shows an actionable error when private reads fail', async () => {
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network unavailable'));
+    privateFetchSpy().mockRejectedValue(new Error('network unavailable'));
     renderApp();
 
     await act(async () => { await Promise.resolve(); });
@@ -59,7 +60,7 @@ describe('private workspace data states', () => {
   });
 
   it('shows a valid empty result as zero activity instead of demo data', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       if (String(input).endsWith('/api/accounts')) return jsonResponse({ accounts: [] });
       return jsonResponse({ transactions: [] });
     });

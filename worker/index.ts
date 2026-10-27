@@ -1,3 +1,16 @@
+import { NATIVE_PROTOCOL } from './client-identity';
+import { bindWebResponse, matchesExpectedWebSession, webIdentityHeaders } from './client-identity';
+import { runLunchFlowJob, scheduleLunchFlow } from './lunchflow-jobs';
+import { handleLunchFlowHttp } from './lunchflow-http';
+import { lunchFlowHash } from './lunchflow-crypto';
+import type { LunchFlowBrowserSession } from './lunchflow-oauth';
+import { PlaidOwnershipConflictError } from './plaid-connection-store';
+import { assertFinancialAuthority } from './financial-authority';
+import { connectionPublicationStatements, readStoredPlaidItem, beginPlaidDisconnect, disconnectPublicationStatements, plaidClientUserId } from './plaid-connection-store';
+import { requestPlaidSync, verifiedPlaidJob, pendingPlaidRecurringFollowup, markPlaidRecurringEnqueued, plaidJobGuard, resolvePlaidWebhookBinding, type PlaidJobBinding } from './plaid-jobs';
+import { plaidTransactionStatements, removePlaidTransactionStatement } from './plaid-transactions';
+import { readRecurringJobBinding, verifiedRecurringJob, type RecurringJobBinding } from './recurring-jobs';
+import { resolveLedgerContext, LedgerAccessError, type LedgerContext } from './tenant-context';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from 'jose';
 import {
   buildPlaidRequest,
@@ -6,7 +19,6 @@ import {
   fetchAllPlaidTransactions,
   getPlaidEnvironment,
   mapPlaidTransaction,
-  upsertPlaidTransaction,
 } from './plaid';
 import type { PlaidEnvironment, PlaidSyncPage, PlaidTransaction } from './plaid';
 import type { D1Database, D1Statement } from './db-types';
@@ -47,8 +59,6 @@ import { isFxProviderError } from './fx-rates';
 import { getCurrencyMeta, type CurrencyCode } from '../src/domain/currencies';
 import { readPreferences, updatePreferences, PreferenceRevisionConflictError } from './preferences-store';
 import { LunchFlowError } from './lunchflow';
-import { createLunchFlowService } from './lunchflow-service';
-import { parseLunchFlowQueueAccounts, parseLunchFlowSelectionAccounts } from './lunchflow-routing';
 
 interface Queue {
   send(message: unknown): Promise<void>;
@@ -83,6 +93,10 @@ interface Env {
   MOBILE_APPROVED_ACCESS_SUBJECTS?: string;
   DEPLOYMENT_REVISION?: string;
   LUNCHFLOW_API_KEY?: string;
+  LUNCHFLOW_CLIENT_ID?:string;
+  LUNCHFLOW_CLIENT_SECRET?:string;
+  LUNCHFLOW_REDIRECT_URI?:string;
+  LUNCHFLOW_TOKEN_ENCRYPTION_KEY?:string;
   LUNCHFLOW_API_BASE_URL?: string;
 }
 
@@ -277,15 +291,15 @@ async function accessIdentity(request: Request, env: Env): Promise<AccessIdentit
   return { subject, issuer: verified.issuer, audience, email };
 }
 
-async function hasValidAccessJwt(request: Request, env: Env) {
-  return Boolean(await verifiedAccessJwt(request, env));
-}
-
-async function isAuthorized(request: Request, env: Env) {
-  if (await hasValidAccessJwt(request, env)) return true;
-  const configuredKey = env.LEDGER_API_KEY;
-  const authorization = request.headers.get('authorization');
-  return Boolean(configuredKey && authorization && timingSafeEqual(authorization, `Bearer ${configuredKey}`));
+async function authorizeWebLedger(request: Request, env: Env) {
+  const identity = await accessIdentity(request, env);
+  if (!identity) return json({ error: 'Ledger API access is not configured.' }, { status: 401 });
+  try {
+    const context = await resolveLedgerContext(env.DB, identity);
+    return context;
+  } catch {
+    return json({ error: 'Access is not enabled' }, { status: 403 });
+  }
 }
 
 function plaidConfig(env: Env): { environment: PlaidEnvironment; clientId: string; secret: string } {
@@ -393,23 +407,25 @@ function localPlaidTransactionId(accountId: string, plaidTransactionId: string) 
   return `plaid-${accountId}-${plaidTransactionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120)}`;
 }
 
-async function enqueuePlaidSync(env: Env, itemId: string) {
+async function enqueuePlaidSync(env:Env,context:LedgerContext,itemId:string) {
+  return requestPlaidSync(env.DB,context,env.SYNC_QUEUE,itemId);
+}
+
+async function enqueuePlaidRecurringSync(env: Env, context:LedgerContext, itemId: string) {
   if (!env.SYNC_QUEUE) return false;
-  await env.SYNC_QUEUE.send({ type: 'plaid-sync', itemId } satisfies PlaidQueueMessage);
+  const binding = await readRecurringJobBinding(env.DB, itemId);
+  if (!binding) return false;
+  if (binding.ledgerId!==context.ledgerId) return false;
+  if (binding.userId!==context.userId) return false;
+  await requestRecurringSync(env.DB, binding, env.SYNC_QUEUE, itemId);
   return true;
 }
 
-async function enqueuePlaidRecurringSync(env: Env, itemId: string) {
-  if (!env.SYNC_QUEUE) return false;
-  await requestRecurringSync(env.DB, env.SYNC_QUEUE, itemId);
-  return true;
-}
-
-export function buildPlaidLinkTokenPayload(env: Pick<Env, 'PLAID_CLIENT_USER_ID' | 'PLAID_ENV' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>) {
+export function buildPlaidLinkTokenPayload(env: Pick<Env, 'PLAID_CLIENT_USER_ID' | 'PLAID_ENV' | 'PLAID_WEBHOOK_URL' | 'LEDGER_APP_ORIGIN'>,context:LedgerContext) {
   const webhook = linkTokenWebhookUrl(env);
   return {
     client_name: 'Border Ledger',
-    user: { client_user_id: env.PLAID_CLIENT_USER_ID ?? 'border-ledger-owner' },
+    user: { client_user_id: plaidClientUserId(context,env.PLAID_CLIENT_USER_ID) },
     products: ['transactions'],
     transactions: { days_requested: 730 },
     country_codes: ['CA'],
@@ -422,9 +438,10 @@ export function buildPlaidLinkTokenPayload(env: Pick<Env, 'PLAID_CLIENT_USER_ID'
   };
 }
 
-async function handleCreateLinkToken(request: Request, env: Env) {
+async function handleCreateLinkToken(request: Request, env: Env,_url:URL, context:LedgerContext) {
   plaidConfig(env);
-  const response = await plaidPost<PlaidLinkTokenResponse>(env, '/link/token/create', buildPlaidLinkTokenPayload(env));
+  const response = await plaidPost<PlaidLinkTokenResponse>(env, '/link/token/create', buildPlaidLinkTokenPayload(env,context));
+  await assertFinancialAuthority(env.DB,context,'connections:manage');
   return json({ link_token: response.link_token });
 }
 
@@ -450,13 +467,15 @@ async function revokePlaidAccessToken(env: Env, accessToken: string) {
   }
 }
 
-async function handlePlaidExchange(request: Request, env: Env) {
+async function handlePlaidExchange(request: Request, env: Env,_url:URL,context:LedgerContext) {
   const body = await readJsonBody<unknown>(request, 32 * 1024);
   const input = validatePlaidExchangeInput(body);
   if ('error' in input) return json({ error: input.error }, { status: 400 });
   const tokenKey = encryptionKey(env);
   const exchange = await plaidPost<PlaidExchangeResponse>(env, '/item/public_token/exchange', { public_token: input.publicToken });
+  await assertFinancialAuthority(env.DB,context,'connections:manage');
   const itemResponse = await plaidPostWithAccessToken<PlaidItemResponse>(env, '/item/get', exchange.access_token, {});
+  await assertFinancialAuthority(env.DB,context,'connections:manage');
   const accountsResponse = await plaidPostWithAccessToken<PlaidAccountsResponse>(env, '/accounts/get', exchange.access_token, {});
   const selectedAccounts = selectPlaidAccounts(accountsResponse.accounts ?? [], input.accountIds);
   if (!selectedAccounts) {
@@ -469,230 +488,140 @@ async function handlePlaidExchange(request: Request, env: Env) {
     return json({ error: 'Choose at least one registered currency account.' }, { status: 400 });
   }
   const item = itemResponse.item;
-  const itemId = exchange.item_id || item?.item_id;
-  if (!itemId) throw new PlaidApiError(502, 'PLAID_ITEM_ID_MISSING');
+  const rawItemId = exchange.item_id;
+  if (!rawItemId || item?.item_id!==rawItemId) throw new PlaidApiError(502, 'PLAID_ITEM_ID_MISSING');
 
   const fallbackInstitution = item?.institution_name ?? item?.institution_id ?? 'Plaid institution';
   const institutionName = await institutionNameFor(env, item?.institution_id, fallbackInstitution);
   const sealed = await encryptAccessToken(exchange.access_token, tokenKey);
-  const statements: D1Statement[] = [
-    env.DB.prepare(`INSERT INTO plaid_items (item_id, access_token_ciphertext, access_token_iv, institution_id, institution_name)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(item_id) DO UPDATE SET
-        access_token_ciphertext = excluded.access_token_ciphertext,
-        access_token_iv = excluded.access_token_iv,
-        institution_id = excluded.institution_id,
-        institution_name = excluded.institution_name,
-        updated_at = CURRENT_TIMESTAMP`).bind(itemId, sealed.ciphertext, sealed.iv, item?.institution_id ?? null, institutionName),
-    env.DB.prepare(`INSERT INTO recurring_sync_state (item_id, lifecycle, scope_version)
-      VALUES (?, 'active', 0)
-      ON CONFLICT(item_id) DO UPDATE SET lifecycle = 'active', updated_at = CURRENT_TIMESTAMP`).bind(itemId),
-  ];
-  const returnedAccounts: Array<{ id: string; name: string; currency: Currency; kind: string }> = [];
-
-  for (const account of supportedAccounts) {
-    const currency = plaidAccountCurrency(account);
-    if (!currency) continue;
-    const accountId = localPlaidAccountId(account.account_id);
-    const kind = localAccountKind(account);
-    statements.push(env.DB.prepare(`INSERT INTO accounts (id, name, institution, currency, kind, status, last_synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        name = excluded.name,
-        institution = excluded.institution,
-        currency = excluded.currency,
-        kind = excluded.kind,
-        status = excluded.status`).bind(accountId, account.name, institutionName, currency, kind, 'connected', null));
-    statements.push(env.DB.prepare(`INSERT INTO plaid_accounts (plaid_account_id, item_id, account_id, name, mask, subtype)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(plaid_account_id) DO UPDATE SET
-        item_id = excluded.item_id,
-        account_id = excluded.account_id,
-        name = excluded.name,
-        mask = excluded.mask,
-        subtype = excluded.subtype`).bind(account.account_id, itemId, accountId, account.name, account.mask ?? null, account.subtype ?? null));
-    returnedAccounts.push({ id: accountId, name: account.name, currency, kind });
-  }
-
-  await env.DB.batch(statements);
-  const queued = await enqueuePlaidSync(env, itemId);
-  return json({ itemId, institution: institutionName, accounts: returnedAccounts, queued }, { status: 201 });
+  const publication=await connectionPublicationStatements(env.DB,context,{
+    providerItemId:rawItemId,institution:institutionName,institutionId:item?.institution_id,...sealed,
+    accounts:supportedAccounts.map(account=>({providerAccountId:account.account_id,name:account.name,currency:plaidAccountCurrency(account)!,
+      kind:localAccountKind(account),mask:account.mask??null,subtype:account.subtype??null})),
+  });
+  await env.DB.batch(publication.statements);
+  const queued=await enqueuePlaidSync(env,context,publication.itemId);
+  return json({itemId:publication.itemId,institution:institutionName,accounts:publication.accounts.map(account=>({id:account.accountId,name:account.name,currency:account.currency,kind:account.kind})),queued},{status:201});
 }
 
-async function listPlaidItemIds(env: Env, itemId?: string) {
-  if (itemId) {
-    const result = await env.DB.prepare('SELECT item_id FROM plaid_items WHERE item_id = ?').bind(itemId).all<{ item_id: string }>();
-    return result.results.length > 0 ? [itemId] : [];
-  }
-  const result = await env.DB.prepare('SELECT item_id FROM plaid_items ORDER BY created_at').all<{ item_id: string }>();
-  return result.results.map((row) => row.item_id);
+async function listPlaidItemIds(env:Env,context:LedgerContext,itemId?:string) {
+  const result=await env.DB.prepare('SELECT item_id FROM plaid_items WHERE ledger_id=? AND (? IS NULL OR item_id=?) ORDER BY created_at')
+    .bind(context.ledgerId,itemId??null,itemId??null).all<{item_id:string}>();
+  return result.results.map(row=>row.item_id);
 }
 
-async function handlePlaidSyncRequest(request: Request, env: Env) {
+async function handlePlaidSyncRequest(request: Request, env: Env,_url:URL,context:LedgerContext) {
   const body = request.method === 'POST' ? await readJsonBody<{ itemId?: unknown; scope?: unknown }>(request, 16 * 1024) : {};
   const itemId = typeof body.itemId === 'string' ? body.itemId : undefined;
   if (body.itemId !== undefined && !itemId) return json({ error: 'itemId must be a string.' }, { status: 400 });
   const scope = body.scope === undefined ? 'all' : body.scope;
   if (scope !== 'transactions' && scope !== 'recurring' && scope !== 'all') return json({ error: 'scope must be transactions, recurring, or all.' }, { status: 400 });
-  const itemIds = await listPlaidItemIds(env, itemId);
+  const itemIds = await listPlaidItemIds(env,context,itemId);
   if (itemId && itemIds.length === 0) return json({ error: 'Plaid connection not found.' }, { status: 404 });
   const queued = [];
   const recurringQueued = [];
   for (const id of itemIds) {
     if (scope === 'transactions' || scope === 'all') {
-      if (await enqueuePlaidSync(env, id)) queued.push(id);
+      if (await enqueuePlaidSync(env,context,id)) queued.push(id);
     }
     if (scope === 'recurring' || scope === 'all') {
-      if (await enqueuePlaidRecurringSync(env, id)) recurringQueued.push(id);
+      if (await enqueuePlaidRecurringSync(env,context,id)) recurringQueued.push(id);
     }
   }
   return json({ accepted: true, itemIds, queued, recurringQueued, scope });
 }
 
-async function storedPlaidItem(env: Env, itemId: string) {
-  const result = await env.DB.prepare('SELECT item_id, access_token_ciphertext, access_token_iv, institution_name FROM plaid_items WHERE item_id = ?').bind(itemId).all<StoredPlaidItem>();
-  return result.results[0] ?? null;
-}
-
-async function handlePlaidDisconnect(request: Request, env: Env) {
-  const body = await readJsonBody<{ itemId?: unknown }>(request, 16 * 1024);
-  if (typeof body.itemId !== 'string' || body.itemId.trim().length === 0 || body.itemId.length > 160) {
-    return json({ error: 'A Plaid itemId is required.' }, { status: 400 });
-  }
-  const itemId = body.itemId.trim();
-  const item = await storedPlaidItem(env, itemId);
-  if (!item) return json({ error: 'Plaid connection not found.' }, { status: 404 });
-
-  const mappings = await env.DB.prepare('SELECT account_id FROM plaid_accounts WHERE item_id = ?').bind(itemId).all<{ account_id: string }>();
-  const token = await decryptAccessToken({ ciphertext: item.access_token_ciphertext, iv: item.access_token_iv }, encryptionKey(env));
-
-  // Fence queued recurring publications before asking Plaid to revoke the Item.
-  await env.DB.prepare(`UPDATE recurring_sync_state SET lifecycle = 'disconnecting', scope_version = scope_version + 1,
-    last_error = 'Disconnect requested', updated_at = CURRENT_TIMESTAMP
-    WHERE item_id = ? AND lifecycle = 'active'`).bind(itemId).run();
-
-  // Revoke Plaid's credential first. Local cleanup only runs after Plaid confirms removal.
-  await plaidPostWithAccessToken(env, '/item/remove', token, {});
-
-  const statements: D1Statement[] = [
-    env.DB.prepare('DELETE FROM sync_state WHERE connection_id = ?').bind(`${PLAID_SYNC_CONNECTION_PREFIX}${itemId}`),
-    env.DB.prepare('DELETE FROM recurring_sync_state WHERE item_id = ?').bind(itemId),
-    env.DB.prepare('DELETE FROM plaid_accounts WHERE item_id = ?').bind(itemId),
-    env.DB.prepare('DELETE FROM plaid_items WHERE item_id = ?').bind(itemId),
-  ];
-  for (const mapping of mappings.results) {
-    statements.push(env.DB.prepare(`UPDATE accounts SET status = 'import_only', last_synced_at = NULL
-      WHERE id = ? AND NOT EXISTS (SELECT 1 FROM plaid_accounts WHERE account_id = ?)`).bind(mapping.account_id, mapping.account_id));
-  }
-  await env.DB.batch(statements);
-  return json({ disconnected: true, itemId });
-}
-
-async function syncCursor(env: Env, itemId: string) {
-  const result = await env.DB.prepare('SELECT cursor FROM sync_state WHERE connection_id = ?').bind(`${PLAID_SYNC_CONNECTION_PREFIX}${itemId}`).all<{ cursor: string | null }>();
-  return result.results[0]?.cursor ?? '';
+async function handlePlaidDisconnect(request:Request,env:Env,_url:URL,context:LedgerContext) {
+  const body=await readJsonBody<{itemId?:unknown}>(request,16*1024);
+  if(typeof body.itemId!=='string'||!body.itemId.trim()||body.itemId.length>160)return json({error:'A Plaid itemId is required.'},{status:400});
+  const itemId=body.itemId.trim();
+  const item=await readStoredPlaidItem(env.DB,context,itemId);
+  if(!item)return json({error:'Plaid connection not found.'},{status:404});
+  const token=await decryptAccessToken({ciphertext:item.access_token_ciphertext,iv:item.access_token_iv},encryptionKey(env));
+  const fence=await beginPlaidDisconnect(env.DB,context,itemId);
+  if(!fence)return json({error:'Plaid connection not found.'},{status:404});
+  await assertFinancialAuthority(env.DB,context,'connections:manage');
+  await plaidPostWithAccessToken(env,'/item/remove',token,{});
+  await env.DB.batch(disconnectPublicationStatements(env.DB,context,itemId,fence.revision));
+  return json({disconnected:true,itemId});
 }
 
 function apiErrorCode(error: unknown) {
   return error instanceof PlaidApiError ? error.code : error instanceof Error ? error.message.slice(0, 80) : 'SYNC_FAILED';
 }
 
-async function recordSyncError(env: Env, itemId: string, error: unknown) {
-  await env.DB.prepare(`INSERT INTO sync_state (connection_id, provider, cursor, last_success_at, last_error, updated_at)
-    VALUES (?, 'plaid', NULL, NULL, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(connection_id) DO UPDATE SET last_error = excluded.last_error, updated_at = CURRENT_TIMESTAMP`)
-    .bind(`${PLAID_SYNC_CONNECTION_PREFIX}${itemId}`, apiErrorCode(error)).run();
+async function recordSyncError(env:Env,binding:PlaidJobBinding,error:unknown) {
+  if(!await verifiedPlaidJob(env.DB,{...binding}))return;
+  await env.DB.batch([plaidJobGuard(env.DB,binding),env.DB.prepare(`UPDATE sync_state SET last_error=?,updated_at=CURRENT_TIMESTAMP
+    WHERE connection_id=? AND ledger_id=?`).bind(apiErrorCode(error),`plaid:${binding.itemId}`,binding.ledgerId)]);
 }
-
-async function fetchPlaidChanges(env: Env, accessToken: string, cursor: string) {
-  const fetchPage = (pageCursor: string) => plaidPostWithAccessToken<PlaidSyncPage<PlaidTransaction>>(env, '/transactions/sync', accessToken, { cursor: pageCursor, count: 500 });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await fetchAllPlaidTransactions(fetchPage, cursor);
-    } catch (error) {
-      if (!(error instanceof PlaidApiError) || error.code !== 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION' || attempt === 1) throw error;
-    }
+function retryPlaidPagination(error:unknown,attempt:number) {
+  if(attempt!==0)return false;
+  return error instanceof PlaidApiError && error.code==='TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION';
+}
+async function fetchPlaidChanges(env:Env,binding:PlaidJobBinding,accessToken:string,cursor:string) {
+  const fetchPage=async(pageCursor:string)=>{
+    if(!await verifiedPlaidJob(env.DB,{...binding}))throw new Error('Plaid job superseded.');
+    return plaidPostWithAccessToken<PlaidSyncPage<PlaidTransaction>>(env,'/transactions/sync',accessToken,{cursor:pageCursor,count:500});
+  };
+  for(let attempt=0;attempt<2;attempt++) {
+    try{return await fetchAllPlaidTransactions(fetchPage,cursor);}
+    catch(error){if(!retryPlaidPagination(error,attempt))throw error;}
   }
   throw new Error('Plaid sync could not be restarted.');
 }
-
-async function syncPlaidItem(env: Env, itemId: string) {
-  const item = await storedPlaidItem(env, itemId);
-  if (!item) throw new Error('Plaid connection not found.');
-  const token = await decryptAccessToken({ ciphertext: item.access_token_ciphertext, iv: item.access_token_iv }, encryptionKey(env));
-  const mappingsResult = await env.DB.prepare('SELECT plaid_account_id, item_id, account_id FROM plaid_accounts WHERE item_id = ?').bind(itemId).all<StoredPlaidAccount>();
-  const accountIds = new Map(mappingsResult.results.map((mapping) => [mapping.plaid_account_id, mapping.account_id]));
-  const cursor = await syncCursor(env, itemId);
-  let changes;
+async function syncPlaidItem(env:Env,binding:PlaidJobBinding) {
+  const item=await readStoredPlaidItem(env.DB,binding,binding.itemId);if(!item)return;
+  const token=await decryptAccessToken({ciphertext:item.access_token_ciphertext,iv:item.access_token_iv},encryptionKey(env));
+  const mappings=await env.DB.prepare('SELECT provider_account_id,account_id FROM plaid_accounts WHERE item_id=? AND ledger_id=?')
+    .bind(binding.itemId,binding.ledgerId).all<{provider_account_id:string;account_id:string}>();
+  const accounts=new Map(mappings.results.map(row=>[row.provider_account_id,row.account_id]));
+  const state=await env.DB.prepare('SELECT cursor FROM sync_state WHERE connection_id=? AND ledger_id=?')
+    .bind(`plaid:${binding.itemId}`,binding.ledgerId).first<{cursor:string|null}>();
   try {
-    changes = await fetchPlaidChanges(env, token, cursor);
-  } catch (error) {
-    await recordSyncError(env, itemId, error);
-    await env.DB.prepare(`UPDATE mobile_connections SET state = 'failed', updated_at = CURRENT_TIMESTAMP
-      WHERE item_id = ? AND state = 'syncing'`).bind(itemId).run();
-    throw error;
-  }
-
-  const statements: D1Statement[] = [];
-  const changedAccountIds = new Set<string>();
-  for (const transaction of [...changes.added, ...changes.modified]) {
-    const accountId = accountIds.get(transaction.account_id);
-    if (!accountId) continue;
-    const mapped = mapPlaidTransaction(transaction, accountId, itemId);
-    if (!mapped) continue;
-    changedAccountIds.add(accountId);
-    await upsertPlaidTransaction(env.DB, mapped);
-  }
-
-  for (const removed of changes.removed) {
-    statements.push(env.DB.prepare(`DELETE FROM transactions
-      WHERE plaid_item_id = ? AND (
-        provider_transaction_id = ?
-        OR (provider_transaction_id IS NULL AND provider_pending_transaction_id = ?)
-      )`).bind(itemId, removed.transaction_id, removed.transaction_id));
-  }
-  for (const accountId of changedAccountIds) {
-    statements.push(env.DB.prepare('UPDATE accounts SET last_synced_at = CURRENT_TIMESTAMP, status = ? WHERE id = ?').bind('connected', accountId));
-  }
-  statements.push(env.DB.prepare(`INSERT INTO sync_state (connection_id, provider, cursor, last_success_at, last_error, updated_at)
-    VALUES (?, 'plaid', ?, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)
-    ON CONFLICT(connection_id) DO UPDATE SET
-      cursor = excluded.cursor,
-      last_success_at = excluded.last_success_at,
-      last_error = NULL,
-      updated_at = CURRENT_TIMESTAMP`).bind(`${PLAID_SYNC_CONNECTION_PREFIX}${itemId}`, changes.nextCursor));
-  statements.push(env.DB.prepare(`UPDATE mobile_connections SET state = 'connected', updated_at = CURRENT_TIMESTAMP
-    WHERE item_id = ? AND state = 'syncing'`).bind(itemId));
-  await env.DB.batch(statements);
-  if (env.SYNC_QUEUE) await enqueuePlaidRecurringSync(env, itemId);
-  return { added: changes.added.length, modified: changes.modified.length, removed: changes.removed.length, nextCursor: changes.nextCursor };
+    const changes=await fetchPlaidChanges(env,binding,token,state?.cursor??'');
+    const statements:D1Statement[]=[plaidJobGuard(env.DB,binding)];
+    for(const transaction of [...changes.added,...changes.modified]) {
+      const accountId=accounts.get(transaction.account_id);if(!accountId)continue;
+      const mapped=mapPlaidTransaction(transaction, {accountId: accountId, itemId: binding.itemId});if(!mapped)continue;
+      statements.push(...(await plaidTransactionStatements(env.DB,binding,mapped)).statements);
+      statements.push(env.DB.prepare("UPDATE accounts SET last_synced_at=CURRENT_TIMESTAMP,status='connected' WHERE id=? AND ledger_id=?").bind(accountId,binding.ledgerId));
+    }
+    for(const removed of changes.removed)statements.push(removePlaidTransactionStatement(env.DB,binding,binding.itemId,removed.transaction_id));
+    statements.push(env.DB.prepare(`UPDATE recurring_sync_state SET requested_generation=requested_generation+1,updated_at=CURRENT_TIMESTAMP
+      WHERE item_id=? AND ledger_id=? AND lifecycle='active'`).bind(binding.itemId,binding.ledgerId));
+    statements.push(env.DB.prepare(`UPDATE sync_state SET cursor=?,completed_generation=?,last_success_at=CURRENT_TIMESTAMP,last_error=NULL,updated_at=CURRENT_TIMESTAMP
+      WHERE connection_id=? AND ledger_id=?`).bind(changes.nextCursor,binding.generation,`plaid:${binding.itemId}`,binding.ledgerId));
+    statements.push(env.DB.prepare("UPDATE mobile_connections SET state='connected',updated_at=CURRENT_TIMESTAMP WHERE item_id=? AND ledger_id=? AND state IN ('connected','syncing','failed')").bind(binding.itemId,binding.ledgerId));
+    await env.DB.batch(statements);
+  } catch(error){await recordSyncError(env,binding,error);throw error;}
 }
 
-async function recurringState(env: Env, itemId: string) {
-  const result = await env.DB.prepare(`SELECT requested_generation, scope_version, lifecycle
-    FROM recurring_sync_state WHERE item_id = ?`).bind(itemId).all<{ requested_generation: number; scope_version: number; lifecycle: 'active' | 'disconnecting' | 'disconnected' }>();
-  return result.results[0] ?? null;
-}
-
-async function syncPlaidRecurring(env: Env, itemId: string, requestedGeneration?: number) {
-  const item = await storedPlaidItem(env, itemId);
-  const state = await recurringState(env, itemId);
-  if (!item || !state || state.lifecycle !== 'active') return 'disconnected' as const;
-  const mappingsResult = await env.DB.prepare('SELECT plaid_account_id, account_id FROM plaid_accounts WHERE item_id = ?').bind(itemId).all<{ plaid_account_id: string; account_id: string }>();
+async function syncPlaidRecurring(env: Env, binding: RecurringJobBinding) {
+  const { itemId, generation, scopeVersion } = binding;
+  const current = await verifiedRecurringJob(env.DB, { ...binding });
+  if (!current) return 'superseded' as const;
+  const item = await env.DB.prepare('SELECT item_id,access_token_ciphertext,access_token_iv,institution_name FROM plaid_items WHERE item_id=? AND ledger_id=?').bind(itemId,binding.ledgerId).first<StoredPlaidItem>();
+  if (!item) return 'disconnected' as const;
+  const mappingsResult = await env.DB.prepare('SELECT provider_account_id AS plaid_account_id, account_id FROM plaid_accounts WHERE item_id = ? AND ledger_id = ?').bind(itemId,binding.ledgerId).all<{ plaid_account_id: string; account_id: string }>();
   const accountMappings = new Map(mappingsResult.results.map((mapping) => [mapping.plaid_account_id, mapping.account_id]));
   if (accountMappings.size === 0) return 'superseded' as const;
   const token = await decryptAccessToken({ ciphertext: item.access_token_ciphertext, iv: item.access_token_iv }, encryptionKey(env));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
+    if (!await verifiedRecurringJob(env.DB, { ...binding })) return 'superseded' as const;
     const response = await plaidPostWithAccessToken<PlaidRecurringResponse>(env, '/transactions/recurring/get', token, {
       account_ids: [...accountMappings.keys()],
     }, controller.signal);
     const snapshot = normalizeRecurringSnapshot(response, itemId, accountMappings);
-    return await publishRecurringSnapshot(env.DB, itemId, requestedGeneration ?? state.requested_generation, state.scope_version, snapshot, new Date().toISOString());
+    return await publishRecurringSnapshot(env.DB, binding, { itemId: itemId, generation: generation, scopeVersion: scopeVersion, connectionRevision:binding.connectionRevision, snapshot: snapshot, checkedAt: new Date().toISOString() });
   } catch (error) {
     await env.DB.prepare(`UPDATE recurring_sync_state SET last_error = ?, last_attempt_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-      WHERE item_id = ? AND lifecycle = 'active'`).bind(apiErrorCode(error), itemId).run();
+      WHERE item_id = ? AND ledger_id = ? AND lifecycle = 'active' AND scope_version=? AND requested_generation=?
+      AND EXISTS (SELECT 1 FROM ledgers l JOIN users u ON u.id=l.user_id WHERE l.id=? AND u.id=? AND u.status='active')
+      AND EXISTS (SELECT 1 FROM sync_state c WHERE c.connection_id=? AND c.ledger_id=? AND c.lifecycle='active' AND c.connection_revision=?)`)
+      .bind(apiErrorCode(error), itemId,binding.ledgerId,scopeVersion,generation,binding.ledgerId,binding.userId,`plaid:${itemId}`,binding.ledgerId,binding.connectionRevision).run();
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -707,7 +636,7 @@ function bytesToBase64Url(bytes: Uint8Array) {
 
 async function bodySha256(body: string) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
-  return bytesToBase64Url(new Uint8Array(digest));
+  return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
 }
 
 function timingSafeEqual(left: string, right: string) {
@@ -760,12 +689,12 @@ async function handlePlaidWebhook(request: Request, env: Env) {
   if (payload.environment && payload.environment.toLowerCase() !== getPlaidEnvironment(env.PLAID_ENV)) {
     return json({ accepted: true, queued: false }, { status: 200 });
   }
-  const knownItem = payload.item_id ? (await listPlaidItemIds(env, payload.item_id)).length > 0 : false;
+  const binding=payload.item_id?await resolvePlaidWebhookBinding(env.DB,payload.item_id):null;
   const isTransactionUpdate = payload.webhook_type === 'TRANSACTIONS';
   const isRecurringUpdate = payload.webhook_type === 'RECURRING_TRANSACTIONS' || payload.webhook_code === 'RECURRING_TRANSACTIONS_UPDATE';
   let queued = false;
-  if (knownItem && payload.item_id && isTransactionUpdate) queued = await enqueuePlaidSync(env, payload.item_id);
-  if (knownItem && payload.item_id && isRecurringUpdate) queued = await enqueuePlaidRecurringSync(env, payload.item_id);
+  if(binding && isTransactionUpdate)queued=await enqueuePlaidSync(env,binding,binding.itemId);
+  if(binding && isRecurringUpdate)queued=await enqueuePlaidRecurringSync(env,binding,binding.itemId);
   return json({ accepted: true, queued }, { status: 200 });
 }
 
@@ -790,20 +719,20 @@ function summarize(transactions: StoredTransaction[], includeProvisional: boolea
   }, totals);
 }
 
-async function readTransactions(env: Env, url: URL) {
-  const clauses: string[] = [`NOT (t.source = 'alert' AND EXISTS (
+async function readTransactions(env: Env, context: LedgerContext, url: URL) {
+  const clauses: string[] = ['t.ledger_id = ?', `NOT (t.source = 'alert' AND EXISTS (
     SELECT 1
     FROM alert_projections superseded_alert
-    WHERE superseded_alert.state = 'superseded'
+    WHERE superseded_alert.ledger_id = t.ledger_id AND superseded_alert.state = 'superseded'
       AND (superseded_alert.transaction_id = t.id OR EXISTS (
         SELECT 1
         FROM transaction_source_records alert_source
-        WHERE alert_source.transaction_id = t.id
+        WHERE alert_source.ledger_id = t.ledger_id AND alert_source.transaction_id = t.id
           AND alert_source.source_kind = 'alert'
           AND alert_source.event_id = superseded_alert.event_id
       ))
   ))`];
-  const bindings: string[] = [];
+  const bindings: string[] = [context.ledgerId];
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
   const currency = url.searchParams.get('currency');
@@ -826,7 +755,7 @@ async function readTransactions(env: Env, url: URL) {
   return result.results;
 }
 
-async function handleImportCommit(request: Request, env: Env) {
+async function handleImportCommit(request: Request, env: Env, _url: URL, context: LedgerContext) {
   const body = await readJsonBody<unknown>(request, MAX_JSON_BODY_BYTES);
   const input = validateImportPayload(body);
   if ('error' in input) return json({ error: input.error }, { status: 400 });
@@ -834,7 +763,7 @@ async function handleImportCommit(request: Request, env: Env) {
   const importId = input.operationId ?? `statement-import:${fileSha256}`;
   let result: Awaited<ReturnType<typeof commitStatementRows>>;
   try {
-    result = await commitStatementRows(env.DB, {
+    result = await commitStatementRows(env.DB, context, {
       importId,
       operationId: input.operationId,
       accountId: input.accountId,
@@ -860,12 +789,12 @@ async function handleImportCommit(request: Request, env: Env) {
   return json(result, { status: result.duplicates === input.transactions.length ? 200 : 201 });
 }
 
-async function handleImportReview(request: Request, env: Env) {
+async function handleImportReview(request: Request, env: Env, _url: URL, context: LedgerContext) {
   const body = await readJsonBody<unknown>(request, 16 * 1024);
   const input = validateAlertReviewPayload(body);
   if ('error' in input) return json({ error: input.error }, { status: 400 });
   try {
-    const result = await applyAlertReview(env.DB, input);
+    const result = await applyAlertReview(env.DB, context, input);
     return json(result, { status: result.replayed ? 200 : 201 });
   } catch (error) {
     if (error instanceof RangeError) return json({ error: error.message }, { status: 400 });
@@ -884,16 +813,16 @@ async function derivedImportFileHash(input: ValidatedImportPayload) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
-async function handleRecurringListRequest(env: Env, url: URL) {
+async function handleRecurringListRequest(env: Env, context: LedgerContext, url: URL) {
   const query = validateRecurringListQuery(url.searchParams);
   if ('error' in query) return json({ error: query.error }, { status: 400 });
-  return json(await readRecurringPage(env.DB, query));
+  return json(await readRecurringPage(env.DB, context, query));
 }
 
-async function handleRecurringSummaryRequest(env: Env, url: URL) {
+async function handleRecurringSummaryRequest(env: Env, context: LedgerContext, url: URL) {
   const query = validateRecurringSummaryQuery(url.searchParams);
   if ('error' in query) return json({ error: query.error }, { status: 400 });
-  return json(await readRecurringSummary(env.DB, query));
+  return json(await readRecurringSummary(env.DB, context, query));
 }
 
 function recurringPathId(pathname: string) {
@@ -907,18 +836,18 @@ function recurringPathId(pathname: string) {
   }
 }
 
-async function handleRecurringDetailRequest(env: Env, url: URL, id: string) {
+async function handleRecurringDetailRequest(env: Env, context: LedgerContext, url: URL, id: string) {
   const query = validateRecurringListQuery(url.searchParams);
   if ('error' in query) return json({ error: query.error }, { status: 400 });
-  const detail = await readRecurringDetail(env.DB, id, query.cursor);
+  const detail = await readRecurringDetail(env.DB, context, id, { cursor: query.cursor });
   return detail ? json(detail) : json({ error: 'Recurring stream not found.' }, { status: 404 });
 }
 
-async function handleRecurringClassification(request: Request, env: Env, id: string) {
+async function handleRecurringClassification(request: Request, env: Env, context: LedgerContext, id: string) {
   const body = await readJsonBody<unknown>(request, 16 * 1024);
   const input = validateRecurringClassification(body);
   if ('error' in input) return json({ error: input.error }, { status: 400 });
-  const updated = await setRecurringClassification(env.DB, id, input.classification);
+  const updated = await setRecurringClassification(env.DB, context, id, input.classification);
   return updated
     ? json({ id, classification: input.classification })
     : json({ error: 'Recurring stream not found.' }, { status: 404 });
@@ -933,8 +862,9 @@ function validationErrorResponse(error: unknown) {
 }
 
 function serviceErrorResponse(error: unknown) {
+  if (error instanceof PlaidOwnershipConflictError) return json({ code:error.code,error:error.message },{status:error.status});
   if (error instanceof PreferenceRevisionConflictError) return json({ error: error.message, currentRevision: error.currentRevision }, { status: 409 });
-  if (error instanceof LunchFlowError) return json({ error: error.message }, { status: error.status });
+  if (error instanceof LunchFlowError) return json({ error: error.message,code:error.code,retryable:error.retryable }, { status: error.status });
   if (error instanceof ConfigurationError) return json({ error: 'Plaid is not fully configured on the Worker yet.' }, { status: 503 });
   if (error instanceof PlaidApiError && error.status >= 400 && error.status < 500) return json({ error: 'Plaid rejected the request. Check the connection and try again.' }, { status: 400 });
   return null;
@@ -945,6 +875,7 @@ function knownErrorResponse(error: unknown) {
 }
 
 function errorResponse(error: unknown) {
+  if (error instanceof LedgerAccessError) return json({ code: error.code, error: error.message }, { status: error.status });
   const response = knownErrorResponse(error);
   if (response) return response;
   console.error('api_error', error instanceof Error ? error.name : 'unknown');
@@ -965,11 +896,11 @@ function preferencesInput(value: unknown) {
   };
 }
 
-async function handlePreferencesRequest(request: Request, env: Env) {
-  if (request.method === 'GET') return json(await readPreferences(env.DB));
+async function handlePreferencesRequest(request: Request, env: Env, context: LedgerContext) {
+  if (request.method === 'GET') return json(await readPreferences(env.DB, context));
   if (request.method === 'PATCH') {
     const body = preferencesInput(await readJsonBody<unknown>(request, 16 * 1024));
-    return json(await updatePreferences(env.DB, body.expectedRevision, {
+    return json(await updatePreferences(env.DB, context, body.expectedRevision, {
       reportingTimezone: body.reportingTimezone,
       weekStart: body.weekStart,
       preferredCurrency: body.preferredCurrency,
@@ -978,42 +909,18 @@ async function handlePreferencesRequest(request: Request, env: Env) {
   return json({ error: 'Not found' }, { status: 404 });
 }
 
-function lunchFlowSelectionBody(value: unknown) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new RequestValidationError('The Lunch Flow selection body is not valid.');
-  const body = value as Record<string, unknown>;
-  if (!Array.isArray(body.accounts)) throw new RequestValidationError('The Lunch Flow account selection is required.');
-  const accounts = parseLunchFlowSelectionAccounts(body.accounts);
-  if (!accounts) throw new RequestValidationError('The Lunch Flow account selection is not valid.');
-  return accounts;
+async function lunchFlowBrowserSession(request:Request,env:Env):Promise<LunchFlowBrowserSession|undefined> {
+  const verified=await verifiedAccessJwt(request,env);
+  if(!verified)return undefined;
+  if(typeof verified.payload.sub!=='string')return undefined;
+  if(typeof verified.payload.exp!=='number')return undefined;
+  if(!Number.isFinite(verified.payload.exp)||verified.payload.exp*1000<=Date.now())return undefined;
+  return {sessionHash:await lunchFlowHash(request.headers.get('Cf-Access-Jwt-Assertion')!),identityHash:await lunchFlowHash(JSON.stringify([verified.issuer,verified.payload.sub])),expiresAt:new Date(verified.payload.exp*1000).toISOString()};
 }
-
-function optionalIdempotencyKey(request: Request) {
-  const value = request.headers.get('idempotency-key')?.trim();
-  if (value && value.length > 256) throw new RequestValidationError('The idempotency key is not valid.');
-  return value || undefined;
-}
-
-function lunchFlowQueueAccounts(value: unknown) {
-  const accounts = parseLunchFlowQueueAccounts(value);
-  if (!accounts) throw new LunchFlowError('invalid_queue_message', 'The Lunch Flow sync message is invalid.', 400, false);
-  return accounts;
-}
-
-async function handleLunchFlowRequest(request: Request, env: Env) {
-  const service = createLunchFlowService(env);
-  const url = new URL(request.url);
-  if (request.method === 'GET' && url.pathname === '/api/lunchflow/accounts') {
-    const result = url.searchParams.get('status') === 'local' ? await service.readStatus() : await service.readAccounts();
-    return json(result, { status: 200, headers: { 'cache-control': 'no-store' } });
-  }
-  if (request.method === 'POST' && url.pathname === '/api/lunchflow/account-selection') {
-    const body = lunchFlowSelectionBody(await readJsonBody<unknown>(request, 32 * 1024));
-    return json(await service.selectAccounts({ accounts: body, idempotencyKey: optionalIdempotencyKey(request) }), { status: 200 });
-  }
-  if (request.method === 'POST' && url.pathname === '/api/lunchflow/sync') {
-    return json(await service.requestSync('web-owner', optionalIdempotencyKey(request)), { status: 202 });
-  }
-  return null;
+async function handleLunchFlowRequest(request:Request,env:Env,context:LedgerContext) {
+  if(!new URL(request.url).pathname.startsWith('/api/lunchflow/'))return null;
+  const browser=new URL(request.url).pathname.includes('/oauth/')?await lunchFlowBrowserSession(request,env):undefined;
+  return handleLunchFlowHttp(request,env,context,browser);
 }
 
 type AuthorizedRouteDispatch = () => Promise<Response | null>;
@@ -1026,43 +933,43 @@ async function dispatchAuthorizedRoutes(handlers: readonly AuthorizedRouteDispat
   return null;
 }
 
-async function handleAccountsListRoute(_request: Request, env: Env, _url: URL) {
+async function handleAccountsListRoute(_request: Request, env: Env, _url: URL, context: LedgerContext) {
   const result = await env.DB.prepare(`SELECT accounts.*,
-    (SELECT item_id FROM plaid_accounts WHERE account_id = accounts.id LIMIT 1) AS plaid_item_id,
+    (SELECT item_id FROM plaid_accounts WHERE ledger_id = accounts.ledger_id AND account_id = accounts.id LIMIT 1) AS plaid_item_id,
     CASE
-      WHEN EXISTS (SELECT 1 FROM lunchflow_accounts WHERE account_id = accounts.id) THEN 'lunchflow'
-      WHEN EXISTS (SELECT 1 FROM plaid_accounts WHERE account_id = accounts.id) THEN 'plaid'
+      WHEN EXISTS (SELECT 1 FROM lunchflow_accounts WHERE ledger_id = accounts.ledger_id AND account_id = accounts.id) THEN 'lunchflow'
+      WHEN EXISTS (SELECT 1 FROM plaid_accounts WHERE ledger_id = accounts.ledger_id AND account_id = accounts.id) THEN 'plaid'
       ELSE NULL
     END AS provider
-    FROM accounts ORDER BY institution, name`).all();
+    FROM accounts WHERE ledger_id = ? ORDER BY institution, name`).bind(context.ledgerId).all();
   return json({ accounts: result.results });
 }
 
-async function handleTransactionsRoute(_request: Request, env: Env, url: URL) {
-  return json({ transactions: await readTransactions(env, url) });
+async function handleTransactionsRoute(_request: Request, env: Env, url: URL, context: LedgerContext) {
+  return json({ transactions: await readTransactions(env, context, url) });
 }
 
-type AuthorizedRouteHandler = (request: Request, env: Env, url: URL) => Promise<Response | null>;
+type AuthorizedRouteHandler = (request: Request, env: Env, url: URL, context: LedgerContext) => Promise<Response | null>;
 
 const accountRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
   ['GET /api/accounts', handleAccountsListRoute],
-  ['GET /api/preferences', (request, env) => handlePreferencesRequest(request, env)],
-  ['PATCH /api/preferences', (request, env) => handlePreferencesRequest(request, env)],
+  ['GET /api/preferences', (request, env, _url, context) => handlePreferencesRequest(request, env, context)],
+  ['PATCH /api/preferences', (request, env, _url, context) => handlePreferencesRequest(request, env, context)],
   ['GET /api/transactions', handleTransactionsRoute],
 ]);
 
-async function handleAccountRoutes(request: Request, env: Env, url: URL) {
+async function handleAccountRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   const handler = accountRouteHandlers.get(`${request.method} ${url.pathname}`);
-  return handler ? handler(request, env, url) : null;
+  return handler ? handler(request, env, url, context) : null;
 }
 
-async function reportResponse(env: Env, url: URL) {
+async function reportResponse(env: Env, context: LedgerContext, url: URL) {
   const requestedCurrency = url.searchParams.get('currency');
   const reportingCurrency = url.searchParams.get('reportingCurrency');
   const currencyCodes = await registeredCurrencyCodes(env);
   if (requestedCurrency && requestedCurrency !== 'all' && !currencyCodes.includes(requestedCurrency)) throw new RequestValidationError('The currency filter is not valid.');
   if (reportingCurrency !== null && getCurrencyMeta(reportingCurrency) === null) throw new RequestValidationError('The reporting currency is not valid.');
-  const report = await readLedgerReport(env.DB, {
+  const report = await readLedgerReport(env.DB, context, {
     from: url.searchParams.get('from'),
     to: url.searchParams.get('to'),
     currency: requestedCurrency && requestedCurrency !== 'all' ? requestedCurrency : null,
@@ -1076,31 +983,31 @@ async function reportResponse(env: Env, url: URL) {
   return json({ ...report, summary, transactionCount });
 }
 
-async function handleReportRoutes(request: Request, env: Env, url: URL) {
+async function handleReportRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   if (request.method !== 'GET' || url.pathname !== '/api/reports/summary') return null;
-  return reportResponse(env, url);
+  return reportResponse(env, context, url);
 }
 
 const recurringRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
-  ['GET /api/recurring', (_request, env, url) => handleRecurringListRequest(env, url)],
-  ['GET /api/recurring/summary', (_request, env, url) => handleRecurringSummaryRequest(env, url)],
+  ['GET /api/recurring', (_request, env, url, context) => handleRecurringListRequest(env, context, url)],
+  ['GET /api/recurring/summary', (_request, env, url, context) => handleRecurringSummaryRequest(env, context, url)],
 ]);
 
-async function handleRecurringItemRoutes(request: Request, env: Env, url: URL) {
+async function handleRecurringItemRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   if (url.pathname.startsWith('/api/recurring/') && url.pathname.endsWith('/classification') && request.method === 'PATCH') {
     const id = recurringPathId(url.pathname.slice(0, -'/classification'.length));
-    return id ? handleRecurringClassification(request, env, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
+    return id ? handleRecurringClassification(request, env, context, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
   }
   if (url.pathname.startsWith('/api/recurring/') && request.method === 'GET') {
     const id = recurringPathId(url.pathname);
-    return id ? handleRecurringDetailRequest(env, url, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
+    return id ? handleRecurringDetailRequest(env, context, url, id) : json({ error: 'Recurring stream id is not valid.' }, { status: 400 });
   }
   return null;
 }
 
-async function handleRecurringRoutes(request: Request, env: Env, url: URL) {
+async function handleRecurringRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   const handler = recurringRouteHandlers.get(`${request.method} ${url.pathname}`);
-  return handler ? handler(request, env, url) : handleRecurringItemRoutes(request, env, url);
+  return handler ? handler(request, env, url, context) : handleRecurringItemRoutes(request, env, url, context);
 }
 
 const importAndPlaidRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
@@ -1112,19 +1019,19 @@ const importAndPlaidRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> =
   ['POST /api/plaid/disconnect', handlePlaidDisconnect],
 ]);
 
-async function handleImportAndPlaidRoutes(request: Request, env: Env, url: URL) {
+async function handleImportAndPlaidRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
   const handler = importAndPlaidRouteHandlers.get(`${request.method} ${url.pathname}`);
-  return handler ? handler(request, env, url) : null;
+  return handler ? handler(request, env, url, context) : null;
 }
 
-async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL) {
+async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, context: LedgerContext) {
   try {
     const response = await dispatchAuthorizedRoutes([
-      () => handleLunchFlowRequest(request, env),
-      () => handleAccountRoutes(request, env, url),
-      () => handleReportRoutes(request, env, url),
-      () => handleRecurringRoutes(request, env, url),
-      () => handleImportAndPlaidRoutes(request, env, url),
+      () => handleLunchFlowRequest(request, env, context),
+      () => handleAccountRoutes(request, env, url, context),
+      () => handleReportRoutes(request, env, url, context),
+      () => handleRecurringRoutes(request, env, url, context),
+      () => handleImportAndPlaidRoutes(request, env, url, context),
     ]);
     return response ?? json({ error: 'Not found' }, { status: 404 });
   } catch (error) {
@@ -1132,22 +1039,35 @@ async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL) 
   }
 }
 
-type QueueMessageBody = { type?: unknown; itemId?: unknown; generation?: unknown; accounts?: unknown };
+type QueueMessageBody = { type?: unknown; itemId?: unknown; generation?: unknown; scopeVersion?: unknown; connectionRevision?: unknown; connectionId?:unknown; userId?: unknown; ledgerId?: unknown; accounts?: unknown };
 type QueueBodyHandler = (body: QueueMessageBody, env: Env) => Promise<void>;
 
+async function enqueueCompletedPlaidFollowup(env:Env,completed:PlaidJobBinding) {
+  if(!env.SYNC_QUEUE)return;
+  const recurring=await readRecurringJobBinding(env.DB,completed.itemId);
+  if(!recurring)return;
+  if(recurring.connectionRevision!==completed.connectionRevision)return;
+  if(recurring.userId!==completed.userId || recurring.ledgerId!==completed.ledgerId)return;
+  await env.SYNC_QUEUE.send({type:'plaid-recurring-sync',...recurring});
+  await markPlaidRecurringEnqueued(env.DB,completed);
+}
+
 async function handlePlaidQueueBody(body: QueueMessageBody, env: Env) {
-  if (typeof body.itemId !== 'string') return;
-  await syncPlaidItem(env, body.itemId);
+  const binding=await verifiedPlaidJob(env.DB,body);
+  if(binding)await syncPlaidItem(env,binding);
+  const followup=await pendingPlaidRecurringFollowup(env.DB,body);
+  if(followup)await enqueueCompletedPlaidFollowup(env,followup);
 }
 
 async function handlePlaidRecurringQueueBody(body: QueueMessageBody, env: Env) {
   if (typeof body.itemId !== 'string') return;
   if (typeof body.generation !== 'number') return;
-  await syncPlaidRecurring(env, body.itemId, body.generation);
+  const binding = await verifiedRecurringJob(env.DB, body);
+  if (binding) await syncPlaidRecurring(env, binding);
 }
 
-async function handleLunchFlowQueueBody(body: QueueMessageBody, env: Env) {
-  await createLunchFlowService(env).sync(lunchFlowQueueAccounts(body.accounts));
+async function handleLunchFlowQueueBody(body:QueueMessageBody,env:Env) {
+  await runLunchFlowJob(env,body);
 }
 
 const queueBodyHandlers: ReadonlyMap<string, QueueBodyHandler> = new Map([
@@ -1175,6 +1095,15 @@ async function handleQueueMessage(message: { body: unknown; ack(): void; retry()
   } catch (error) {
     retryQueueMessage(message, error);
   }
+}
+
+async function handleSessionApi(request: Request, env: Env, url: URL, context: LedgerContext): Promise<Response> {
+    const identity = await webIdentityHeaders(request, context);
+    if (!matchesExpectedWebSession(request, identity)) return bindWebResponse(json({ error: 'Your session changed. Sign in again.', code: 'session_changed', retryable: false }, { status: 409 }), identity);
+    const response = url.pathname === '/api/session' && request.method === 'GET'
+      ? json({ userId: context.userId, ledgerId: context.ledgerId })
+      : await handleAuthorizedApiRequest(request, env, url, context);
+    return bindWebResponse(response, identity);
 }
 
 export default {
@@ -1215,6 +1144,7 @@ export default {
       service: 'border-ledger-api',
       deploymentRevision: env.DEPLOYMENT_REVISION ?? null,
       mobileAuthConfigured: isMobileAuthConfigured(env),
+      mobileProtocol: Number(NATIVE_PROTOCOL),
       time: new Date().toISOString(),
     });
     if (url.pathname === '/api/webhooks/plaid' && request.method === 'POST') {
@@ -1236,9 +1166,10 @@ export default {
     if (request.method !== 'GET' && request.method !== 'HEAD' && !isSameOriginMutation(request, env.LEDGER_APP_ORIGIN)) {
       return json({ error: 'A same-origin request is required.' }, { status: 403 });
     }
-    if (!(await isAuthorized(request, env))) return json({ error: 'Ledger API access is not configured.' }, { status: 401 });
+    const context = await authorizeWebLedger(request, env);
+    if (context instanceof Response) return context;
 
-    return handleAuthorizedApiRequest(request, env, url);
+    return handleSessionApi(request, env, url, context);
   },
 
   async scheduled(controller: { scheduledTime: number }, env: Env) {
@@ -1249,13 +1180,8 @@ export default {
       if (!isFxProviderError(error)) throw error;
       console.error('fx_snapshot_refresh_failed', error.name);
     }
-    if (env.LUNCHFLOW_API_KEY?.trim()) {
-      try {
-        await createLunchFlowService(env).requestSync('scheduled-sync');
-      } catch (error) {
-        console.error('lunchflow_schedule_failed', error instanceof Error ? error.name : 'unknown');
-      }
-    }
+    await scheduleLunchFlow(env);
+
   },
 
   async queue(batch: { messages: Array<{ body: unknown; ack(): void; retry(): void }> }, env: Env) {

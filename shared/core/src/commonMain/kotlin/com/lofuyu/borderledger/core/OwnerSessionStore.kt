@@ -11,6 +11,8 @@ data class OwnerSessionRecord(
     val revocationCapability: String,
     val deviceId: String?,
     val pendingDestination: String? = null,
+    val identity: LedgerIdentity? = null,
+    val epoch: String? = null,
 )
 
 data class PendingOwnerLogin(

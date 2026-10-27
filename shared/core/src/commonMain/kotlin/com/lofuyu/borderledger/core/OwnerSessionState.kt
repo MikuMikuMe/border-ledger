@@ -2,7 +2,14 @@ package com.lofuyu.borderledger.auth
 
 import kotlinx.coroutines.flow.StateFlow
 
-interface OwnerSessionStateProvider { val state: StateFlow<OwnerSessionState> }
+interface OwnerSessionStateProvider {
+    val state: StateFlow<OwnerSessionState>
+    suspend fun commitIfCurrent(expected: SessionBinding, block: suspend () -> Unit): Boolean {
+        if (binding() != expected) return false
+        block()
+        return binding() == expected
+    }
+}
 
 data class VerifiedCallback(val state: String?, val code: String?, val error: String?)
 
@@ -40,6 +47,7 @@ sealed interface OwnerSessionState {
         val scopes: List<String>,
         val pendingDestination: String?,
         val refreshExpiresAt: String? = null,
+        val binding: SessionBinding? = null,
     ) : OwnerSessionState
     data class SignedOut(
         val pendingRevocations: Int = 0,

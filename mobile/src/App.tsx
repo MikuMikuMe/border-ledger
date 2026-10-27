@@ -26,6 +26,9 @@ function safeSession(value: SessionSnapshot): SafeSessionSnapshot {
     state: SESSION_STATES.has(value.state as SafeSessionSnapshot['state'])
       ? value.state as SafeSessionSnapshot['state']
       : 'storage_failure',
+    userId: value.userId,
+    ledgerId: value.ledgerId,
+    sessionEpoch: value.sessionEpoch,
     expiresAt: value.expiresAt,
     pendingDestination: value.pendingDestination,
     reason: value.reason,
@@ -166,7 +169,7 @@ function MobileRoot() {
       <StatusBar barStyle={statusBarStyle(route === 'login' ? 'login' : 'shell', dark)} />
       <NavigationContainer theme={navTheme}>
         <Stack.Navigator
-          key={route}
+          key={`${route}:${snapshot.session.sessionEpoch ?? "locked"}`}
           screenOptions={{
             headerShadowVisible: false,
             headerStyle: { backgroundColor: navTheme.colors.background },

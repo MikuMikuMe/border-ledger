@@ -1,5 +1,6 @@
 package com.lofuyu.borderledger
 
+import kotlinx.coroutines.async
 import com.lofuyu.borderledger.auth.OwnerSessionState
 import com.lofuyu.borderledger.api.CaptureEventAcknowledgement
 import com.lofuyu.borderledger.api.CaptureUploadClient
@@ -26,6 +27,27 @@ import java.time.Instant
 
 class LedgerRepositoryTest {
     @Test
+    fun lateSnapshotFromPreviousAccountCannotReplaceNewAccountCache() = runTest {
+        val first = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")
+        val second = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("b", "b-ledger"), "b-session")
+        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2200-01-01T00:00:00Z", emptyList(), null, binding = first))
+        val cache = FakeOwnerReadCache()
+        val response = kotlinx.coroutines.CompletableDeferred<ByteArray>()
+        val repository = repository(owner, cache, object : OwnerLedgerApi {
+            override suspend fun readSnapshot() = response.await()
+        })
+        val loading = kotlinx.coroutines.CoroutineScope(coroutineContext).async { repository.refreshOwnerSnapshot() }
+        testScheduler.runCurrent()
+        owner.state.value = OwnerSessionState.SignedIn("2200-01-01T00:00:00Z", emptyList(), null, binding = second)
+        val secondEntry = entry().copy(ownerUserId = "b", ownerLedgerId = "b-ledger", sessionEpoch = "b-session")
+        repository.writeOwnerSnapshot(secondEntry)
+        response.complete(byteArrayOf(9))
+        assertEquals(LedgerRepository.SnapshotRefreshResult.NotSignedIn, loading.await())
+        assertEquals(listOf(secondEntry), cache.writes)
+        assertFalse(cache.cleared)
+    }
+
+    @Test
     fun signedOutOrRevokedOwnerCannotReadOrWriteFinancialCache() = runTest {
         val cache = FakeOwnerReadCache()
         val owner = FakeOwnerState(OwnerSessionState.SignedOut())
@@ -44,7 +66,7 @@ class LedgerRepositoryTest {
     @Test
     fun onlySignedInOwnerCanPersistAndReadSnapshot() = runTest {
         val cache = FakeOwnerReadCache()
-        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2026-10-13T01:00:00Z", emptyList(), null))
+        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2026-10-13T01:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val repository = repository(owner, cache)
 
         assertTrue(repository.writeOwnerSnapshot(entry()))
@@ -54,7 +76,7 @@ class LedgerRepositoryTest {
     @Test
     fun remoteUnauthorizedRefreshClearsOwnerReadCache() = runTest {
         val cache = FakeOwnerReadCache()
-        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2026-10-13T01:00:00Z", emptyList(), null))
+        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2026-10-13T01:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val api = object : OwnerLedgerApi {
             override suspend fun readSnapshot(): ByteArray = throw TransportFailure.Unauthorized
         }
@@ -73,7 +95,7 @@ class LedgerRepositoryTest {
     @Test
     fun offlineRefreshRetainsOwnerReadCacheAndSignedInState() = runTest {
         val cache = FakeOwnerReadCache()
-        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2026-10-13T01:00:00Z", emptyList(), null))
+        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2026-10-13T01:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val api = object : OwnerLedgerApi {
             override suspend fun readSnapshot(): ByteArray = throw TransportFailure.Offline
         }
@@ -92,7 +114,7 @@ class LedgerRepositoryTest {
     @Test
     fun acknowledgedCaptureInvalidatesOwnerReadCacheWithoutRefreshingIt() = runTest {
         val cache = FakeOwnerReadCache()
-        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2026-10-13T01:00:00Z", emptyList(), null))
+        val owner = FakeOwnerState(OwnerSessionState.SignedIn("2026-10-13T01:00:00Z", emptyList(), null, binding = com.lofuyu.borderledger.auth.SessionBinding(com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), "test-session")))
         val store = SingleUploadStore(QueuedAlert("local-1", "personal", EVENT_ID, byteArrayOf(1), 10L))
         val client = object : com.lofuyu.borderledger.api.CaptureUploadClient {
             override suspend fun upload(batch: List<CaptureUploadEvent>): CaptureUploadResult =
@@ -101,7 +123,7 @@ class LedgerRepositoryTest {
         val repository = LedgerRepository(
             owner,
             cache,
-            CaptureUploadCoordinator(store, client, CaptureHealthStore(), batchEncoder = { ByteArray(1) }),
+            CaptureUploadCoordinator(store, client, CaptureHealthStore(), batchEncoder = { ByteArray(1) }, boundary = com.lofuyu.borderledger.IdentityFixture().boundary),
             CaptureHealthStore(),
         )
         repository.writeOwnerSnapshot(entry())
@@ -122,7 +144,7 @@ class LedgerRepositoryTest {
         val client = object : CaptureUploadClient {
             override suspend fun upload(batch: List<CaptureUploadEvent>): CaptureUploadResult = CaptureUploadResult.Success(emptyList())
         }
-        return LedgerRepository(owner, cache, CaptureUploadCoordinator(store, client, CaptureHealthStore()), CaptureHealthStore(), ownerLedgerApi)
+        return LedgerRepository(owner, cache, CaptureUploadCoordinator(store, client, CaptureHealthStore(), boundary = com.lofuyu.borderledger.IdentityFixture().boundary), CaptureHealthStore(), ownerLedgerApi)
     }
 
     private fun entry() = OwnerReadCacheEntry(
@@ -131,7 +153,7 @@ class LedgerRepositoryTest {
         lastAuthenticatedAt = "2026-10-13T00:00:00Z",
         refreshExpiresAt = "2026-10-14T00:00:00Z",
         payload = byteArrayOf(1, 2, 3),
-    )
+    ownerUserId = "owner", sessionEpoch = "test-session")
 }
 
 private val EVENT_ID = "11111111-1111-4111-8111-111111111111"
@@ -147,7 +169,7 @@ private class FakeOwnerReadCache : OwnerReadCache {
     val writes = mutableListOf<OwnerReadCacheEntry>()
     var cleared = false
     override suspend fun write(entry: OwnerReadCacheEntry) { writes += entry }
-    override suspend fun readIfUsable(now: Instant): OwnerReadCacheEntry? = writes.lastOrNull()
+    override suspend fun readIfUsable(now: Instant, expected: com.lofuyu.borderledger.auth.SessionBinding?): OwnerReadCacheEntry? = writes.lastOrNull()
     override suspend fun clear() { cleared = true; writes.clear() }
 }
 

@@ -1,6 +1,7 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyAlertReview, commitStatementRows, type StatementCommitRow } from '../worker/reconciliation-store';
-import { applyMigrations, createD1Fixture, task10MigrationNames, task10PreUniquenessMigrationNames, task18MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task10MigrationNames, task10PreUniquenessMigrationNames, task18MigrationNames, task24MigrationNames } from './helpers/d1';
 import { createAlertFixture, event, postAlerts } from './helpers/alerts';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -8,6 +9,7 @@ const task10PreUniquenessWithFx = [...task10PreUniquenessMigrationNames, '0018-f
 
 async function seededFixture(migrationNames: readonly string[] = task18MigrationNames) {
   const fixture = await createD1Fixture(migrationNames);
+  await applyMigrations(fixture.db, task24MigrationNames);
   fixtures.push(fixture);
   await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
     VALUES ('statement-account', 'Synthetic BOC card', 'Bank of China', 'CNY', 'multi', 'credit', 'import_only')`).run();
@@ -56,12 +58,9 @@ describe('durable statement reconciliation', () => {
   }, 15_000);
 
   it('archives duplicate confirmation evidence before installing the 0009 unique indexes', async () => {
-    const fixture = await createAlertFixture({ migrationNames: task10PreUniquenessWithFx });
+    const fixture = await createAlertFixture({ migrationNames: task10PreUniquenessWithFx, historicalSchema: true });
     await applyMigrations(fixture.db, task10PreUniquenessMigrationNames);
-    await postAlerts(fixture.db, [
-      event({ eventId: '00000000-0000-4000-8000-000000000041', observationId: 'observation-41' }),
-      event({ eventId: '00000000-0000-4000-8000-000000000042', observationId: 'observation-42' }),
-    ]);
+    await seedHistoricalAlertInputs(fixture.db);
     await fixture.db.batch([
       fixture.db.prepare(`INSERT INTO transactions (id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint)
         VALUES ('migration-target-1', 'account-boc', '2026-10-13', 'Synthetic merchant', -1234, 'CAD', 'Groceries', 'expense', 'confirmed', 'statement', 'migration-target-1')`),
@@ -108,7 +107,7 @@ describe('durable statement reconciliation', () => {
 
   it('keeps two equal rows as two source identities and replays the same file/rows idempotently', async () => {
     const fixture = await seededFixture(task18MigrationNames);
-    const first = await commitStatementRows(fixture.db, {
+    const first = await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-equal-1',
       accountId: 'statement-account',
       filename: 'statement.csv',
@@ -119,7 +118,7 @@ describe('durable statement reconciliation', () => {
     expect(first.needsReview).toBe(0);
     await expect(fixture.db.prepare('SELECT COUNT(*) AS count FROM transactions WHERE source = \'statement\'').all()).resolves.toMatchObject({ results: [{ count: 2 }] });
 
-    const replay = await commitStatementRows(fixture.db, {
+    const replay = await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-equal-replay',
       accountId: 'statement-account',
       filename: 'statement.csv',
@@ -146,8 +145,8 @@ describe('durable statement reconciliation', () => {
       })],
     };
 
-    await expect(commitStatementRows(fixture.db, input)).resolves.toMatchObject({ accepted: 1, duplicates: 0 });
-    await expect(commitStatementRows(fixture.db, { ...input, importId: 'import-lock-date-replay' }))
+    await expect(commitStatementRows(fixture.db, OWNER_LEDGER, input)).resolves.toMatchObject({ accepted: 1, duplicates: 0 });
+    await expect(commitStatementRows(fixture.db, OWNER_LEDGER, { ...input, importId: 'import-lock-date-replay' }))
       .resolves.toMatchObject({ accepted: 0, duplicates: 1 });
 
     await expect(fixture.db.prepare(`SELECT date, fx_lock_date, COUNT(*) AS count
@@ -159,7 +158,7 @@ describe('durable statement reconciliation', () => {
   it('rejects changed content for an existing statement source identity instead of replaying it', async () => {
     const fixture = await seededFixture(task18MigrationNames);
     const identity = { accountId: 'statement-account', fileSha256: 'f'.repeat(64), rowIndex: 0 };
-    await commitStatementRows(fixture.db, {
+    await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-source-conflict',
       accountId: 'statement-account',
       filename: 'statement.csv',
@@ -167,7 +166,7 @@ describe('durable statement reconciliation', () => {
       rows: [row({ id: 'original-row', sourceIdentity: identity })],
     });
 
-    await expect(commitStatementRows(fixture.db, {
+    await expect(commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-source-conflict-retry',
       accountId: 'statement-account',
       filename: 'statement.csv',
@@ -181,14 +180,14 @@ describe('durable statement reconciliation', () => {
 
   it('does not treat another statement export as an alert reconciliation candidate', async () => {
     const fixture = await seededFixture(task18MigrationNames);
-    await commitStatementRows(fixture.db, {
+    await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-overlap-base',
       accountId: 'statement-account',
       filename: 'first.csv',
       fileSha256: 'b'.repeat(64),
       rows: [row({ id: 'base-row', sourceIdentity: { accountId: 'statement-account', fileSha256: 'b'.repeat(64), rowIndex: 0 } })],
     });
-    const overlapping = await commitStatementRows(fixture.db, {
+    const overlapping = await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-overlap-new',
       accountId: 'statement-account',
       filename: 'overlap.csv',
@@ -203,7 +202,7 @@ describe('durable statement reconciliation', () => {
 
   it('does not publish any row when a later row violates account currency scope', async () => {
     const fixture = await seededFixture(task18MigrationNames);
-    await expect(commitStatementRows(fixture.db, {
+    await expect(commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-atomic-failure',
       accountId: 'statement-account',
       filename: 'bad.csv',
@@ -226,14 +225,18 @@ describe('durable statement reconciliation', () => {
       VALUES ('projection-1', 'alert-1', 'alert-tx', 'provisional', '[]', 'CNY', 4200, 1)`).run();
     await fixture.db.prepare(`INSERT INTO annotation_revisions (id, transaction_id, author_subject_hash, revision, category, note)
       VALUES ('annotation-alert-1', 'alert-tx', 'reviewer', 1, 'Groceries', 'Keep this note')`).run();
-    await commitStatementRows(fixture.db, {
+    await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-confirm',
       accountId: 'statement-account',
       filename: 'confirm.csv',
       fileSha256: 'e'.repeat(64),
       rows: [row({ id: 'statement-tx', sourceIdentity: { accountId: 'statement-account', fileSha256: 'e'.repeat(64), rowIndex: 0 } })],
     });
-    const result = await applyAlertReview(fixture.db, {
+    await fixture.db.prepare(`INSERT INTO statement_reconciliation_candidates
+      (id, ledger_id, source_record_id, statement_transaction_id, candidate_transaction_id, score, evidence_basis)
+      SELECT 'confirm-candidate', 'personal', id, transaction_id, 'alert-tx', 100, 'user_review'
+      FROM transaction_source_records WHERE ledger_id='personal' AND transaction_id='statement-tx' AND source_kind='statement'`).run();
+    const result = await applyAlertReview(fixture.db, OWNER_LEDGER, {
       id: 'review-link-1',
       alertEventId: 'alert-1',
       candidateTransactionId: 'alert-tx',
@@ -253,7 +256,7 @@ describe('durable statement reconciliation', () => {
 
   it('matches a statement committed before its alert by bank reference and records provenance', async () => {
     const fixture = await createAlertFixture({ migrationNames: task18MigrationNames });
-    await commitStatementRows(fixture.db, {
+    await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'statement-before-alert',
       accountId: 'account-boc',
       filename: 'statement.csv',
@@ -296,7 +299,7 @@ describe('durable statement reconciliation', () => {
     const alertResponse = await postAlerts(fixture.db, [event({ eventId: alertId, observationId: 'observation-31', bankReference: 'arrival-order-ref' })]);
     expect(await alertResponse.json()).toMatchObject({ acks: [{ status: 'accepted', projectionState: 'provisional' }] });
 
-    const result = await commitStatementRows(fixture.db, {
+    const result = await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'statement-after-alert',
       accountId: 'account-boc',
       filename: 'statement.csv',
@@ -334,7 +337,7 @@ describe('durable statement reconciliation', () => {
     const alertId = '00000000-0000-4000-8000-000000000032';
     await postAlerts(fixture.db, [event({ eventId: alertId, observationId: 'observation-32', bankReference: 'fx-settlement-ref' })]);
 
-    const result = await commitStatementRows(fixture.db, {
+    const result = await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'statement-cross-currency',
       accountId: 'account-boc',
       filename: 'statement.csv',
@@ -364,7 +367,7 @@ describe('durable statement reconciliation', () => {
 
   it('allows only one concurrent strong alert to reuse a statement target', async () => {
     const fixture = await createAlertFixture({ migrationNames: task18MigrationNames });
-    await commitStatementRows(fixture.db, {
+    await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'statement-concurrent-target',
       accountId: 'account-boc',
       filename: 'statement.csv',
@@ -404,7 +407,7 @@ describe('durable statement reconciliation', () => {
 
   it('keeps weak statement-before-alert matches open until explicit user review', async () => {
     const fixture = await createAlertFixture({ migrationNames: task18MigrationNames });
-    await commitStatementRows(fixture.db, {
+    await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'statement-review-before-alert',
       accountId: 'account-boc',
       filename: 'statement.csv',
@@ -429,7 +432,7 @@ describe('durable statement reconciliation', () => {
     expect(await response.json()).toMatchObject({ acks: [{ status: 'accepted', projectionState: 'provisional' }] });
     await expect(fixture.db.prepare('SELECT status FROM statement_reconciliation_candidates WHERE statement_transaction_id = ? AND candidate_transaction_id = ?').bind('statement-review-row', '00000000-0000-4000-8000-000000000001').all()).resolves.toMatchObject({ results: [{ status: 'open' }] });
 
-    const result = await applyAlertReview(fixture.db, {
+    const result = await applyAlertReview(fixture.db, OWNER_LEDGER, {
       id: 'explicit-review-before-alert',
       alertEventId: '00000000-0000-4000-8000-000000000001',
       statementTransactionId: 'statement-review-row',
@@ -455,7 +458,7 @@ describe('durable statement reconciliation', () => {
       results: [{ date: '2026-10-13', fx_lock_date: '2026-10-13', amount_minor: -1234 }],
     });
 
-    await applyAlertReview(fixture.db, {
+    await applyAlertReview(fixture.db, OWNER_LEDGER, {
       id: 'partial-event-cancellation',
       alertEventId: reversalId,
       targetAlertEventId: purchaseId,
@@ -476,3 +479,18 @@ describe('durable statement reconciliation', () => {
     });
   });
 });
+
+// Migration 0009 is tested against its historical schema, without invoking current auth APIs.
+async function seedHistoricalAlertInputs(db: import('../worker/db-types').D1Database) {
+  for (const suffix of ['41', '42']) {
+    const id = '00000000-0000-4000-8000-0000000000' + suffix;
+    await db.batch([
+      db.prepare(`INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint)
+        VALUES (?,'account-boc','2026-10-13','Synthetic merchant',-1234,'CAD','Other','expense','provisional','alert',?)`).bind(id,id),
+      db.prepare(`INSERT INTO alert_events(id,event_id,observation_id,source_profile_id,parser_version,captured_at,event_time_basis,event_type,direction,account_id,payload_digest)
+        VALUES (?,?,?,'source-boc','test','2026-10-13T00:00:00Z','notification_posted','purchase_notice','outflow','account-boc',?)`).bind(id,id,'observation-'+suffix,'digest-'+suffix),
+      db.prepare(`INSERT INTO alert_projections(id,event_id,transaction_id,state,counted_currency,counted_amount_minor)
+        VALUES (?,?,?,'provisional','CAD',-1234)`).bind(id,id,id),
+    ]);
+  }
+}

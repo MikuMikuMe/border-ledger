@@ -1,3 +1,4 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import assert from 'node:assert/strict';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import {
@@ -31,7 +32,7 @@ import {
 } from '../worker/device-pairing';
 import { issueSecureCaptureCredential } from '../worker/device-store';
 
-const INITIAL_NOW = Date.parse('2026-10-13T12:00:00.000Z');
+const INITIAL_NOW = Date.now();
 const OWNER_SUBJECT = 'synthetic-owner-subject';
 const OWNER_VERIFIER = 'synthetic-owner-pkce-verifier-012345678901234567890123456789';
 const PAIR_VERIFIER = 'synthetic-pair-verifier-012345678901234567890123456789';
@@ -61,6 +62,7 @@ function config(clock: ReturnType<typeof makeClock>): MobileAuthConfig {
 }
 
 async function seedLedger(db: import('../worker/db-types').D1Database) {
+  await db.prepare("INSERT INTO user_identities(issuer,subject,user_id) VALUES ('https://team.cloudflareaccess.com', ?, 'owner')").bind(OWNER_SUBJECT).run();
   await db.batch([
     db.prepare('INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind('account-boc', 'Synthetic BOC credit', 'BOC', 'CAD', 'multi', 'credit', 'connected'),
@@ -68,6 +70,8 @@ async function seedLedger(db: import('../worker/db-types').D1Database) {
     db.prepare('INSERT OR IGNORE INTO account_currencies (account_id, currency) VALUES (?, ?)').bind('account-boc', 'USD'),
     db.prepare('INSERT INTO source_profiles (id, ledger_id, provider, source_kind, display_name, parser_version, status, config_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind('source-boc', 'personal', 'boc', 'wechat', 'Synthetic BOC', 'task4', 'approved', '{}'),
+    db.prepare("INSERT INTO source_profile_hints (id,source_profile_id,hint_kind,hint_value) VALUES ('hint-boc-1234','source-boc','card_suffix','1234')"),
+    db.prepare("INSERT INTO source_profile_hints (id,source_profile_id,hint_kind,hint_value) VALUES ('hint-boc-5678','source-boc','card_suffix','5678')"),
     db.prepare('INSERT INTO source_account_mappings (id, ledger_id, source_profile_id, hint_kind, hint_value, account_id, approval_status, approved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind('mapping-boc', 'personal', 'source-boc', 'card_suffix', '1234', 'account-boc', 'approved', '2026-10-13T11:00:00.000Z'),
     db.prepare('INSERT INTO source_account_mappings (id, ledger_id, source_profile_id, hint_kind, hint_value, account_id, approval_status, approved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -146,11 +150,11 @@ export async function runTask4Cases() {
       .bind('owner-device', 'personal', 'Synthetic owner phone', 'android', 'paired').run();
 
     const ownerFlow = await beginAndApproveOwner(fixture.db, cfg);
-    assert.equal(ownerFlow.start.expiresAt, '2026-10-13T12:10:00.000Z');
+    assert.equal(ownerFlow.start.expiresAt, new Date(INITIAL_NOW + 10 * 60 * 1000).toISOString());
     const authorizationUrl = new URL(ownerFlow.start.authorizationUrl);
     assert.equal(authorizationUrl.searchParams.get('request_id'), ownerFlow.start.requestId);
     assert.equal(authorizationUrl.searchParams.get('state'), ownerFlow.state);
-    assert.equal(ownerFlow.approval.expiresAt, '2026-10-13T12:01:00.000Z');
+    assert.equal(ownerFlow.approval.expiresAt, new Date(INITIAL_NOW + 60 * 1000).toISOString());
 
     const duplicateApproval = await approveOwnerLogin(fixture.db, {
       requestId: ownerFlow.start.requestId,
@@ -165,7 +169,7 @@ export async function runTask4Cases() {
     }, cfg);
     assert.deepEqual(duplicateApproval, ownerFlow.approval);
 
-    const storedRequest = await fixture.db.prepare('SELECT state_hash, pkce_challenge_hash, code_hash, approved_subject_hash, callback_origin, callback_path FROM mobile_auth_requests WHERE id = ?')
+    const storedRequest = await fixture.db.prepare('SELECT state_hash, pkce_challenge_hash, code_hash, approved_subject_hash, callback_origin, callback_path FROM hosted_auth_requests WHERE id = ?')
       .bind(ownerFlow.start.requestId).all<Record<string, string>>();
     assert.equal(storedRequest.results.length, 1);
     assert.notEqual(storedRequest.results[0].state_hash, ownerFlow.state);
@@ -180,7 +184,7 @@ export async function runTask4Cases() {
       environment: cfg.environment,
       callbackUrl: cfg.callbackUrl,
       consent: true,
-    }, cfg), /approved|identity/i);
+    }, cfg), /Access is not enabled/);
 
     await expectReject(() => exchangeOwnerCode(fixture.db, {
       requestId: ownerFlow.start.requestId,
@@ -371,7 +375,7 @@ export async function runTask4Cases() {
       environment: cfg.environment,
       sourceScopes: [{ sourceProfileId: 'source-boc', accountId: 'account-boc', currency: 'CAD', hintKind: 'card_suffix', hintValue: '1234' }],
     }, cfg), /ambiguous|collision|review|hint/i);
-    const collisionStatus = await fixture.db.prepare('SELECT status FROM device_pairings WHERE id = ?')
+    const collisionStatus = await fixture.db.prepare('SELECT status FROM hosted_device_pairings WHERE id = ?')
       .bind(collisionPairing.pairingId).all<{ status: string }>();
     assert.equal(collisionStatus.results[0].status, 'pending');
 
@@ -409,7 +413,7 @@ export async function runTask4Cases() {
     const originalCaptureSecret = 'owner-device-4-capture-v1';
     const renewedCaptureSecret = 'owner-device-4-capture-v2';
     const captureIssuedAt = new Date(clock.value()).toISOString();
-    await issueSecureCaptureCredential(fixture.db, {
+    await issueSecureCaptureCredential(fixture.db, OWNER_LEDGER, {
       id: 'capture-owner-device-4-v1',
       deviceId: 'owner-device-4',
       credentialHash: await hashSecret(originalCaptureSecret),

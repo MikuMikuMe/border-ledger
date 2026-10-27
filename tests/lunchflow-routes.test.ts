@@ -1,3 +1,5 @@
+import { ClientRequest as Request } from './helpers/client-request';
+import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../worker/index';
 import type { D1Database } from '../worker/db-types';
@@ -10,7 +12,8 @@ const SESSION_KEY = 'lunchflow-route-session-key';
 const LEGACY_API_KEY = 'legacy-route-key';
 const LUNCHFLOW_API_KEY = 'server-only-lunchflow-key';
 const NOW = new Date('2026-10-22T12:00:00.000Z');
-const OWNER_EXPIRY = '2026-10-23T12:00:00.000Z';
+// Store authority uses the database clock, independently of the injected route clock.
+const OWNER_EXPIRY = '2099-01-01T00:00:00.000Z';
 
 const fixtures: Array<{ close(): void }> = [];
 
@@ -47,7 +50,7 @@ function webEnv(db: D1Database, queue?: { send(message: unknown): Promise<void> 
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
-    LEDGER_API_KEY: LEGACY_API_KEY,
+    ...VERIFIED_WEB_ENV,
     LEDGER_APP_ORIGIN: ORIGIN,
     LUNCHFLOW_API_KEY,
     SYNC_QUEUE: queue,
@@ -68,7 +71,7 @@ function webRequest(path: string, init: RequestInit = {}) {
   return new Request(`${ORIGIN}${path}`, {
     ...init,
     headers: {
-      authorization: `Bearer ${LEGACY_API_KEY}`,
+      ...VERIFIED_WEB_HEADERS,
       origin: ORIGIN,
       ...(init.headers ?? {}),
     },
@@ -79,7 +82,7 @@ function webSelectionRequest(providerAccountId: string) {
   return webRequest('/api/lunchflow/account-selection', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ accounts: [{ providerAccountId, currency: 'CAD', kind: 'chequing' }] }),
+    body: JSON.stringify({ expectedGeneration:1,accounts: [{ providerAccountId, currency: 'CAD', kind: 'chequing' }] }),
   });
 }
 
@@ -95,6 +98,7 @@ function mobileRequest(path: string, token: string, init: RequestInit = {}) {
 
 async function fixture() {
   const value = createSqliteD1Fixture();
+  await provisionWebOwner(value.db);
   fixtures.push(value);
   return value;
 }
@@ -190,11 +194,11 @@ describe('Lunch Flow web route boundaries', () => {
     const response = await worker.fetch(new Request(`${ORIGIN}/api/lunchflow/account-selection`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${LEGACY_API_KEY}`,
+        ...VERIFIED_WEB_HEADERS,
         origin: 'https://evil.example',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] }),
+      body: JSON.stringify({ expectedGeneration:1,accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] }),
     }), webEnv(value.db) as never);
 
     expect(response.status).toBe(403);
@@ -211,9 +215,9 @@ describe('Lunch Flow web route boundaries', () => {
     expect(response.status).toBe(200);
     const body = await response.json() as Record<string, unknown>;
     expect(body).toEqual({
-      configured: true,
+      configured: true,connectionId:'lunchflow-personal-owner',generation:1,
       accounts: [{
-        providerAccountId: 'rbc-chequing',
+        providerAccountId: 'rbc-chequing',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
         name: 'Chequing',
         institution: 'RBC Royal Bank',
         currencies: ['CAD'],
@@ -240,10 +244,10 @@ describe('Lunch Flow web route boundaries', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      configured: true,
+      configured: true,connectionId:'lunchflow-personal-owner',generation:1,
       accounts: [
         {
-          providerAccountId: 'local-route-enabled',
+          providerAccountId: 'local-route-enabled',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
           name: 'Enabled route account',
           institution: 'Synthetic Bank',
           currencies: ['CAD'],
@@ -256,7 +260,7 @@ describe('Lunch Flow web route boundaries', () => {
            lastAttemptAt: expect.any(String),
         },
         {
-          providerAccountId: 'local-route-disabled',
+          providerAccountId: 'local-route-disabled',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
           name: 'Disabled route account',
           institution: 'Synthetic Bank',
           currencies: ['CAD'],
@@ -343,7 +347,7 @@ describe('Lunch Flow mobile route boundaries', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      configured: true,
+      configured: true,connectionId:'lunchflow-personal-owner',generation:1,
       accounts: [
         { providerAccountId: 'local-route-enabled', selected: true, lastError: 'Provider unavailable.' },
         { providerAccountId: 'local-route-disabled', selected: false, lastError: null },
@@ -360,7 +364,7 @@ describe('Lunch Flow mobile route boundaries', () => {
     const response = await worker.fetch(mobileRequest('/api/mobile/v1/lunchflow/account-selection', token, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] }),
+      body: JSON.stringify({ expectedGeneration:1,accounts: [{ providerAccountId: 'rbc-chequing', currency: 'CAD', kind: 'chequing' }] }),
     }), mobileEnv(value.db, { send: async () => undefined }) as never);
 
     expect(response.status).toBe(400);

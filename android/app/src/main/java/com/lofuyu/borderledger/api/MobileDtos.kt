@@ -41,4 +41,5 @@ data class CaptureCredentialGrant(
     val generation: Int,
     val expiresAt: String,
     val revocationCapability: String,
+    val identity: com.lofuyu.borderledger.auth.LedgerIdentity? = null,
 )

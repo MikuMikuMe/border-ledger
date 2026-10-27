@@ -197,9 +197,7 @@ class ReviewRepositoryTest {
     ): HttpWorkerReviewRepository = HttpWorkerReviewRepository(
         origin = ORIGIN,
         environment = "sandbox",
-        ownerCredentials = object : OwnerCredentialProvider {
-            override suspend fun accessToken(): String = "owner-token"
-        },
+        ownerCredentials = com.lofuyu.borderledger.ownerCredentials("owner-token"),
         transport = ReviewHttpTransport { request ->
             requests += request
             response

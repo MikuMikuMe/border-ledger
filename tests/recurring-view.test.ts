@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -72,7 +73,7 @@ describe('recurring workspace view', () => {
   }
 
   async function renderApp(fetchMock: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+    privateFetchSpy().mockImplementation(fetchMock);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

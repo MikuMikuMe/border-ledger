@@ -39,7 +39,7 @@ export interface InstrumentMapping {
   readonly approved: boolean;
   readonly allowedCurrencies: readonly CurrencyCode[];
   readonly instrumentHint?: InstrumentHint | null;
-  readonly ledgerId?: 'personal';
+  readonly ledgerId?: string;
 }
 
 export type AlertLinkRelation = 'cancels' | 'partially_reverses' | 'replaces_authorization' | 'refund_of' | 'confirms' | 'possible_duplicate';
@@ -52,7 +52,7 @@ export interface AlertLink {
   readonly evidenceBasis: 'bank_reference' | 'user_review';
   readonly revision: number;
   readonly accountId: string;
-  readonly ledgerId?: 'personal';
+  readonly ledgerId?: string;
 }
 
 export type AlertLifecycleEvents = readonly BankAlertEventInput[];
@@ -82,7 +82,7 @@ function validComponents(event: BankAlertEventInput): boolean {
 }
 
 function validLinkMetadata(link: AlertLink, mapping: InstrumentMapping): boolean {
-  return link.accountId === mapping.accountId && (link.ledgerId === undefined || link.ledgerId === 'personal') &&
+  return link.accountId === mapping.accountId && link.ledgerId === mapping.ledgerId &&
     (link.evidenceBasis === 'bank_reference' || link.evidenceBasis === 'user_review') && Number.isSafeInteger(link.revision) && link.revision > 0 &&
     !!link.fromEventId && link.fromEventId !== link.toEventId;
 }
@@ -109,7 +109,7 @@ function validConfirmationLink(link: AlertLink, event: BankAlertEventInput, mapp
 
 function isUnresolvedSource(event: BankAlertEventInput, mapping: InstrumentMapping | null): boolean {
   if (!event.completeness.supportedSource || !mapping || !mapping.approved || mapping.sourceProfileId !== event.sourceProfileId || !mapping.accountId) return true;
-  if (mapping.ledgerId !== undefined && mapping.ledgerId !== 'personal') return true;
+  if (mapping.ledgerId !== undefined && !mapping.ledgerId.trim()) return true;
   if (mapping.instrumentHint && (mapping.instrumentHint.kind !== event.instrumentHint?.kind || mapping.instrumentHint.value !== event.instrumentHint.value)) return true;
   return false;
 }

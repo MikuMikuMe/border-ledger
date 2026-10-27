@@ -1,3 +1,5 @@
+import { ClientRequest as Request } from './helpers/client-request';
+import { OWNER_LEDGER } from './helpers/tenants';
 import { describe, expect, it } from 'vitest';
 import worker from '../worker/index';
 import { createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
@@ -104,7 +106,7 @@ describe('Task 16 mobile owner Review API', () => {
       bankReference: null,
     })]);
     const sourceBefore = (await fixture.db.prepare('SELECT payload_digest, merchant, event_money_currency, event_money_amount_minor FROM alert_events WHERE event_id = ?').bind(alertId).all()).results;
-    await commitStatementRows(fixture.db, {
+    await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'review-candidate-import',
       accountId: 'account-boc',
       filename: 'review.csv',
@@ -272,13 +274,15 @@ describe('Task 16 mobile owner Review API', () => {
     await expect(stale.json()).resolves.toMatchObject({ code: 'revision_conflict', currentRevision: 1 });
 
     await fixture.db.batch([
-      fixture.db.prepare("INSERT INTO ledgers (id) VALUES ('other-ledger')"),
+      fixture.db.prepare("INSERT INTO users(id) VALUES ('other-user')"),
+      fixture.db.prepare("INSERT INTO ledgers (id,user_id) VALUES ('other-ledger','other-user')"),
+      fixture.db.prepare("INSERT INTO accounts(id,ledger_id,name,institution,currency,kind,status) VALUES ('other-account','other-ledger','Other','Bank','CAD','savings','connected')"),
       fixture.db.prepare(`INSERT INTO transactions
-        (id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint)
-        VALUES ('other-transaction', 'account-boc', '2026-10-13', 'Other ledger merchant', -100, 'CAD', 'Other', 'expense', 'needs_review', 'manual', 'other-transaction-fingerprint')`),
+        (id, ledger_id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint)
+        VALUES ('other-transaction', 'other-ledger', 'other-account', '2026-10-13', 'Other ledger merchant', -100, 'CAD', 'Other', 'expense', 'needs_review', 'manual', 'other-transaction-fingerprint')`),
       fixture.db.prepare(`INSERT INTO transaction_source_records
         (id, ledger_id, source_kind, identity_key, transaction_id, account_id, content_digest)
-        VALUES ('other-source-record', 'other-ledger', 'legacy', 'legacy:other-transaction', 'other-transaction', 'account-boc', 'other-content')`),
+        VALUES ('other-source-record', 'other-ledger', 'legacy', 'legacy:other-transaction', 'other-transaction', 'other-account', 'other-content')`),
     ]);
     const outOfScope = await worker.fetch(request('/api/mobile/v1/transactions/other-transaction/annotation', token, {
       method: 'PATCH',

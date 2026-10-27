@@ -1,7 +1,8 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMobileRequest } from '../worker/mobile';
 import { createOpaqueCredential, hashSecret, type OwnerScope } from '../worker/mobile-auth';
-import { createD1Fixture, task16MigrationNames } from './helpers/d1';
+import { createD1Fixture, task22MigrationNames } from './helpers/d1';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 const ORIGIN = 'https://pf.example.com';
@@ -64,7 +65,7 @@ async function seed(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
 
 describe('Task 17 mobile transaction route', () => {
   it('returns stable bounded pages, filters, and annotation revisions', async () => {
-    const fixture = await createD1Fixture(task16MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const credential = await ownerCredential(fixture.db, ['ledger:read']);
@@ -87,7 +88,7 @@ describe('Task 17 mobile transaction route', () => {
   }, 30_000);
 
   it('keeps ledger reads owner-scoped', async () => {
-    const fixture = await createD1Fixture(task16MigrationNames);
+    const fixture = await createD1Fixture(task22MigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const credential = await ownerCredential(fixture.db, ['connections:manage']);

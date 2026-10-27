@@ -1,3 +1,4 @@
+import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import type { D1Database, D1Statement } from '../worker/db-types';
@@ -56,6 +57,20 @@ function serviceEnv(db: D1Database, queue?: { send(message: unknown): Promise<vo
 }
 
 describe('Lunch Flow adapter', () => {
+  it('discovers accounts at the canonical host without following credential-bearing redirects', async () => {
+    const fetcher: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      expect(request.redirect).toBe('error');
+      expect(request.headers.get('x-api-key')).toBe('server-only-test-key');
+      // The apex host redirects to www; fetch with redirect:error rejects it.
+      if (new URL(request.url).hostname === 'lunchflow.app') throw new TypeError('Redirect rejected');
+      expect(request.url).toBe('https://www.lunchflow.app/api/v1/accounts');
+      return Response.json({ accounts: [{ id: 'one', name: 'Test', status: 'ACTIVE' }], total: 1 });
+    };
+    const provider = createLunchFlowProvider({ LUNCHFLOW_API_KEY: 'server-only-test-key' }, fetcher);
+    await expect(provider.listAccounts()).resolves.toMatchObject([{ id: 'one' }]);
+  });
+
   it('sends the server-only key and includes pending rows in a complete snapshot request', async () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const request = new Request(input, init);
@@ -127,7 +142,7 @@ describe('Lunch Flow selection and sync', () => {
     const fixture = createSqliteD1Fixture();
     fixtures.push(fixture);
     const queued: unknown[] = [];
-    const service = createLunchFlowService(serviceEnv(fixture.db, { send: async (message) => { queued.push(message); } }), provider);
+    const service = createLunchFlowService(serviceEnv(fixture.db, { send: async (message) => { queued.push(message); } }), OWNER_LEDGER, provider);
     return { fixture, service, queued };
   }
 
@@ -153,13 +168,13 @@ describe('Lunch Flow selection and sync', () => {
       async listAccounts() { providerReads += 1; throw new Error('local status must not query provider'); },
       async listTransactions() { throw new Error('local status must not query provider'); },
     };
-    const service = createLunchFlowService(serviceEnv(fixture.db), provider);
+    const service = createLunchFlowService(serviceEnv(fixture.db), OWNER_LEDGER, provider);
 
     await expect(service.readStatus()).resolves.toEqual({
-      configured: true,
+      configured: true,connectionId:'lunchflow-personal-owner',generation:1,
       accounts: [
         {
-          providerAccountId: 'local-enabled',
+          providerAccountId: 'local-enabled',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
           name: 'Enabled account',
           institution: 'Synthetic Bank',
           currencies: ['CAD'],
@@ -172,7 +187,7 @@ describe('Lunch Flow selection and sync', () => {
           lastError: 'Provider unavailable.',
         },
         {
-          providerAccountId: 'local-disabled',
+          providerAccountId: 'local-disabled',connectionId:'lunchflow-personal-owner',providerBankConnectionId:null,
           name: 'Disabled account',
           institution: 'Synthetic Bank',
           currencies: ['CAD'],
@@ -218,7 +233,7 @@ describe('Lunch Flow selection and sync', () => {
       async listAccounts() { throw new Error('local status must not query provider'); },
       async listTransactions() { throw new Error('local status must not query provider'); },
     };
-    const service = createLunchFlowService(serviceEnv(fixture.db), provider);
+    const service = createLunchFlowService(serviceEnv(fixture.db), OWNER_LEDGER, provider);
 
     const response = await service.readStatus();
     expect(response.accounts).toHaveLength(100);
@@ -238,7 +253,7 @@ describe('Lunch Flow selection and sync', () => {
       async listAccounts() { return [providerAccount({ status: 'DISCONNECTED' })]; },
       async listTransactions() { throw new Error('inactive account should not need currency discovery'); },
     };
-    const service = createLunchFlowService(serviceEnv(fixture.db), provider);
+    const service = createLunchFlowService(serviceEnv(fixture.db), OWNER_LEDGER, provider);
 
     await expect(service.readAccounts()).resolves.toMatchObject({
       accounts: [{ providerAccountId: 'account-synthetic-1', currencies: ['CAD'], lastError: 'Account is not active in Lunch Flow.' }],
@@ -266,8 +281,8 @@ describe('Lunch Flow selection and sync', () => {
     expect(first).toEqual({ selected: 1, queued: true });
     expect(replay).toEqual(first);
     expect(queued).toEqual([
-      { type: 'lunchflow-sync', accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
-      { type: 'lunchflow-sync', accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
     ]);
     await expect(fixture.db.prepare('SELECT account_id, enabled, revision FROM lunchflow_accounts').all()).resolves.toMatchObject({ results: [{ enabled: 1, revision: 1 }] });
   });
@@ -386,7 +401,7 @@ describe('Lunch Flow selection and sync', () => {
         if (fail) throw new Error('queue unavailable');
         queued.push(message);
       },
-    }), provider);
+    }), OWNER_LEDGER, provider);
     const input = {
       accounts: [{ providerAccountId: 'account-synthetic-1', currency: 'CAD', kind: 'chequing' as const }],
       ownerSubjectHash: 'owner-synthetic',
@@ -397,7 +412,7 @@ describe('Lunch Flow selection and sync', () => {
     fail = false;
     await expect(service.selectAccounts(input)).resolves.toEqual({ selected: 1, queued: true });
     expect(accountReads).toBe(1);
-    expect(queued).toEqual([{ type: 'lunchflow-sync', accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] }]);
+    expect(queued).toEqual([{ type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] }]);
     await expect(fixture.db.prepare('SELECT revision FROM lunchflow_accounts').first<{ revision: number }>()).resolves.toMatchObject({ revision: 1 });
   });
 
@@ -408,7 +423,7 @@ describe('Lunch Flow selection and sync', () => {
       async listAccounts() { return [providerAccount()]; },
       async listTransactions() { return [providerTransaction()]; },
     };
-    const service = createLunchFlowService(serviceEnv(fixture.db), provider);
+    const service = createLunchFlowService(serviceEnv(fixture.db), OWNER_LEDGER, provider);
 
     await expect(service.selectAccounts({
       accounts: [{ providerAccountId: 'account-synthetic-1', currency: 'CAD', kind: 'chequing' }],
@@ -459,8 +474,8 @@ describe('Lunch Flow selection and sync', () => {
     await service.selectAccounts({ accounts: [{ providerAccountId: 'account-synthetic-1', currency: 'CAD', kind: 'chequing' }] });
 
     expect(queued).toEqual([
-      { type: 'lunchflow-sync', accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
-      { type: 'lunchflow-sync', accounts: [{ providerAccountId: 'account-synthetic-1', revision: 3 }] },
+      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 3 }] },
     ]);
     await processLunchFlowSync(service, [{ providerAccountId: 'account-synthetic-1', revision: 1 }]);
     await expect(fixture.db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE source = 'lunchflow'").first<{ count: number }>()).resolves.toMatchObject({ count: 0 });

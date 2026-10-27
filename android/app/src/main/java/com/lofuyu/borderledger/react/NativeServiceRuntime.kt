@@ -6,6 +6,8 @@ import com.lofuyu.borderledger.AppContainer
 import com.lofuyu.borderledger.auth.OwnerSessionState
 import com.lofuyu.borderledger.ui.ledger.LedgerSnapshotDecoder
 import com.lofuyu.borderledger.ui.ledger.LedgerSnapshotDecodeResult
+import com.lofuyu.borderledger.auth.OwnerWork
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -96,7 +98,14 @@ internal class OwnerScopedFileState(
 /** Application lifetime: destroying a JS runtime/Activity never cancels submitted financial work. */
 class NativeServiceRuntime(val container: AppContainer, val applicationContext: android.content.Context) {
     val external = NativeExternalServices(this)
+    val lunchFlow = com.lofuyu.borderledger.accounts.LunchFlowHandoff(
+        records=container.bridgeRecords,binding={container.ownerSessionManager.currentBinding()},
+        status={container.accountRepository.readLunchFlowConnection()},begin={container.accountRepository.startLunchFlowAuthorization()},
+        open={value -> host?.openBrowser(Uri.parse(value)) ?: applicationContext.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(value)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))},
+        links=com.lofuyu.borderledger.accounts.LunchFlowLinks(com.lofuyu.borderledger.BuildConfig.MOBILE_API_ORIGIN),
+    )
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val lunchFlowChanges = MutableSharedFlow<Unit>(extraBufferCapacity=1)
     val changes = MutableSharedFlow<String>(extraBufferCapacity = 32)
     var host: NativeServiceHost? = null
     private val generationMutex = Mutex()
@@ -116,16 +125,15 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
         generationMutex.withLock {
             if (signingOut) throw BridgeFailure("not_signed_in")
             when (container.ownerSessionManager.state.value) {
-                is OwnerSessionState.SignedIn -> container.bridgeRecords.read(GENERATION)?.decodeToString()
-                    ?: UUID.randomUUID().toString().also {
-                        container.bridgeRecords.write(GENERATION, it.encodeToByteArray())
-                    }
+                is OwnerSessionState.SignedIn -> requireNotNull(container.ownerSessionManager.currentBinding()).epoch.also {
+                    container.bridgeRecords.write(GENERATION, it.encodeToByteArray())
+                }
                 OwnerSessionState.Refreshing -> null
                 else -> throw BridgeFailure("not_signed_in")
             }
         }
     }
-    suspend fun currentGeneration(): OwnerGeneration? = generationMutex.withLock { if(signingOut) null else container.bridgeRecords.read(GENERATION)?.decodeToString() }
+    suspend fun currentGeneration(): OwnerGeneration? = generationMutex.withLock { if(signingOut) null else container.ownerSessionManager.currentBinding()?.epoch }
     suspend fun beginLogin(staySignedIn: Boolean, destination: PendingDestination): com.lofuyu.borderledger.auth.LoginLaunch = ownerWorkMutex.withLock {
         if(container.ownerSessionManager.state.value !is OwnerSessionState.SignedIn) generationMutex.withLock {
             container.bridgeRecords.delete(GENERATION)
@@ -135,6 +143,7 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
     suspend fun signOut() = ownerWorkMutex.withLock {
         // Fence queued UI results before the existing native sign-out clears credentials/cache.
         val owner = currentGeneration()
+        lunchFlow.cancel()
         try {
             signOutBeforeClearingHandoff(
                 signOut = { session.signOut() },
@@ -187,7 +196,8 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
         val owner=ownerGeneration()
         return fileState.runCurrent(owner, isCurrent = { isCurrentOwner(owner) }) {
             check(currentGeneration()==owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
-            val result=block()
+            val binding = requireNotNull(container.ownerSessionManager.currentBinding())
+            val result=withContext(OwnerWork(binding)) { block() }
             check(currentGeneration()==owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
             result
         }
@@ -196,14 +206,16 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
         check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
         return fileState.runCurrent(expectedOwner, isCurrent = { isCurrentOwner(expectedOwner) }) {
             check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
-            val result=block()
+            val binding = requireNotNull(container.ownerSessionManager.currentBinding())
+            val result=withContext(OwnerWork(binding)) { block() }
             check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
             result
         }
     }
     suspend fun <T> withOwner(expectedOwner: OwnerGeneration, block: suspend () -> T): T = ownerWorkMutex.withLock {
         check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
-        val result=block()
+        val binding = requireNotNull(container.ownerSessionManager.currentBinding())
+            val result=withContext(OwnerWork(binding)) { block() }
         check(currentGeneration()==expectedOwner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
         result
     }

@@ -1,6 +1,8 @@
+import { assertCaptureAuthority, assertCaptureScope, captureScopePredicate, capturePublicationGuard, immutableCaptureContext } from './capture-authority';
+import { ledgerScopedIdentifier } from './ledger-identifiers';
 import { deriveAlertProjection, type BankAlertEventInput, type InstrumentMapping } from '../src/domain/bank-alerts';
 import { getCurrencyMeta } from '../src/domain/currencies';
-import { normalizeRfc3339Instant, parseRfc3339Instant, requestDigest, assertCaptureEventScope, type CaptureContext } from './mobile-auth';
+import { type CaptureScopeRecord, normalizeRfc3339Instant, parseRfc3339Instant, requestDigest, assertCaptureEventScope, type CaptureContext } from './mobile-auth';
 import { MAX_ALERT_BATCH_BYTES, MAX_ALERT_BATCH_SIZE } from './alert-store';
 import type { D1Database, D1Result, D1Statement } from './db-types';
 import { findAlertStatementMatches, isReconciliationUniqueConflict, type AlertStatementMatch } from './reconciliation-store';
@@ -38,6 +40,8 @@ interface ValidationFailure {
 }
 
 interface ScopedEvent {
+  context:CaptureContext;
+  internalId:string;
   event: BankAlertEventInput;
   digest: string;
   accountId: string;
@@ -193,17 +197,16 @@ function conflict(eventId: string): IngestAck {
   return { eventId, status: 'conflict', receiptId: null, revision: null, projectionState: null, reasonCodes: ['idempotency_conflict'], error: { code: 'idempotency_conflict', message: 'The event ID is already bound to different content.', retryable: false } };
 }
 
-async function scopesFor(db: D1Database, context: CaptureContext, event: BankAlertEventInput): Promise<ScopeRow[]> {
-  const currency = event.eventMoney?.currency;
-  const result = await db.prepare(`SELECT ds.source_profile_id, ds.account_id, ds.currency, sp.status AS source_status,
-      ds.instrument_hint_kind, ds.instrument_hint_value
-    FROM device_source_scopes ds
-    JOIN source_profiles sp ON sp.id = ds.source_profile_id
-    WHERE ds.device_id = ? AND ds.source_profile_id = ? AND ds.status = 'approved'
-      AND (? IS NULL OR ds.currency = ?)
-      AND (ds.expires_at IS NULL OR ds.expires_at > CURRENT_TIMESTAMP)
-    ORDER BY ds.account_id, ds.currency, ds.instrument_hint_kind, ds.instrument_hint_value`).bind(context.deviceId, event.sourceProfileId, currency ?? null, currency ?? null).all<ScopeRow>();
-  return result.results.filter((row) => row.source_status === 'approved');
+async function scopesFor(db:D1Database,context:CaptureContext,event:BankAlertEventInput):Promise<ScopeRow[]> {
+  const candidates=context.sourceScopes.filter(scope=>scope.sourceProfileId===event.sourceProfileId && (!event.eventMoney || scope.currency===event.eventMoney.currency));
+  const rows:ScopeRow[]=[];
+  for(const scope of candidates) {
+    const guard=captureScopePredicate(context,scope);
+    if(await db.prepare(`SELECT 1 WHERE ${guard.sql}`).bind(
+      ...guard.bindings,
+    ).first())rows.push({source_profile_id:scope.sourceProfileId,account_id:scope.accountId,currency:scope.currency,source_status:'approved',instrument_hint_kind:scope.instrumentHint?.kind??'none',instrument_hint_value:scope.instrumentHint?.value??''});
+  }
+  return rows;
 }
 
 async function resolveScopedEvent(db: D1Database, context: CaptureContext, event: BankAlertEventInput, digest: string): Promise<ScopedEvent | ValidationFailure> {
@@ -224,6 +227,7 @@ async function resolveScopedEvent(db: D1Database, context: CaptureContext, event
     : { kind: row.instrument_hint_kind as 'card_suffix' | 'account_hint' | 'source_reference', value: row.instrument_hint_value };
   await assertCaptureEventScope(db, context, { sourceProfileId: event.sourceProfileId, accountId: row.account_id, currency: row.currency, instrumentHint: mappingHint });
   return {
+    context,internalId:await ledgerScopedIdentifier(context,'alert-event',event.eventId),
     event,
     digest,
     accountId: row.account_id,
@@ -233,129 +237,267 @@ async function resolveScopedEvent(db: D1Database, context: CaptureContext, event
   };
 }
 
-async function existingReceipt(db: D1Database, eventId: string, deviceId: string): Promise<ExistingReceiptRow | null> {
-  return db.prepare(`SELECT e.event_id, e.payload_digest, p.id AS projection_id, p.state AS projection_state,
-      p.reason_codes_json, p.revision, e.device_id
-    FROM alert_events e LEFT JOIN alert_projections p ON p.event_id = e.event_id
-    WHERE e.ledger_id = 'personal' AND e.event_id = ? AND e.device_id = ?`).bind(eventId, deviceId).first<ExistingReceiptRow>();
+async function existingReceipt(db:D1Database,context:CaptureContext,eventId:string):Promise<ExistingReceiptRow|null> {
+  return db.prepare(`SELECT COALESCE(e.raw_event_id,e.event_id) AS event_id,e.payload_digest,p.id AS projection_id,p.state AS projection_state,p.reason_codes_json,p.revision,e.device_id
+    FROM alert_events e LEFT JOIN alert_projections p ON p.event_id=e.id AND p.ledger_id=e.ledger_id
+    WHERE e.ledger_id=? AND COALESCE(e.raw_event_id,e.event_id)=? AND e.device_id=?`).bind(
+      context.ledgerId,
+      eventId,
+      context.deviceId,
+    ).first<ExistingReceiptRow>();
 }
-
-async function existingEventOwner(db: D1Database, eventId: string) {
-  return db.prepare(`SELECT payload_digest, device_id FROM alert_events
-    WHERE ledger_id = 'personal' AND event_id = ?`).bind(eventId).first<{ payload_digest: string; device_id: string | null }>();
+async function existingEventOwner(db:D1Database,context:CaptureContext,eventId:string) {
+  return db.prepare('SELECT payload_digest,device_id FROM alert_events WHERE ledger_id=? AND COALESCE(raw_event_id,event_id)=?').bind(
+    context.ledgerId,
+    eventId,
+  ).first<{payload_digest:string;device_id:string|null}>();
 }
-
-function eventInsert(db: D1Database, scoped: ScopedEvent) {
+function eventInsert(db:D1Database,scoped:ScopedEvent) {
   const event = scoped.event;
   const bankTime = event.bankDisplayedTime;
   return db.prepare(`INSERT INTO alert_events
-    (id, ledger_id, device_id, event_id, observation_id, source_profile_id, parser_version, notification_posted_at, captured_at,
-     event_time_basis, event_type, direction, instrument_hint_kind, instrument_hint_value, account_id,
-     event_money_currency, event_money_amount_minor, primary_money_role, amounts_json, fee_treatment, bank_reference,
-     bank_displayed_time, bank_displayed_zone, bank_displayed_precision, bank_year_provenance, merchant, completeness_json,
-     payload_digest)
-    VALUES (
-      ?, 'personal',
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?
-    )`).bind(
-    event.eventId, scoped.deviceId, event.eventId, event.observationId, event.sourceProfileId, event.parserVersion, event.notificationPostedAt,
-    event.capturedAt, event.eventTimeBasis, event.eventType, event.direction, event.instrumentHint?.kind ?? null,
-    event.instrumentHint?.value ?? null, scoped.accountId, event.eventMoney?.currency ?? null, event.eventMoney?.amountMinor ?? null,
-    event.primaryMoneyRole, JSON.stringify(event.amounts), event.feeTreatment, event.bankReference ?? null,
-    bankTime?.localDateTime ?? null, bankTime?.zone ?? null, bankTime?.precision ?? null, bankTime?.yearProvenance ?? null,
-    event.merchant ?? null, JSON.stringify(event.completeness), scoped.digest,
+    (id,ledger_id,device_id,event_id,raw_event_id,observation_id,source_profile_id,parser_version,notification_posted_at,captured_at,
+    event_time_basis,event_type,direction,instrument_hint_kind,instrument_hint_value,account_id,event_money_currency,event_money_amount_minor,
+    primary_money_role,amounts_json,fee_treatment,bank_reference,bank_displayed_time,bank_displayed_zone,bank_displayed_precision,bank_year_provenance,merchant,completeness_json,payload_digest)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      scoped.internalId,
+      scoped.context.ledgerId,
+      scoped.deviceId,
+      scoped.internalId,
+      event.eventId,
+      event.observationId,
+      event.sourceProfileId,
+      event.parserVersion,
+      event.notificationPostedAt,
+      event.capturedAt,
+      event.eventTimeBasis,
+      event.eventType,
+      event.direction,
+      event.instrumentHint?.kind??null,
+      event.instrumentHint?.value??null,
+      scoped.accountId,
+      event.eventMoney?.currency??null,
+      event.eventMoney?.amountMinor??null,
+      event.primaryMoneyRole,
+      JSON.stringify(event.amounts),
+      event.feeTreatment,
+      event.bankReference??null,
+      bankTime?.localDateTime??null,
+      bankTime?.zone??null,
+      bankTime?.precision??null,
+      bankTime?.yearProvenance??null,
+      event.merchant??null,
+      JSON.stringify(event.completeness),
+      scoped.digest,
+    );
+}
+function guarded(db:D1Database,scoped:ScopedEvent,sql:string,values:readonly unknown[]) {
+  return db.prepare(`${sql} WHERE EXISTS (SELECT 1 FROM alert_events e WHERE e.ledger_id=? AND e.id=? AND e.device_id=? AND e.payload_digest=?)`).bind(
+    ...values,
+    scoped.context.ledgerId,
+    scoped.internalId,
+    scoped.deviceId,
+    scoped.digest,
   );
 }
-
-function guarded(db: D1Database, scoped: ScopedEvent, sql: string, values: readonly unknown[]) {
-  return db.prepare(`${sql} WHERE EXISTS (SELECT 1 FROM alert_events e WHERE e.ledger_id = 'personal' AND e.event_id = ? AND e.device_id = ? AND e.payload_digest = ?)`).bind(...values, scoped.event.eventId, scoped.deviceId, scoped.digest);
+function automaticConfirmationStatements(db:D1Database,scoped:ScopedEvent,match:AlertStatementMatch):D1Statement[] {
+  const id = scoped.internalId;
+  const ledger = scoped.context.ledgerId;
+  const linkId=`alert-review:${encodeURIComponent(`${id}:${match.statementTransactionId}`)}`;
+  const linkExists="EXISTS (SELECT 1 FROM alert_event_links WHERE id=? AND ledger_id=? AND relation='confirms')";
+  return [
+    db.prepare(`INSERT INTO alert_event_links(id,ledger_id,from_event_id,to_transaction_id,relation,evidence_basis,revision)
+      SELECT ?,?,?,?,'confirms','bank_reference',2 WHERE EXISTS (SELECT 1 FROM alert_events e WHERE e.ledger_id=? AND e.id=? AND e.device_id=? AND e.payload_digest=?)
+      AND NOT EXISTS (SELECT 1 FROM alert_event_links WHERE ledger_id=? AND relation='confirms' AND (from_event_id=? OR to_transaction_id=?))`)
+      .bind(linkId,ledger,id,match.statementTransactionId,ledger,id,scoped.deviceId,scoped.digest,ledger,id,match.statementTransactionId),
+    db.prepare(`UPDATE alert_projections SET transaction_id=?,state='superseded',reason_codes_json=?,counted_currency=NULL,counted_amount_minor=NULL,revision=2,updated_at=CURRENT_TIMESTAMP WHERE id=? AND ledger_id=? AND revision=1 AND ${linkExists}`).bind(
+      match.statementTransactionId,
+      JSON.stringify(['confirmed_elsewhere']),
+      id,
+      ledger,
+      linkId,
+      ledger,
+    ),
+    db.prepare(`UPDATE transactions SET status='confirmed',updated_at=CURRENT_TIMESTAMP WHERE id=? AND ledger_id=? AND source='statement' AND ${linkExists}`).bind(
+      match.statementTransactionId,
+      ledger,
+      linkId,
+      ledger,
+    ),
+    db.prepare(`INSERT INTO alert_projection_provenance(id,ledger_id,projection_id,source_kind,source_id,basis,revision) SELECT ?,?,?,'statement',?,'statement',2 WHERE ${linkExists}`).bind(
+      `${id}:statement:${match.sourceRecordId}:2`,
+      ledger,
+      id,
+      match.sourceRecordId,
+      linkId,
+      ledger,
+    ),
+    db.prepare(`UPDATE transactions SET status='needs_review',updated_at=CURRENT_TIMESTAMP WHERE id=? AND ledger_id=? AND source='alert' AND EXISTS (SELECT 1 FROM annotation_revisions WHERE transaction_id=? AND ledger_id=?) AND ${linkExists}`).bind(
+      id,
+      ledger,
+      id,
+      ledger,
+      linkId,
+      ledger,
+    ),
+    db.prepare(`DELETE FROM transactions WHERE id=? AND ledger_id=? AND source='alert'
+      AND NOT EXISTS (SELECT 1 FROM annotation_revisions WHERE transaction_id=? AND ledger_id=?)
+      AND NOT EXISTS (SELECT 1 FROM alert_projections WHERE transaction_id=? AND event_id<>? AND ledger_id=?)
+      AND NOT EXISTS (SELECT 1 FROM alert_event_links WHERE to_transaction_id=? AND ledger_id=?) AND ${linkExists}`).bind(
+        id,
+        ledger,
+        id,
+        ledger,
+        id,
+        id,
+        ledger,
+        id,
+        ledger,
+        linkId,
+        ledger,
+      ),
+  ];
 }
-
-function projectionStatements(db: D1Database, scoped: ScopedEvent, projection: ReturnType<typeof deriveAlertProjection>, resolution: StatementResolution = { candidates: [], auto: null }): D1Statement[] {
-  const event = scoped.event;
+function projectionStatements(db:D1Database,scoped:ScopedEvent,projection:ReturnType<typeof deriveAlertProjection>,resolution:StatementResolution):D1Statement[] {
+  const id = scoped.internalId;
+  const ledger = scoped.context.ledgerId;
   const transaction = projection.transaction;
   const statements: D1Statement[] = [];
-  const projectionTransactionId = transaction?.id ?? null;
-  if (transaction) {
-    statements.push(guarded(db, scoped, `INSERT INTO transactions
-      (id, account_id, date, merchant, amount_minor, currency, category, kind, status, source, fingerprint, fx_lock_date)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`, [event.eventId, transaction.accountId, transaction.date, transaction.merchant, transaction.amountMinor, transaction.currency, transaction.category, transaction.kind, transaction.status, transaction.source, transaction.fingerprint, transaction.date]));
-    statements.push(guarded(db, scoped, `INSERT INTO transaction_source_records
-      (id, ledger_id, source_kind, identity_key, transaction_id, account_id, event_id, content_digest)
-      SELECT ?, 'personal', 'alert', ?, ?, ?, ?, ?`, [`source-record:${event.eventId}`, `alert:personal:${event.eventId}`, event.eventId, transaction.accountId, event.eventId, scoped.digest]));
+  if(transaction) {
+    statements.push(guarded(
+      db,
+      scoped,
+      `INSERT INTO transactions(id,ledger_id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,fx_lock_date) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?`,
+      [
+        id, ledger, transaction.accountId,
+        transaction.date, transaction.merchant, transaction.amountMinor,
+        transaction.currency, transaction.category, transaction.kind,
+        transaction.status, transaction.source, transaction.fingerprint,
+        transaction.date,
+      ],
+    ));
+    statements.push(guarded(
+      db,
+      scoped,
+      `INSERT INTO transaction_source_records(id,ledger_id,source_kind,identity_key,transaction_id,account_id,event_id,content_digest) SELECT ?,?,'alert',?,?,?,?,?`,
+      [
+        `source-record:${id}`, ledger, `alert:${ledger}:${id}`,
+        id, transaction.accountId, id,
+        scoped.digest,
+      ],
+    ));
   }
-  statements.push(guarded(db, scoped, `INSERT INTO alert_projections
-    (id, ledger_id, event_id, transaction_id, state, reason_codes_json, counted_currency, counted_amount_minor, revision)
-    SELECT ?, 'personal', ?, ?, ?, ?, ?, ?, 1`, [event.eventId, event.eventId, projectionTransactionId, projection.state, JSON.stringify(projection.reasonCodes), projection.countedMoney?.currency ?? null, projection.countedMoney?.amountMinor ?? null]));
-  statements.push(guarded(db, scoped, `INSERT INTO alert_projection_provenance
-    (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
-    SELECT ?, 'personal', ?, 'alert', ?, 'alert_event', ?`, [`${event.eventId}:alert:${event.eventId}:1`, event.eventId, event.eventId, 1]));
-  for (const match of resolution.candidates) {
-    const candidateId = `statement-candidate:${encodeURIComponent(`${match.sourceRecordId}:${event.eventId}`)}`;
-    statements.push(guarded(db, scoped, `INSERT INTO statement_reconciliation_candidates
-      (id, ledger_id, source_record_id, statement_transaction_id, candidate_transaction_id, score, reason_codes_json, evidence_basis, status)
-      SELECT ?, 'personal', ?, ?, ?, ?, ?, ?, 'open'`, [candidateId, match.sourceRecordId, match.statementTransactionId, event.eventId, match.score, JSON.stringify(match.reasonCodes), match.basis]));
-  }
-  if (resolution.auto && transaction) {
-    const linkId = `alert-review:${encodeURIComponent(`${event.eventId}:${resolution.auto.statementTransactionId}`)}`;
-    const linkExists = `(SELECT 1 FROM alert_event_links WHERE id = '${linkId.replace(/'/g, "''")}' AND relation = 'confirms')`;
-    statements.push(db.prepare(`INSERT INTO alert_event_links
-      (id, ledger_id, from_event_id, to_transaction_id, relation, evidence_basis, revision)
-      SELECT ?, 'personal', ?, ?, 'confirms', 'bank_reference', 2
-      WHERE EXISTS (SELECT 1 FROM alert_events e WHERE e.ledger_id = 'personal' AND e.event_id = ? AND e.device_id = ? AND e.payload_digest = ?)
-        AND NOT EXISTS (SELECT 1 FROM alert_event_links existing
-          WHERE existing.ledger_id = 'personal' AND existing.relation = 'confirms'
-            AND (existing.from_event_id = ? OR existing.to_transaction_id = ?))`)
-      .bind(linkId, event.eventId, resolution.auto.statementTransactionId, event.eventId, scoped.deviceId, scoped.digest, event.eventId, resolution.auto.statementTransactionId));
-    statements.push(db.prepare(`UPDATE alert_projections SET transaction_id = ?, state = 'superseded', reason_codes_json = ?, counted_currency = NULL, counted_amount_minor = NULL, revision = 2, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND revision = 1 AND EXISTS ${linkExists}`)
-      .bind(resolution.auto.statementTransactionId, JSON.stringify(['confirmed_elsewhere']), event.eventId));
-    statements.push(db.prepare(`UPDATE transactions SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND source = 'statement' AND EXISTS ${linkExists}`)
-      .bind(resolution.auto.statementTransactionId));
-    statements.push(db.prepare(`INSERT INTO alert_projection_provenance
-      (id, ledger_id, projection_id, source_kind, source_id, basis, revision)
-      SELECT ?, 'personal', ?, 'statement', ?, 'statement', 2
-      WHERE EXISTS ${linkExists}`)
-      .bind(`${event.eventId}:statement:${resolution.auto.sourceRecordId}:2`, event.eventId, resolution.auto.sourceRecordId));
-    statements.push(db.prepare(`UPDATE transactions SET status = 'needs_review', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND source = 'alert'
-        AND EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ?)
-        AND EXISTS ${linkExists}`)
-        .bind(event.eventId, event.eventId));
-    statements.push(db.prepare(`DELETE FROM transactions
-      WHERE id = ? AND source = 'alert'
-        AND NOT EXISTS (SELECT 1 FROM annotation_revisions annotation WHERE annotation.transaction_id = ?)
-        AND NOT EXISTS (SELECT 1 FROM alert_projections other WHERE other.transaction_id = ? AND other.event_id <> ?)
-        AND NOT EXISTS (SELECT 1 FROM alert_event_links existing WHERE existing.to_transaction_id = ?)
-        AND EXISTS ${linkExists}`)
-      .bind(event.eventId, event.eventId, event.eventId, event.eventId, event.eventId));
-  }
+  statements.push(guarded(
+    db,
+    scoped,
+    `INSERT INTO alert_projections(id,ledger_id,event_id,transaction_id,state,reason_codes_json,counted_currency,counted_amount_minor,revision) SELECT ?,?,?,?,?,?,?,?,1`,
+    [
+      id, ledger, id,
+      transaction?id:null, projection.state, JSON.stringify(projection.reasonCodes),
+      projection.countedMoney?.currency??null, projection.countedMoney?.amountMinor??null,
+    ],
+  ));
+  statements.push(guarded(
+    db,
+    scoped,
+    `INSERT INTO alert_projection_provenance(id,ledger_id,projection_id,source_kind,source_id,basis,revision) SELECT ?,?,?,'alert',?,'alert_event',1`,
+    [
+      `${id}:alert:${id}:1`, ledger, id,
+      id,
+    ],
+  ));
+  for(const match of resolution.candidates)statements.push(guarded(
+    db,
+    scoped,
+    `INSERT INTO statement_reconciliation_candidates(id,ledger_id,source_record_id,statement_transaction_id,candidate_transaction_id,score,reason_codes_json,evidence_basis,status) SELECT ?,?,?,?,?,?,?,?,'open'`,
+    [
+      `statement-candidate:${encodeURIComponent(`${match.sourceRecordId}:${id}`)}`, ledger, match.sourceRecordId,
+      match.statementTransactionId, id, match.score,
+      JSON.stringify(match.reasonCodes), match.basis,
+    ],
+  ));
+  if(resolution.auto&&transaction)statements.push(...automaticConfirmationStatements(db,scoped,resolution.auto));
   return statements;
 }
-
-function digestStatement(db: D1Database, scoped: ScopedEvent) {
-  return db.prepare(`INSERT INTO alert_event_digests (event_id, algorithm, digest)
-    SELECT ?, 'payload-sha256', ? WHERE EXISTS (
-      SELECT 1 FROM alert_events WHERE ledger_id = 'personal' AND event_id = ? AND device_id = ? AND payload_digest = ?
-    )`).bind(scoped.event.eventId, scoped.digest, scoped.event.eventId, scoped.deviceId, scoped.digest);
+function digestStatement(db:D1Database,scoped:ScopedEvent) {
+  return guarded(
+    db,
+    scoped,
+    `INSERT INTO alert_event_digests(event_id,ledger_id,algorithm,digest) SELECT ?,?,'payload-sha256',?`,
+    [
+      scoped.internalId,
+      scoped.context.ledgerId,
+      scoped.digest,
+    ],
+  );
+}
+function eventScope(scoped:ScopedEvent) {
+  return {sourceProfileId:scoped.event.sourceProfileId,accountId:scoped.accountId,currency:scoped.scopeCurrency,instrumentHint:scoped.event.instrumentHint};
+}
+async function revalidateEvents(db:D1Database,context:CaptureContext,events:ScopedEvent[]) {
+  await assertCaptureAuthority(db,context);
+  for(const scoped of events)await assertCaptureScope(db,context,eventScope(scoped));
 }
 
-async function readStoredReceipts(db: D1Database, eventIds: readonly string[], deviceId: string) {
+async function readStoredReceipts(db: D1Database, context: CaptureContext, eventIds: readonly string[]) {
   const rows = new Map<string, ExistingReceiptRow>();
   for (const eventId of eventIds) {
-    const row = await existingReceipt(db, eventId, deviceId);
+    const row = await existingReceipt(db, context, eventId);
     if (row) rows.set(eventId, row);
   }
   return rows;
 }
 
-export async function ingestAlertBatch(db: D1Database, context: CaptureContext, value: unknown, retryOnUnique = true): Promise<IngestBatchResponse> {
+async function resolveStatement(db: D1Database, scoped: ScopedEvent, projection: ReturnType<typeof deriveAlertProjection>, reserved: Set<string>): Promise<StatementResolution> {
+  const transaction = projection.transaction;
+  if (!transaction) return { candidates: [], auto: null };
+  const matches = await findAlertStatementMatches(db, scoped.context, {
+    accountId: scoped.accountId, date: transaction.date, merchant: transaction.merchant,
+    amountMinor: transaction.amountMinor, currency: transaction.currency, kind: transaction.kind,
+    bankReference: scoped.event.bankReference ?? null,
+  });
+  const bankMatches = matches.filter(match => match.basis === 'bank_reference');
+  if (bankMatches.length !== 1 || reserved.has(bankMatches[0].statementTransactionId)) return { candidates: matches, auto: null };
+  const match = bankMatches[0];
+  const occupied = await db.prepare(`SELECT id FROM alert_event_links
+    WHERE ledger_id = ? AND relation = 'confirms' AND to_transaction_id = ? LIMIT 1`)
+    .bind(scoped.context.ledgerId, match.statementTransactionId).first();
+  if (occupied) return { candidates: matches, auto: null };
+  reserved.add(match.statementTransactionId);
+  return { candidates: [match], auto: match };
+}
+
+function isAlertPublicationConflict(error: unknown) {
+  return isReconciliationUniqueConflict(error)
+    || (error instanceof Error && error.message.includes('alert event identity collision'));
+}
+
+function repeatedAcknowledgment(ack: IngestAck): IngestAck {
+  if (ack.status !== 'accepted' && ack.status !== 'replayed') return { ...ack };
+  if (!ack.receiptId || ack.revision === null || ack.projectionState === null || ack.error !== null) {
+    throw new Error('The repeated event has no durable receipt.');
+  }
+  return { ...ack, status: 'replayed' };
+}
+
+function resolveAcknowledgments(acks: Array<IngestAck | null>, duplicates: Map<number, number>) {
+  return acks.map((ack, index) => {
+    const first = duplicates.get(index);
+    if (first === undefined) return ack ?? rejection('event-' + index, ['invalid_event']);
+    const resolved = acks[first];
+    if (!resolved) throw new Error('The repeated event has no resolved acknowledgment.');
+    return repeatedAcknowledgment(resolved);
+  });
+}
+
+export async function ingestAlertBatch(db: D1Database, inputContext: CaptureContext, value: unknown, retryOnUnique = true): Promise<IngestBatchResponse> {
+  const context=immutableCaptureContext(inputContext);
+  await assertCaptureAuthority(db,context);
+  const touched:ScopedEvent[]=[];
   const events = parseAlertBatch(value);
   const acks: Array<IngestAck | null> = Array.from({ length: events.length }, () => null);
   const firstIndex = new Map<string, number>();
+  const duplicateIndexes = new Map<number, number>();
   const eventDigests = new Map<string, string>();
   const pending: ScopedEvent[] = [];
   const pendingIndex = new Map<string, number>();
@@ -371,19 +513,21 @@ export async function ingestAlertBatch(db: D1Database, context: CaptureContext, 
       acks[index] = rejection(event.eventId, scoped.reasonCodes);
       continue;
     }
+    touched.push(scoped);
     const priorDigest = eventDigests.get(event.eventId);
     if (priorDigest !== undefined) {
-      acks[index] = priorDigest === digest ? { ...(acks[firstIndex.get(event.eventId)!] as IngestAck), status: 'replayed' } : conflict(event.eventId);
+      if (priorDigest === digest) duplicateIndexes.set(index, firstIndex.get(event.eventId)!);
+      else acks[index] = conflict(event.eventId);
       continue;
     }
     eventDigests.set(event.eventId, digest);
     firstIndex.set(event.eventId, index);
-    const existing = await existingReceipt(db, event.eventId, context.deviceId);
+    const existing = await existingReceipt(db, context, event.eventId);
     if (existing) {
       acks[index] = existing.payload_digest === digest ? receipt(existing, 'replayed') : conflict(event.eventId);
       continue;
     }
-    if (await existingEventOwner(db, event.eventId)) {
+    if (await existingEventOwner(db, context, event.eventId)) {
       acks[index] = conflict(event.eventId);
       continue;
     }
@@ -393,50 +537,27 @@ export async function ingestAlertBatch(db: D1Database, context: CaptureContext, 
   }
 
   if (pending.length > 0) {
-    const statements: D1Statement[] = [];
+    const statements: D1Statement[] = [capturePublicationGuard(db,context)];
     const insertIndexes = new Map<string, number>();
     const reservedStatementMatches = new Set<string>();
     for (const scoped of pending) {
+      statements.push(capturePublicationGuard(db,context,eventScope(scoped)));
       insertIndexes.set(scoped.event.eventId, statements.length);
       statements.push(eventInsert(db, scoped));
       statements.push(digestStatement(db, scoped));
-      const projection = deriveAlertProjection(scoped.event, scoped.mapping, []);
-      let resolution: StatementResolution = { candidates: [], auto: null };
-      if (projection.transaction) {
-        const matches = await findAlertStatementMatches(db, {
-          accountId: scoped.accountId,
-          date: projection.transaction.date,
-          merchant: projection.transaction.merchant,
-          amountMinor: projection.transaction.amountMinor,
-          currency: projection.transaction.currency,
-          kind: projection.transaction.kind,
-          bankReference: scoped.event.bankReference ?? null,
-        });
-        const bankMatches = matches.filter((match) => match.basis === 'bank_reference');
-        if (bankMatches.length === 1 && !reservedStatementMatches.has(bankMatches[0].statementTransactionId)) {
-          const occupied = await db.prepare(`SELECT id FROM alert_event_links
-            WHERE ledger_id = ? AND relation = 'confirms' AND to_transaction_id = ? LIMIT 1`)
-            .bind('personal', bankMatches[0].statementTransactionId).first<{ id: string }>();
-          if (!occupied) {
-            resolution = { candidates: [bankMatches[0]], auto: bankMatches[0] };
-            reservedStatementMatches.add(bankMatches[0].statementTransactionId);
-          } else {
-            resolution = { candidates: matches, auto: null };
-          }
-        } else {
-          resolution = { candidates: matches, auto: null };
-        }
-      }
+      const projection = deriveAlertProjection({...scoped.event,eventId:scoped.internalId}, scoped.mapping, []);
+      const resolution = await resolveStatement(db, scoped, projection, reservedStatementMatches);
       statements.push(...projectionStatements(db, scoped, projection, resolution));
     }
     let batchResults: D1Result[] | null = null;
     try {
       batchResults = await db.batch(statements);
     } catch (error) {
-      const rows = await readStoredReceipts(db, pending.map((item) => item.event.eventId), context.deviceId);
+      await revalidateEvents(db,context,touched);
+      const rows = await readStoredReceipts(db, context, pending.map((item) => item.event.eventId));
       const owners = new Map<string, { payload_digest: string; device_id: string | null }>();
       for (const scoped of pending) {
-        const owner = await existingEventOwner(db, scoped.event.eventId);
+        const owner = await existingEventOwner(db, context, scoped.event.eventId);
         if (owner) owners.set(scoped.event.eventId, owner);
       }
       const reconciled = pending.every((scoped) => {
@@ -453,24 +574,21 @@ export async function ingestAlertBatch(db: D1Database, context: CaptureContext, 
         }
         return false;
       });
-      if (!reconciled && isReconciliationUniqueConflict(error) && retryOnUnique) {
+      if (!reconciled && isAlertPublicationConflict(error) && retryOnUnique) {
         const retry = await ingestAlertBatch(db, context, { events: pending.map((item) => item.event) }, false);
         for (const [pendingSlot, scoped] of pending.entries()) {
           const slot = pendingIndex.get(scoped.event.eventId)!;
           const finalAck = retry.acks[pendingSlot];
           acks[slot] = finalAck;
-          for (const [index, candidate] of events.entries()) {
-            if (!('reasonCodes' in candidate) && candidate.eventId === scoped.event.eventId && index !== slot && acks[index]?.status !== 'conflict') acks[index] = { ...finalAck, status: 'replayed' };
-          }
         }
-      } else if (!reconciled && isReconciliationUniqueConflict(error)) {
+      } else if (!reconciled && isAlertPublicationConflict(error)) {
         for (const scoped of pending) acks[pendingIndex.get(scoped.event.eventId)!] = conflict(scoped.event.eventId);
       } else if (!reconciled) {
         throw error;
       }
     }
     if (batchResults) {
-      const rows = await readStoredReceipts(db, pending.map((item) => item.event.eventId), context.deviceId);
+      const rows = await readStoredReceipts(db, context, pending.map((item) => item.event.eventId));
       for (const scoped of pending) {
         const stored = rows.get(scoped.event.eventId);
         if (!stored) throw new Error('Alert ingestion commit did not produce a receipt.');
@@ -481,55 +599,72 @@ export async function ingestAlertBatch(db: D1Database, context: CaptureContext, 
           const inserted = Number(batchResults[insertIndexes.get(scoped.event.eventId)!]?.meta?.changes ?? 1) > 0;
           const finalAck = receipt(stored, inserted ? 'accepted' : 'replayed');
           acks[slot] = finalAck;
-          for (const [index, candidate] of events.entries()) {
-            if (!('reasonCodes' in candidate) && candidate.eventId === scoped.event.eventId && index !== slot && acks[index]?.status !== 'conflict') acks[index] = { ...finalAck, status: 'replayed' };
-          }
         }
       }
     }
   }
 
-  return { acks: acks.map((ack, index) => ack ?? rejection('event-' + index, ['invalid_event'])) };
+  await revalidateEvents(db,context,touched);
+  return { acks: resolveAcknowledgments(acks, duplicateIndexes) };
 }
 
-async function scopedStatusRows(db: D1Database, context: CaptureContext) {
-  return db.prepare(`SELECT source_profile_id, account_id, currency, instrument_hint_kind, instrument_hint_value FROM device_source_scopes
-    WHERE device_id = ? AND status = 'approved' AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-    ORDER BY source_profile_id, account_id, currency, instrument_hint_kind, instrument_hint_value`).bind(context.deviceId).all<{
-      source_profile_id: string;
-      account_id: string;
-      currency: string;
-      instrument_hint_kind: string;
-      instrument_hint_value: string;
-    }>();
+async function activeStatusScopes(db:D1Database,context:CaptureContext) {
+  const scopes=[];
+  for(const scope of context.sourceScopes) {
+    const guard=captureScopePredicate(context,scope);
+    if(await db.prepare(`SELECT 1 WHERE ${guard.sql}`).bind(...guard.bindings).first())scopes.push(scope);
+  }
+  return scopes;
+}
+export async function readCaptureStatus(db:D1Database,inputContext:CaptureContext,eventId?:string|null) {
+  const context=immutableCaptureContext(inputContext);
+  await assertCaptureAuthority(db,context);
+  const credentialExpiresAt=normalizeRfc3339Instant(context.expiresAt);
+  if(!credentialExpiresAt)throw new Error('The capture credential expiry is not a valid RFC3339 instant.');
+  const scopes=await activeStatusScopes(db,context);
+  const row=await db.prepare(`SELECT COALESCE(e.raw_event_id,e.event_id) AS event_id,e.payload_digest,p.id AS projection_id,p.state AS projection_state,p.reason_codes_json,p.revision,e.created_at,e.source_profile_id,e.account_id,e.event_money_currency,e.instrument_hint_kind,e.instrument_hint_value
+    FROM alert_events e LEFT JOIN alert_projections p ON p.event_id=e.id AND p.ledger_id=e.ledger_id
+    WHERE e.ledger_id=? AND e.device_id=? AND (? IS NULL OR COALESCE(e.raw_event_id,e.event_id)=?) AND EXISTS
+    (SELECT 1 FROM json_each(?) s WHERE json_extract(s.value,'$.sourceProfileId')=e.source_profile_id AND json_extract(s.value,'$.accountId')=e.account_id
+    AND (e.event_money_currency IS NULL OR json_extract(s.value,'$.currency')=e.event_money_currency)
+    AND COALESCE(json_extract(s.value,'$.instrumentHint.kind'),'none')=COALESCE(e.instrument_hint_kind,'none')
+    AND COALESCE(json_extract(s.value,'$.instrumentHint.value'),'')=COALESCE(e.instrument_hint_value,''))
+    ORDER BY e.created_at DESC,e.id DESC LIMIT 1`).bind(
+      context.ledgerId,
+      context.deviceId,
+      eventId??null,
+      eventId??null,
+      JSON.stringify(scopes),
+    ).first<StatusReceiptRow>();
+  await assertStatusReceiptScope(db,context,scopes,row);
+  await assertCaptureAuthority(db,context);
+  return {deviceId:context.deviceId,credentialExpiresAt,ingestionState:'ready' as const,...statusReceipt(row)};
 }
 
-export async function readCaptureStatus(db: D1Database, context: CaptureContext, eventId?: string | null): Promise<{ deviceId: string; credentialExpiresAt: string; ingestionState: 'ready'; lastAcceptedAt: string | null; receipt: IngestAck | null }> {
-  const credentialExpiresAt = normalizeRfc3339Instant(context.expiresAt);
-  if (!credentialExpiresAt) throw new Error('The capture credential expiry is not a valid RFC3339 instant.');
-  const scopes = await scopedStatusRows(db, context);
-  if (scopes.results.length === 0) return { deviceId: context.deviceId, credentialExpiresAt, ingestionState: 'ready', lastAcceptedAt: null, receipt: null };
-  const clauses = scopes.results.map(() => `(e.source_profile_id = ? AND e.account_id = ? AND (e.event_money_currency = ? OR e.event_money_currency IS NULL) AND COALESCE(e.instrument_hint_kind, 'none') = ? AND COALESCE(e.instrument_hint_value, '') = ?)`).join(' OR ');
-  const bindings = scopes.results.flatMap((scope) => [
-    scope.source_profile_id,
-    scope.account_id,
-    scope.currency,
-    scope.instrument_hint_kind,
-    scope.instrument_hint_value,
-  ]);
-  const query = eventId ? ` AND e.event_id = ?` : '';
-  const rows = await db.prepare(`SELECT e.event_id, e.payload_digest, p.id AS projection_id, p.state AS projection_state,
-      p.reason_codes_json, p.revision, e.created_at
-    FROM alert_events e LEFT JOIN alert_projections p ON p.event_id = e.event_id
-    WHERE e.ledger_id = 'personal' AND e.device_id = ? AND (${clauses})${query}
-    ORDER BY e.created_at DESC, e.event_id DESC LIMIT 1`).bind(context.deviceId, ...bindings, ...(eventId ? [eventId] : [])).all<ExistingReceiptRow & { created_at: string }>();
-  const row = rows.results[0];
-  return {
-    deviceId: context.deviceId,
-    credentialExpiresAt,
-    ingestionState: 'ready',
-    lastAcceptedAt: row?.created_at ? new Date(/Z$|[+-]\d{2}:\d{2}$/.test(row.created_at) ? row.created_at : `${row.created_at.replace(' ', 'T')}Z`).toISOString() : null,
-    receipt: row ? receipt(row, 'replayed') : null,
-  };
+interface StatusReceiptRow extends ExistingReceiptRow {
+  created_at: string;
+  source_profile_id: string;
+  account_id: string;
+  event_money_currency: string | null;
+  instrument_hint_kind: string | null;
+  instrument_hint_value: string | null;
 }
-
+function statusHintMatches(scope: CaptureScopeRecord, row: StatusReceiptRow) {
+  return (scope.instrumentHint?.kind ?? 'none') === (row.instrument_hint_kind ?? 'none')
+    && (scope.instrumentHint?.value ?? '') === (row.instrument_hint_value ?? '');
+}
+function statusScopeMatches(scope: CaptureScopeRecord, row: StatusReceiptRow) {
+  return scope.sourceProfileId === row.source_profile_id && scope.accountId === row.account_id
+    && (!row.event_money_currency || scope.currency === row.event_money_currency) && statusHintMatches(scope,row);
+}
+async function assertStatusReceiptScope(db: D1Database, context: CaptureContext, scopes: CaptureScopeRecord[], row: StatusReceiptRow | null) {
+  if (!row) return;
+  const scope = scopes.find(candidate => statusScopeMatches(candidate,row));
+  if (!scope) throw new Error('The capture receipt has no approved source scope.');
+  await assertCaptureScope(db,context,scope);
+}
+function statusReceipt(row: StatusReceiptRow | null) {
+  if (!row) return {lastAcceptedAt:null, receipt:null};
+  const instant = /Z$|[+-]\d{2}:\d{2}$/.test(row.created_at) ? row.created_at : `${row.created_at.replace(' ','T')}Z`;
+  return {lastAcceptedAt:new Date(instant).toISOString(),receipt:receipt(row,'replayed')};
+}

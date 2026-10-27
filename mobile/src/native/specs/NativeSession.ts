@@ -4,7 +4,7 @@ type Operation = {operationId: string; kind: string; status: string; updatedAt: 
 export type LoginRequest = {staySignedIn: boolean; pendingDestination: string | null};
 export type OperationRequest = {operationId: string};
 export type OperationPageQuery = {offset: number; limit: number};
-export type SessionSnapshot = {state: string; expiresAt: string | null; pendingDestination: string | null; reason: string | null; pendingRevocations: number; environment: string};
+export type SessionSnapshot = {userId: string | null; ledgerId: string | null; sessionEpoch: string | null; state: string; expiresAt: string | null; pendingDestination: string | null; reason: string | null; pendingRevocations: number; environment: string};
 export interface Spec extends TurboModule {
   getSnapshot(): Promise<SessionSnapshot>;
   refreshOnResume(): Promise<SessionSnapshot>;

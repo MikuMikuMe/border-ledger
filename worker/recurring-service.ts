@@ -1,3 +1,4 @@
+import type { LedgerContext } from './tenant-context';
 import type {
   RecurringClassification,
   RecurringDetailPage,
@@ -79,10 +80,10 @@ function membershipDto(membership: RecurringDetailPage['history'][number]) {
   };
 }
 
-export async function readMobileRecurringPage(db: D1Database, params: URLSearchParams) {
+export async function readMobileRecurringPage(db: D1Database, context: LedgerContext, params: URLSearchParams) {
   const query = validateRecurringListQuery(params);
   if ('error' in query) invalid(query.error);
-  const page = await readRecurringPage(db, query);
+  const page = await readRecurringPage(db, context, query);
   return {
     items: page.streams.map(streamDto),
     page: { nextCursor: page.nextCursor, limit: query.limit ?? DEFAULT_LIMIT },
@@ -94,7 +95,7 @@ export async function readMobileRecurringPage(db: D1Database, params: URLSearchP
   };
 }
 
-export async function readMobileRecurringSummary(db: D1Database, params: URLSearchParams) {
+export async function readMobileRecurringSummary(db: D1Database, context: LedgerContext, params: URLSearchParams) {
   const queryParams = new URLSearchParams(params);
   // The date used for upcoming analysis is server-owned; clients cannot move
   // the forecast window by submitting a different "today" value.
@@ -103,7 +104,7 @@ export async function readMobileRecurringSummary(db: D1Database, params: URLSear
   queryParams.set('today', todayInLedgerZone());
   const query = validateRecurringSummaryQuery(queryParams);
   if ('error' in query) invalid(query.error);
-  const summary = await readRecurringSummary(db, query);
+  const summary = await readRecurringSummary(db, context, query);
   return {
     ...summary,
     upcoming: summary.upcoming.map((stream) => ({ ...streamDto(stream), nextExpectedAmountMinor: stream.nextExpectedAmountMinor })),
@@ -111,11 +112,11 @@ export async function readMobileRecurringSummary(db: D1Database, params: URLSear
   };
 }
 
-export async function readMobileRecurringDetail(db: D1Database, id: string, params: URLSearchParams) {
+export async function readMobileRecurringDetail(db: D1Database, context: LedgerContext, id: string, params: URLSearchParams) {
   if (!id || id.length > 128) invalid('The recurring stream id is not valid.');
   const query = validateRecurringListQuery(params);
   if ('error' in query) invalid(query.error);
-  const detail = await readRecurringDetail(db, id, query.cursor, query.limit);
+  const detail = await readRecurringDetail(db, context, id, { cursor: query.cursor, limit: query.limit });
   if (!detail) throw new RecurringServiceError('not_found', 'Recurring stream not found.', 404);
   return {
     stream: streamDto(detail.stream),
@@ -125,7 +126,7 @@ export async function readMobileRecurringDetail(db: D1Database, id: string, para
   };
 }
 
-export async function classifyMobileRecurring(db: D1Database, id: string, body: unknown) {
+export async function classifyMobileRecurring(db: D1Database, context: LedgerContext, id: string, body: unknown) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) invalid('The recurring classification body is not valid.');
   const record = body as Record<string, unknown>;
   if (Object.keys(record).some((key) => key !== 'expectedRevision' && key !== 'classification')) {
@@ -136,7 +137,7 @@ export async function classifyMobileRecurring(db: D1Database, id: string, body: 
   if ('error' in classification) invalid(classification.error);
   let result;
   try {
-    result = await updateRecurringClassification(db, id, classification.classification as RecurringClassification, record.expectedRevision as number);
+    result = await updateRecurringClassification(db, context, id, { classification: classification.classification as RecurringClassification, expectedRevision: record.expectedRevision as number });
   } catch {
     throw new RecurringServiceError(
       'temporarily_unavailable',

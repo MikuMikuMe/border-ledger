@@ -66,7 +66,7 @@ class AppContainerCaptureProfileWiringTest {
         health = health,
         parserFor = { BocCreditCardParser(eventIdProvider = EventIdProvider { message -> UUID.nameUUIDFromBytes(message.observationId.toByteArray(StandardCharsets.UTF_8)).toString() }) },
         clock = { 1_791_800_000_000L },
-    )
+     boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
 }
 
 private object NoOpUploadScheduler : CaptureUploadScheduler {

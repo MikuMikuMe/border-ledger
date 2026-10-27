@@ -1,7 +1,8 @@
+import { useLedgerApi } from './PrivateSession';
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarClock, CircleAlert, CircleCheck, Clock3, Filter, RefreshCw, ShieldCheck, Tag, TrendingUp } from 'lucide-react';
 import { formatDate, formatMoney } from '../domain/format';
-import { ledgerApi, LedgerApiError } from '../domain/api';
+import { LedgerApiError } from '../domain/api';
 import type { RecurringClassification, RecurringPage, RecurringStream, RecurringSummary } from '../domain/recurring';
 import type { Currency } from '../domain/types';
 import { supportedCurrencyCodes } from '../domain/currencies';
@@ -49,6 +50,7 @@ function SummaryCell({ currency, label, value, tone = 'neutral' }: { currency: C
 }
 
 export function RecurringView({ today, startDate, endDate }: RecurringViewProps) {
+  const ledgerApi = useLedgerApi();
   const [page, setPage] = useState<RecurringPage | null>(null);
   const [summary, setSummary] = useState<RecurringSummary | null>(null);
   const [status, setStatus] = useState<FeedStatus>('loading');

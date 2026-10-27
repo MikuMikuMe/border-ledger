@@ -6,6 +6,8 @@ data class CaptureCredentialRecord(
     val generation: Int,
     val expiresAt: String,
     val revocationCapability: String,
+    val identity: LedgerIdentity? = null,
+    val sessionEpoch: String? = null,
 )
 
 interface CaptureCredentialProvider {

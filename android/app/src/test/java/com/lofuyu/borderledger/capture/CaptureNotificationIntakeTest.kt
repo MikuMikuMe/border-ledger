@@ -21,7 +21,89 @@ import org.junit.Test
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class CaptureNotificationIntakeTest {
+    @Test
+    fun listenerBeforeConsentQueuesFirstPostConsentNotification() = runTest {
+        val identity = com.lofuyu.borderledger.IdentityFixture()
+        val consent = identity.credential
+        identity.credential = null
+        val health = CaptureHealthStore()
+        val records = CaptureMemoryStore()
+        val store = EncryptedCaptureIntakeStore(com.lofuyu.borderledger.auth.CaptureIdentityRecords(records, identity.boundary))
+        var now = 1_791_800_000_000L
+        fun newIntake() = BankNotificationIntake(MutableSourceProfileRegistry().apply { register(SyntheticNotificationFixtures.bocProfile()) }, store, health,
+            parserFor = { BocCreditCardParser(eventIdProvider = EventIdProvider { UUID.nameUUIDFromBytes(it.observationId.toByteArray()).toString() }) }, clock = { now }, boundary = identity.boundary)
+        val intake = newIntake()
+        intake.onListenerConnected()
+        identity.credential = consent
+        intake.activateCurrentConsent()
+        health.resumeAfterConsent()
+        now += 2_000
+        val result = intake.process(SyntheticNotificationFixtures.snapshot(postTime = now - 1_000, capturedAt = now))
+        assertEquals(CaptureItemStatus.QUEUED, result.items.single().status)
+        val historical = intake.process(SyntheticNotificationFixtures.snapshot(key = "old", postTime = now - 5_000, capturedAt = now))
+        assertEquals(CaptureItemStatus.REVIEW, historical.items.single().status)
+        val activation = identity.boundary.run<Long?>(null) { store.snapshot().activatedAtMillis }
+        now += 3_000
+        val restarted = newIntake()
+        restarted.onListenerConnected()
+        assertEquals(CaptureItemStatus.QUEUED, restarted.process(SyntheticNotificationFixtures.snapshot(key = "restart", body = "交易提醒\n消费\n交易金额: CAD 23.45\n商户名称: Restart Market", postTime = now - 1_000, capturedAt = now)).items.single().status)
+        assertEquals(activation, identity.boundary.run<Long?>(null) { store.snapshot().activatedAtMillis })
+        identity.credential = consent!!.copy(generation = 2)
+        intake.activateCurrentConsent()
+        now += 2_000
+        val freshPartition = intake.process(SyntheticNotificationFixtures.snapshot(postTime = now - 1_000, capturedAt = now))
+        assertEquals(CaptureItemStatus.QUEUED, freshPartition.items.single().status)
+    }
+
+    @Test
+    fun logoutClearsOwnerCountsAndActivityBeforeAnotherConsent() {
+        val health = CaptureHealthStore()
+        health.listenerConnected()
+        health.pendingCount(7)
+        health.storedIntakeCount(9)
+        health.uploadSucceeded(1000)
+        health.cacheSnapshotRecorded(2000)
+        health.pauseMonitoring()
+        assertEquals(0, health.state.value.pendingCount)
+        assertEquals(0, health.state.value.storedIntakeCount)
+        assertEquals(null, health.state.value.lastSuccessfulUploadAtMillis)
+        assertEquals(null, health.state.value.lastCacheSnapshotAtMillis)
+        assertTrue(health.state.value.listenerConnected)
+    }
+
+    @Test
+    fun replacementOwnerCannotSeeOrReceiveLatePreviousOwnerHealth() = runTest {
+        val first = com.lofuyu.borderledger.IdentityFixture().binding!!
+        val second = com.lofuyu.borderledger.IdentityFixture("b", "b-ledger", "b-session").binding!!
+        var current: com.lofuyu.borderledger.auth.SessionBinding? = first
+        val health = CaptureHealthStore(owner = { current })
+        health.listenerConnected()
+        kotlinx.coroutines.withContext(health.context(first)) {
+            health.pendingCount(7); health.storedIntakeCount(9)
+            health.uploadSucceeded(1000); health.cacheSnapshotRecorded(2000)
+            health.uploadRetryPending(2, 3, 3000)
+        }
+        current = null; health.pauseMonitoring(); current = second
+        val beforeConsent = health.snapshot(second)
+        assertEquals(0, beforeConsent.pendingCount)
+        assertEquals(0, beforeConsent.storedIntakeCount)
+        assertEquals(null, beforeConsent.lastSuccessfulUploadAtMillis)
+        assertEquals(null, beforeConsent.lastCacheSnapshotAtMillis)
+        assertEquals(null, beforeConsent.uploadRetryAtMillis)
+        kotlinx.coroutines.withContext(health.context(second)) { health.pendingCount(2) }
+        kotlinx.coroutines.withContext(health.context(first)) {
+            health.pendingCount(99); health.uploadSucceeded(9000); health.cacheSnapshotRecorded(9000)
+            health.storageFailed("late-a-failure")
+        }
+        val afterLateA = health.snapshot(second)
+        assertEquals(2, afterLateA.pendingCount)
+        assertEquals(null, afterLateA.lastSuccessfulUploadAtMillis)
+        assertEquals(null, afterLateA.lastFailureCode)
+        assertTrue(afterLateA.listenerConnected)
+    }
+
     @Test
     fun notificationAndUploadCompleteFromNativeStoresWithoutReactRuntimeOrActivity() = runTest {
         val records=CaptureMemoryStore()
@@ -42,7 +124,7 @@ class CaptureNotificationIntakeTest {
                 return com.lofuyu.borderledger.api.CaptureUploadResult.Success(batch.map { com.lofuyu.borderledger.api.CaptureEventAcknowledgement(it.eventId,"accepted","provisional",listOf("accepted")) })
             }
         }
-        val coordinator=com.lofuyu.borderledger.sync.CaptureUploadCoordinator(reopened,client,health,batchEncoder={byteArrayOf(1)})
+        val coordinator=com.lofuyu.borderledger.sync.CaptureUploadCoordinator(reopened,client,health,batchEncoder={byteArrayOf(1)}, boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
         assertTrue(coordinator.sync() is com.lofuyu.borderledger.sync.UploadSyncResult.Completed)
         assertEquals(queued.queuedEventIds,uploaded)
         assertEquals(0,reopened.pendingCount())
@@ -106,7 +188,7 @@ class CaptureNotificationIntakeTest {
                 })
             },
             clock = { 1_791_800_000_000L },
-        )
+         boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
         intake.onListenerConnected()
 
         val result = intake.process(SyntheticNotificationFixtures.snapshot(isPrivate = null))
@@ -184,7 +266,7 @@ class CaptureNotificationIntakeTest {
         health = health,
         parserFor = { BocCreditCardParser(eventIdProvider = EventIdProvider { message -> UUID.nameUUIDFromBytes(message.observationId.toByteArray(StandardCharsets.UTF_8)).toString() }) },
         clock = { 1_791_800_000_000L },
-    )
+     boundary = com.lofuyu.borderledger.IdentityFixture().boundary)
 }
 
 private class CaptureMemoryStore : EncryptedRecordStore {

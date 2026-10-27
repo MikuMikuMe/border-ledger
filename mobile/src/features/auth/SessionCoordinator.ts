@@ -134,6 +134,12 @@ export class SessionCoordinator {
 
   private applySession(session: SafeSessionSnapshot): void {
     if (!this.started) return;
+    if (session.state === 'refreshing') session = { ...session, userId: this.value.session.userId, ledgerId: this.value.session.ledgerId, sessionEpoch: this.value.session.sessionEpoch };
+    if (session.state === 'signed_in' && session.sessionEpoch !== this.value.session.sessionEpoch) {
+      this.signedInTransition = false;
+      this.destinationGeneration += 1;
+      this.update({ destination: 'overview' });
+    }
     const enteringSignedIn = this.updateSessionTransition(session);
     const token: GenerationToken = { generation: this.lifecycleGeneration };
     const destinationToken: DestinationToken = { ...token, destinationGeneration: this.destinationGeneration };

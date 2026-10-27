@@ -1,0 +1,23 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { generateKeyPair, exportJWK, SignJWT } from 'jose';
+import worker from '../worker/index';
+import { createSqliteD1Fixture } from './helpers/sqlite-d1';
+import { seedTenants } from './helpers/tenants';
+const fixtures:ReturnType<typeof createSqliteD1Fixture>[]=[];
+afterEach(()=>{vi.restoreAllMocks();for(const fixture of fixtures.splice(0))fixture.close();});
+it.each(['invalid','unknown','unique','ambiguous'] as const)('resolves %s signed webhook ownership without guessing a ledger',async mode=>{
+ const fixture=createSqliteD1Fixture();fixtures.push(fixture);await seedTenants(fixture.db);
+ await fixture.db.prepare("INSERT INTO plaid_items(item_id,ledger_id,provider_item_id,access_token_ciphertext,access_token_iv) VALUES ('owner-item','personal','raw-item','cipher','iv')").run();
+ if(mode==='ambiguous')await fixture.db.prepare("INSERT INTO plaid_items(item_id,ledger_id,provider_item_id,access_token_ciphertext,access_token_iv) VALUES ('second-item','second-ledger','raw-item','cipher','iv')").run();
+ const pair=await generateKeyPair('ES256');const jwk=await exportJWK(pair.publicKey);
+ const body=JSON.stringify({webhook_type:'TRANSACTIONS',webhook_code:'SYNC_UPDATES_AVAILABLE',item_id:mode==='unknown'?'missing':'raw-item',environment:'sandbox'});
+ const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(body))),byte=>byte.toString(16).padStart(2,'0')).join('');
+ const jwt=await new SignJWT({request_body_sha256:digest}).setProtectedHeader({alg:'ES256',kid:crypto.randomUUID()}).setIssuedAt().sign(pair.privateKey);
+ vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({key:jwk}));
+ const jobs:unknown[]=[];const env={DB:fixture.db,LEDGER_APP_ORIGIN:'https://example.com',PLAID_CLIENT_ID:'synthetic',PLAID_SECRET:'synthetic',PLAID_ENV:'sandbox',ASSETS:{fetch:async()=>new Response('404')},SYNC_QUEUE:{send:async (value:unknown)=>{jobs.push(value);}}};
+ const request=new Request('https://example.com/api/webhooks/plaid',{method:'POST',body:mode==='invalid'?body+' ':body,headers:{'Plaid-Verification':jwt}});
+ const response=await worker.fetch(request,env);
+ expect(response.status).toBe(mode==='invalid'?401:200);
+ if(mode==='unique')expect(jobs).toEqual([{type:'plaid-sync',userId:'owner',ledgerId:'personal',itemId:'owner-item',generation:1,connectionRevision:1}]);
+ else expect(jobs).toEqual([]);
+});

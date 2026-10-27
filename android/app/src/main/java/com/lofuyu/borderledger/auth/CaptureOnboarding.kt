@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.time.Instant
+import kotlinx.coroutines.withContext
+import com.lofuyu.borderledger.api.RevocationIntent
+import com.lofuyu.borderledger.api.RevocationGrantType
 
 enum class NotificationAccessState {
     Unknown,
@@ -93,12 +96,16 @@ class CaptureOnboardingCoordinator(
     private val credentials: CaptureCredentialProvider = VolatileCaptureCredentialProvider(),
     private val profileRepository: CaptureProfileRepository? = null,
     private val deviceName: String = "Border Ledger Android",
+    private val retainRevocation: suspend (RevocationIntent) -> Unit = { throw IllegalStateException("Revocation storage is required") },
 ) {
     private val _state = MutableStateFlow(CaptureOnboardingState())
     val state: StateFlow<CaptureOnboardingState> = _state.asStateFlow()
 
+    private var currentBinding: SessionBinding? = ownerSession.binding()
     fun syncOwnerSessionState() {
-        val signedIn = ownerSession.state.value is OwnerSessionState.SignedIn
+        val binding = ownerSession.binding()
+        if (binding != currentBinding) { _state.value = CaptureOnboardingState(); currentBinding = binding }
+        val signedIn = binding != null
         _state.value = if (signedIn) {
             _state.value.recalculate()
         } else {
@@ -119,7 +126,9 @@ class CaptureOnboardingCoordinator(
     suspend fun refreshApiHealth() {
         syncOwnerSessionState()
         if (ownerSession.state.value !is OwnerSessionState.SignedIn) return
+        val binding = ownerSession.binding() ?: return
         refreshSourceProfiles()
+        if (ownerSession.binding() != binding) return
         _state.value = _state.value.copy(apiHealth = CaptureApiHealth.Checking).recalculate()
         val health = try {
             captureApi.health()
@@ -130,20 +139,16 @@ class CaptureOnboardingCoordinator(
         } catch (_: Exception) {
             CaptureApiHealth.Unavailable
         }
-        _state.value = _state.value.copy(apiHealth = health).recalculate()
+        if (ownerSession.binding() == binding) _state.value = _state.value.copy(apiHealth = health).recalculate()
     }
 
     suspend fun refreshSourceProfiles() {
         syncOwnerSessionState()
         val repository = profileRepository ?: return
         if (ownerSession.state.value !is OwnerSessionState.SignedIn) return
-        val result = try {
-            repository.load()
-        } catch (_: TransportFailure) {
-            CaptureProfileLoadResult.Unavailable(CaptureProfileUnavailableReason.DeviceMappingUnavailable)
-        } catch (_: Exception) {
-            CaptureProfileLoadResult.Unavailable(CaptureProfileUnavailableReason.DeviceMappingUnavailable)
-        }
+        val binding = ownerSession.binding() ?: return
+        val result = loadProfiles(repository, binding)
+        if (ownerSession.binding() != binding) return
         _state.value = when (result) {
             is CaptureProfileLoadResult.Available -> if (result.profiles.isEmpty()) {
                 _state.value.copy(
@@ -179,6 +184,12 @@ class CaptureOnboardingCoordinator(
                 sourceSetupMessage = result.message,
             )
         }.recalculate()
+    }
+
+    private suspend fun loadProfiles(repository: CaptureProfileRepository, binding: SessionBinding): CaptureProfileLoadResult = try {
+        withContext(OwnerWork(binding)) { repository.load() }
+    } catch (_: Exception) {
+        CaptureProfileLoadResult.Unavailable(CaptureProfileUnavailableReason.DeviceMappingUnavailable)
     }
 
     fun setProfiles(profiles: List<CaptureSourceProfile>) {
@@ -250,11 +261,8 @@ class CaptureOnboardingCoordinator(
 
     suspend fun authorizeCapture(consent: Boolean) {
         syncOwnerSessionState()
+        val binding = ownerSession.binding() ?: return
         var current = _state.value.recalculate()
-        if (ownerSession.state.value !is OwnerSessionState.SignedIn) {
-            _state.value = current
-            return
-        }
         if (current.profiles.isEmpty()) {
             _state.value = current.copy(health = CaptureHealth.ImportOnly, consentRecorded = false)
             return
@@ -277,37 +285,68 @@ class CaptureOnboardingCoordinator(
         }
         current = current.copy(health = CaptureHealth.Issuing, consentRecorded = true)
         _state.value = current
+        completeAuthorization(binding, current)
+    }
+
+    private suspend fun completeAuthorization(binding: SessionBinding, current: CaptureOnboardingState) {
         try {
-            val grant = captureApi.issueCaptureCredential(
-                CapturePairingRequest(
-                    deviceName = deviceName,
-                    sourceScopes = listOf(requireNotNull(current.selected)),
-                    explicitConsent = true,
-                    expectedRevision = current.sourceConfigRevision ?: 0,
-                ),
-            )
-            credentials.save(
-                CaptureCredentialRecord(
-                    credential = grant.credential,
-                    deviceId = grant.deviceId,
-                    generation = grant.generation,
-                    expiresAt = grant.expiresAt,
-                    revocationCapability = grant.revocationCapability,
-                ),
-            )
+            val expiresAt = issueBoundCredential(binding, current) ?: return
             val apiHealth = runCatching { captureApi.health() }.getOrDefault(CaptureApiHealth.Unavailable)
+            if (ownerSession.binding() != binding) return
             _state.value = current.copy(
                 health = CaptureHealth.Ready,
                 apiHealth = apiHealth,
-                credentialExpiresAt = grant.expiresAt,
+                credentialExpiresAt = expiresAt,
             ).recalculate()
         } catch (_: TransportFailure.Offline) {
+            if (ownerSession.binding() != binding) return
             _state.value = current.copy(health = CaptureHealth.ApiUnavailable, apiHealth = CaptureApiHealth.Offline, consentRecorded = false)
         } catch (_: TransportFailure) {
+            if (ownerSession.binding() != binding) return
             _state.value = current.copy(health = CaptureHealth.ApiUnavailable, apiHealth = CaptureApiHealth.Unavailable, consentRecorded = false)
         } catch (_: Exception) {
+            if (ownerSession.binding() != binding) return
             _state.value = current.copy(health = CaptureHealth.Error, consentRecorded = false)
         }
+    }
+
+    private suspend fun issueBoundCredential(binding: SessionBinding, current: CaptureOnboardingState): String? {
+        val retired = ownerSession.commitIfCurrent(binding) {
+            credentials.current()?.let { previous ->
+                retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, previous.generation, previous.revocationCapability, Instant.now().toString()))
+                credentials.clear()
+            }
+        }
+        if (!retired) return null
+        val grant = withContext(OwnerWork(binding)) { captureApi.issueCaptureCredential(
+            CapturePairingRequest(
+                deviceName = deviceName,
+                sourceScopes = listOf(requireNotNull(current.selected)),
+                explicitConsent = true,
+                expectedRevision = current.sourceConfigRevision ?: 0,
+            ),
+        ) }
+        if (ownerSession.binding() != binding || grant.identity != binding.identity) {
+            retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, grant.generation, grant.revocationCapability, Instant.now().toString()))
+            return null
+        }
+        val committed = ownerSession.commitIfCurrent(binding) { credentials.save(
+            CaptureCredentialRecord(
+                credential = grant.credential,
+                deviceId = grant.deviceId,
+                generation = grant.generation,
+                expiresAt = grant.expiresAt,
+                revocationCapability = grant.revocationCapability,
+                identity = grant.identity,
+                sessionEpoch = binding.epoch,
+            ),
+        )
+        }
+        if (!committed) {
+            retainRevocation(RevocationIntent(RevocationGrantType.CaptureCredential, grant.generation, grant.revocationCapability, Instant.now().toString()))
+            return null
+        }
+        return grant.expiresAt
     }
 
     fun pause() {

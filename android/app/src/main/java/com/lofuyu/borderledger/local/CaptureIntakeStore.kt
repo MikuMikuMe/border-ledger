@@ -63,6 +63,7 @@ data class CaptureCommitRequest(
     val disposition: CaptureCandidateDisposition,
     val nowMillis: Long? = null,
     val rawDiagnostic: String? = null,
+    val ownerLedgerId: String? = null,
 )
 
 sealed interface CaptureCommitResult {
@@ -131,6 +132,7 @@ class EncryptedCaptureIntakeStore(
      */
     suspend fun commitBatch(requests: List<CaptureCommitRequest>): List<CaptureCommitResult> {
         require(requests.isNotEmpty())
+        require(requests.all { !it.ownerLedgerId.isNullOrBlank() }) { "Capture identity is required." }
         return mutex.withLock {
             val initial = try {
                 readState()
@@ -251,7 +253,7 @@ class EncryptedCaptureIntakeStore(
         val queued = if (effectiveDisposition == CaptureCandidateDisposition.QUEUED && event != null) {
             QueuedAlert(
                 localId = message.observationId,
-                ownerLedgerId = PERSONAL_LEDGER,
+                ownerLedgerId = requireNotNull(request.ownerLedgerId),
                 eventId = event.eventId,
                 payload = payload!!.copyOf(),
                 createdAtMillis = now,
@@ -379,7 +381,7 @@ class EncryptedCaptureIntakeStore(
         val queued = if (effectiveDisposition == CaptureCandidateDisposition.QUEUED && event != null) {
             QueuedAlert(
                 localId = message.observationId,
-                ownerLedgerId = PERSONAL_LEDGER,
+                ownerLedgerId = requireNotNull(request.ownerLedgerId),
                 eventId = event.eventId,
                 payload = payload!!.copyOf(),
                 createdAtMillis = now,
@@ -629,7 +631,6 @@ class EncryptedCaptureIntakeStore(
     }
 
     private companion object {
-        const val PERSONAL_LEDGER = "personal"
         const val MAX_DIAGNOSTIC_CHARS = 512
     }
 

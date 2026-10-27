@@ -18,8 +18,10 @@ class LegacyCoreCodecCompatibilityTest {
         val store = EncryptedOwnerSessionStore(records)
         val expected = OwnerSessionRecord("a\u0000账", "r", expiry, listOf("ledger:read"), 3, "cap", "device", "/capture")
         assertEquals(expected, store.readSession())
-        store.writeSession(expected)
-        assertArrayEquals(fixture("owner-session"), records.bytes("owner_session"))
+        assertNull(store.readSession()?.identity)
+        val bound = expected.copy(identity = LedgerIdentity("owner", "personal"), epoch = "new-login")
+        store.writeSession(bound)
+        assertEquals(bound, store.readSession())
     }
 
     @Test fun pendingLoginKeepsVerifierEnvironmentAndUncheckedStaySignedInBytes() = runTest {
@@ -58,42 +60,24 @@ class LegacyCoreCodecCompatibilityTest {
         val store = EncryptedCaptureCredentialProvider(records)
         val expected = CaptureCredentialRecord("capture", "device", 4, expiry, "capture-cap")
         assertEquals(expected, store.current())
-        store.save(expected)
-        assertArrayEquals(fixture("capture-credential"), records.bytes("capture_credential"))
+        assertNull(store.current()?.identity)
+        val bound = expected.copy(identity = LedgerIdentity("owner", "personal"), sessionEpoch = "new-login")
+        store.save(bound)
+        assertEquals(bound, store.current())
     }
 
-    @Test fun legacyQueuedEventKeepsPayloadAndReencodesExactly() = runTest {
+    @Test fun legacyQueuedEventsAndReadCacheAreNotAdoptedByANewSession() = runTest {
         val records = FixtureRecords("outbox_queue", fixture("outbox"))
-        val dao = EncryptedOutboxDao(records)
-        val event = dao.nextBatch(1).single()
-        assertEquals("local", event.localId)
-        assertEquals("personal", event.ownerLedgerId)
-        assertEquals("event", event.eventId)
-        assertEquals(123L, event.createdAtMillis)
-        assertArrayEquals(byteArrayOf(0, -1, 65), event.payload)
-        assertFalse(event.acknowledged)
-        assertNull(event.acknowledgementCode)
-        val rewritten = FixtureRecords()
-        assertEquals(EnqueueResult.Inserted, EncryptedOutboxDao(rewritten).enqueue(event))
-        assertArrayEquals(fixture("outbox"), rewritten.bytes("outbox_queue"))
-        assertEquals(EnqueueResult.AlreadyQueued, dao.enqueue(event))
-        assertEquals(1, dao.pendingCount())
-    }
-
-    @Test fun legacyOwnerReadCacheRetainsPayloadAndNativeLeaseSemantics() = runTest {
-        val records = FixtureRecords("financial_read_cache", fixture("read-cache"))
-        val cache = EncryptedOwnerReadCache(records)
-        val entry = requireNotNull(cache.readIfUsable(Instant.parse(now)))
-        assertEquals("personal", entry.ownerLedgerId)
-        assertArrayEquals("{}".encodeToByteArray(), entry.payload)
-        cache.write(entry)
+        records.seed("financial_read_cache", fixture("read-cache"))
+        val binding = SessionBinding(LedgerIdentity("second", "second-ledger"), "new-login")
+        assertTrue(EncryptedOutboxDao(records, binding).nextBatch(1).isEmpty())
+        assertNull(EncryptedOwnerReadCache(records).readIfUsable(Instant.parse(now), binding))
+        assertArrayEquals(fixture("outbox"), records.bytes("outbox_queue"))
         assertArrayEquals(fixture("read-cache"), records.bytes("financial_read_cache"))
-        assertNull(cache.readIfUsable(Instant.parse("2026-10-17T12:00:00Z")))
-        assertNull(records.bytes("financial_read_cache"))
     }
 
     @Test fun unknownSessionVersionFailsClosedAndPreservesOriginalBytes() = runTest {
-        val legacy = fixture("owner-session").also { it[3] = 2 }
+        val legacy = fixture("owner-session").also { it[3] = 99 }
         val records = FixtureRecords("owner_session", legacy)
         try {
             EncryptedOwnerSessionStore(records).readSession()

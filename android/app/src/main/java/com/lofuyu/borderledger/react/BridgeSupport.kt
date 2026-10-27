@@ -3,6 +3,7 @@ package com.lofuyu.borderledger.react
 import com.facebook.react.bridge.*
 import com.lofuyu.borderledger.api.TransportFailure
 import com.lofuyu.borderledger.auth.OwnerSessionState
+import com.lofuyu.borderledger.auth.OwnerWork
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 
@@ -25,7 +26,7 @@ internal class BridgeSupport(private val runtime: NativeServiceRuntime) {
         runtime.scope.launch {
             try {
                 val generation = if (owner) runtime.ownerGeneration() else null
-                val result = block()
+                val result = callBound(generation, block)
                 if (owner) check(runtime.currentGeneration() == generation && runtime.container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
                 promise.resolve(nativeValue(result))
             } catch (_: CancellationException) {
@@ -34,10 +35,19 @@ internal class BridgeSupport(private val runtime: NativeServiceRuntime) {
         }
     }
 
+    private suspend fun callBound(generation: String?, block: suspend () -> Any?): Any? {
+        if (generation == null) return block()
+        val binding = requireNotNull(runtime.container.ownerSessionManager.currentBinding())
+        check(binding.epoch == generation)
+        return withContext(OwnerWork(binding)) { block() }
+    }
+
     private fun rejectFailure(promise: Promise, error: Exception) {
         val failure = when (error) {
+            is com.lofuyu.borderledger.accounts.LunchFlowRequestFailure -> "${error.code}|Lunch Flow changed or is unavailable. Check connection status before choosing the action again."
             is BridgeFailure -> "${error.code}|Refresh native service state before continuing."
             is IllegalArgumentException -> "invalid_request|The request is not valid."
+            is TransportFailure.UpdateRequired -> "update_required|Update Border Ledger and sign in again."
             is TransportFailure.Unauthorized -> "unauthorized|Owner authorization is required."
             is TransportFailure.Offline,
             is com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.Offline -> "offline|The service is offline."

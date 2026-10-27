@@ -1,3 +1,4 @@
+import type { LedgerContext } from './tenant-context';
 import type { D1Database } from './db-types';
 import { notSupersededAlertTransactionPredicate, readLedgerReport, type LedgerReport } from './ledger-reports';
 
@@ -101,32 +102,32 @@ function signedAmount(amount: number, kind: string) {
 
 /** Owner-only, bounded render snapshot. Reports are aggregated separately so
  * a five-thousand-row Activity payload cannot truncate Overview totals. */
-export async function readOwnerLedgerSnapshot(db: D1Database): Promise<OwnerLedgerSnapshot> {
-  const preference = await db.prepare("SELECT reporting_timezone FROM ledger_preferences WHERE ledger_id = 'personal'").first<PreferenceRow>();
+export async function readOwnerLedgerSnapshot(db: D1Database, context: LedgerContext): Promise<OwnerLedgerSnapshot> {
+  const preference = await db.prepare("SELECT reporting_timezone FROM ledger_preferences WHERE ledger_id = ?").bind(context.ledgerId).first<PreferenceRow>();
   const timeZone = preference?.reporting_timezone || 'America/Toronto';
   const visibleTransactionPredicate = notSupersededAlertTransactionPredicate('t');
   const [accountRows, transactionRows, recurringRows, reviewRows, report] = await Promise.all([
     db.prepare(`WITH bounded_accounts AS (
-        SELECT id, name, institution, kind, currency, status, last_synced_at
-        FROM accounts
+        SELECT id, ledger_id, name, institution, kind, currency, status, last_synced_at
+        FROM accounts WHERE ledger_id = ?
         ORDER BY institution, name, id
         LIMIT ${MAX_SNAPSHOT_ACCOUNTS}
       )
       SELECT a.id, a.name, a.institution, a.kind, a.currency, a.status, a.last_synced_at, ac.currency AS account_currency
-      FROM bounded_accounts a LEFT JOIN account_currencies ac ON ac.account_id = a.id
-      ORDER BY a.institution, a.name, a.id, ac.currency`).all<AccountRow>(),
+      FROM bounded_accounts a LEFT JOIN account_currencies ac ON ac.account_id = a.id AND ac.ledger_id = a.ledger_id
+      ORDER BY a.institution, a.name, a.id, ac.currency`).bind(context.ledgerId).all<AccountRow>(),
     db.prepare(`SELECT t.id, t.date, t.amount_minor, t.currency, t.merchant, a.name AS account_name, t.status, t.source, t.category, t.note, t.kind
-      FROM transactions t JOIN accounts a ON a.id = t.account_id
-      WHERE ${visibleTransactionPredicate}
-      ORDER BY t.date DESC, t.created_at DESC LIMIT 5000`).all<TransactionRow>(),
+      FROM transactions t JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
+      WHERE t.ledger_id = ? AND ${visibleTransactionPredicate}
+      ORDER BY t.date DESC, t.created_at DESC LIMIT 5000`).bind(context.ledgerId).all<TransactionRow>(),
     db.prepare(`SELECT rs.id, rs.merchant_name, rs.currency, rs.predicted_amount_minor, rs.average_amount_minor,
         rs.predicted_next_date, rc.classification
-      FROM recurring_streams rs LEFT JOIN recurring_classifications rc ON rc.recurring_stream_id = rs.id
-      WHERE rs.present_in_latest_snapshot = 1 ORDER BY rs.predicted_next_date, rs.id LIMIT 1000`).all<RecurringRow>(),
+      FROM recurring_streams rs LEFT JOIN recurring_classifications rc ON rc.recurring_stream_id = rs.id AND rc.ledger_id = rs.ledger_id
+      WHERE rs.ledger_id = ? AND rs.present_in_latest_snapshot = 1 ORDER BY rs.predicted_next_date, rs.id LIMIT 1000`).bind(context.ledgerId).all<RecurringRow>(),
     db.prepare(`SELECT id, 'needs_review' AS reason, currency, amount_minor, merchant, status
-      FROM transactions t WHERE ${visibleTransactionPredicate} AND t.status = 'needs_review'
-      ORDER BY t.date DESC, t.created_at DESC LIMIT 1000`).all<ReviewRow>(),
-    readLedgerReport(db, { timeZone }),
+      FROM transactions t WHERE t.ledger_id = ? AND ${visibleTransactionPredicate} AND t.status = 'needs_review'
+      ORDER BY t.date DESC, t.created_at DESC LIMIT 1000`).bind(context.ledgerId).all<ReviewRow>(),
+    readLedgerReport(db, context, { timeZone }),
   ]);
 
   const accountMap = new Map<string, OwnerLedgerSnapshot['accounts'][number]>();

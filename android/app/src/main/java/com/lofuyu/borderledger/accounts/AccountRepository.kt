@@ -40,6 +40,9 @@ data class LunchFlowAccount(
     val currency: String?,
     val lastSyncedAt: String?,
     val lastError: String?,
+    val connectionId: String? = null,
+    val providerBankConnectionId: String? = null,
+    val lastAttemptAt: String? = null,
 ) {
     init {
         require(providerAccountId.isNotBlank() && providerAccountId.length <= 256)
@@ -55,6 +58,8 @@ data class LunchFlowAccount(
 data class LunchFlowAccounts(
     val configured: Boolean,
     val accounts: List<LunchFlowAccount>,
+    val connectionId: String,
+    val generation: Long,
 )
 
 data class LunchFlowSelection(
@@ -70,6 +75,7 @@ data class LunchFlowSelection(
 }
 
 data class LunchFlowSelectionRequest(
+    val binding: LunchFlowBinding,
     val accounts: List<LunchFlowSelection>,
     val idempotencyKey: IdempotencyKey,
 ) {
@@ -80,7 +86,7 @@ data class LunchFlowSelectionReceipt(val selected: Int, val queued: Boolean) {
     init { require(selected >= 0) }
 }
 
-data class LunchFlowSyncRequest(val idempotencyKey: IdempotencyKey)
+data class LunchFlowSyncRequest(val idempotencyKey: IdempotencyKey, val binding: LunchFlowBinding)
 
 data class LunchFlowSyncReceipt(val queued: Boolean, val accounts: Int) {
     init { require(accounts >= 0) }
@@ -170,8 +176,11 @@ interface AccountConnectionGateway {
     suspend fun disconnect(request: DisconnectRequest)
     suspend fun listAccounts(request: AccountPageRequest): AccountPage
     suspend fun listConnections(): List<ConnectionStatus>
-    suspend fun readLunchFlowAccounts(): LunchFlowAccounts = throw TransportFailure.Unavailable
-    suspend fun readLunchFlowStatus(): LunchFlowAccounts = throw TransportFailure.Unavailable
+    suspend fun readLunchFlowConnection(): LunchFlowConnection = throw TransportFailure.Unavailable
+    suspend fun startLunchFlowAuthorization(): LunchFlowLaunch = throw TransportFailure.Unavailable
+    suspend fun disconnectLunchFlow(binding: LunchFlowBinding): LunchFlowConnection = throw TransportFailure.Unavailable
+    suspend fun readLunchFlowAccounts(binding: LunchFlowBinding): LunchFlowAccounts = throw TransportFailure.Unavailable
+    suspend fun readLunchFlowStatus(binding: LunchFlowBinding): LunchFlowAccounts = throw TransportFailure.Unavailable
     suspend fun selectLunchFlowAccounts(request: LunchFlowSelectionRequest): LunchFlowSelectionReceipt = throw TransportFailure.Unavailable
     suspend fun syncLunchFlow(request: LunchFlowSyncRequest): LunchFlowSyncReceipt = throw TransportFailure.Unavailable
 }
@@ -185,8 +194,11 @@ class AccountRepository(private val gateway: AccountConnectionGateway) {
     suspend fun disconnect(request: DisconnectRequest) = gateway.disconnect(request)
     suspend fun listAccounts(request: AccountPageRequest = AccountPageRequest()) = gateway.listAccounts(request)
     suspend fun listConnections() = gateway.listConnections()
-    suspend fun readLunchFlowAccounts() = gateway.readLunchFlowAccounts()
-    suspend fun readLunchFlowStatus() = gateway.readLunchFlowStatus()
+    suspend fun readLunchFlowConnection() = gateway.readLunchFlowConnection()
+    suspend fun startLunchFlowAuthorization() = gateway.startLunchFlowAuthorization()
+    suspend fun disconnectLunchFlow(binding: LunchFlowBinding) = gateway.disconnectLunchFlow(binding)
+    suspend fun readLunchFlowAccounts(binding: LunchFlowBinding) = gateway.readLunchFlowAccounts(binding)
+    suspend fun readLunchFlowStatus(binding: LunchFlowBinding) = gateway.readLunchFlowStatus(binding)
     suspend fun selectLunchFlowAccounts(request: LunchFlowSelectionRequest) = gateway.selectLunchFlowAccounts(request)
     suspend fun syncLunchFlow(request: LunchFlowSyncRequest) = gateway.syncLunchFlow(request)
 }
@@ -250,16 +262,16 @@ class HttpWorkerAccountConnectionGateway(
         json(MobileRequest("GET", "$origin/api/mobile/v1/connections")).optJSONArray("connections"),
     )
 
-    override suspend fun readLunchFlowAccounts(): LunchFlowAccounts = decoder.lunchFlowAccounts(
-        json(MobileRequest("GET", "$origin/api/mobile/v1/lunchflow/accounts")),
-    )
+    override suspend fun readLunchFlowAccounts(binding: LunchFlowBinding): LunchFlowAccounts = decoder.lunchFlowAccounts(
+        json(MobileRequest("GET", "$origin/api/mobile/v1/lunchflow/accounts?connectionId=${binding.encodedId()}")),
+    ).also { binding.verify(it) }
 
-    override suspend fun readLunchFlowStatus(): LunchFlowAccounts = decoder.lunchFlowAccounts(
-        json(MobileRequest("GET", "$origin/api/mobile/v1/lunchflow/accounts?status=local")),
-    )
+    override suspend fun readLunchFlowStatus(binding: LunchFlowBinding): LunchFlowAccounts = decoder.lunchFlowAccounts(
+        json(MobileRequest("GET", "$origin/api/mobile/v1/lunchflow/accounts?status=local&connectionId=${binding.encodedId()}")),
+    ).also { binding.verify(it) }
 
     override suspend fun selectLunchFlowAccounts(request: LunchFlowSelectionRequest): LunchFlowSelectionReceipt {
-        val body = JSONObject().put("accounts", JSONArray().apply {
+        val body = request.binding.json().put("accounts", JSONArray().apply {
             request.accounts.forEach { account ->
                 put(JSONObject().put("providerAccountId", account.providerAccountId).put("currency", account.currency).put("kind", account.kind))
             }
@@ -273,8 +285,12 @@ class HttpWorkerAccountConnectionGateway(
     }
 
     override suspend fun syncLunchFlow(request: LunchFlowSyncRequest): LunchFlowSyncReceipt = decoder.lunchFlowSyncReceipt(
-        json(MobileRequest("POST", "$origin/api/mobile/v1/lunchflow/sync", mapOf("Idempotency-Key" to request.idempotencyKey.value))),
+        json(MobileRequest("POST", "$origin/api/mobile/v1/lunchflow/sync", mapOf("Idempotency-Key" to request.idempotencyKey.value, "Content-Type" to "application/json"), request.binding.json().toString().toByteArray(StandardCharsets.UTF_8))),
     )
+
+    override suspend fun readLunchFlowConnection() = LunchFlowConnection.decode(json(MobileRequest("GET", "$origin/api/mobile/v1/lunchflow/connection")))
+    override suspend fun startLunchFlowAuthorization() = json(MobileRequest("POST", "$origin/api/mobile/v1/lunchflow/oauth/start")).let { LunchFlowLaunch(it.getString("authorizationUrl"), it.getString("connectionId")) }
+    override suspend fun disconnectLunchFlow(binding: LunchFlowBinding) = LunchFlowConnection.decode(json(MobileRequest("POST", "$origin/api/mobile/v1/lunchflow/disconnect", mapOf("Content-Type" to "application/json"), binding.json().toString().toByteArray(StandardCharsets.UTF_8))))
 
     private suspend fun json(request: MobileRequest): JSONObject = JSONObject(request(request).toString(StandardCharsets.UTF_8))
 
@@ -336,7 +352,14 @@ internal class UrlConnectionAccountHttpTransport : AccountHttpTransport {
     }
 
     internal fun classifyFailure(status: Int, errorBody: String?): Exception =
-        knownFailure(status) ?: definitiveClientFailure(status, errorBody) ?: TransportFailure.Retryable
+        lunchFlowFailure(status,errorBody) ?: knownFailure(status) ?: definitiveClientFailure(status, errorBody) ?: TransportFailure.Retryable
+
+    private fun lunchFlowFailure(status:Int,body: String?): Exception? = runCatching {
+        if(status in listOf(401,403))return@runCatching null
+        val value = JSONObject(body ?: "{}")
+        val code = value.optString("code")
+        LunchFlowRequestFailure(code, value.optBoolean("retryable")).takeIf { code in LUNCH_FLOW_ERROR_CODES }
+    }.getOrNull()
 
     private fun knownFailure(status: Int): Exception? = terminalFailures[status]
 
@@ -398,6 +421,8 @@ internal class AccountJsonDecoder {
     } ?: emptyList()
 
     fun lunchFlowAccounts(value: JSONObject): LunchFlowAccounts = LunchFlowAccounts(
+        connectionId = value.getString("connectionId"),
+        generation = value.getLong("generation"),
         configured = value.getBoolean("configured"),
         accounts = value.getJSONArray("accounts").let { array ->
             require(array.length() <= 100)
@@ -456,6 +481,9 @@ internal class AccountJsonDecoder {
             currency = nullableString(value, "currency"),
             lastSyncedAt = nullableString(value, "lastSyncedAt"),
             lastError = nullableString(value, "lastError"),
+            connectionId = value.getString("connectionId"),
+            providerBankConnectionId = nullableString(value,"providerBankConnectionId"),
+            lastAttemptAt = nullableString(value,"lastAttemptAt"),
         ))
     }
 

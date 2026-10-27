@@ -1,5 +1,6 @@
 package com.lofuyu.borderledger.sync
 
+import com.lofuyu.borderledger.auth.CaptureWorkBoundary
 import android.content.Context
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -71,12 +72,14 @@ class SchedulingCaptureCredentialProvider(
     private val delegate: CaptureCredentialProvider,
     private val onCredentialUsable: suspend () -> UploadScheduleResult,
     private val clock: () -> Long = { System.currentTimeMillis() },
+    private val onCredentialSaved: suspend () -> Unit = {},
 ) : CaptureCredentialProvider {
     override suspend fun current(): CaptureCredentialRecord? = delegate.current()
 
     override suspend fun save(value: CaptureCredentialRecord) {
         val wasUsable = runCatching { delegate.current()?.isUsable(clock()) == true }.getOrDefault(false)
         delegate.save(value)
+        onCredentialSaved()
         if (!wasUsable && value.isUsable(clock())) {
             runCatching { onCredentialUsable() }
         }
@@ -179,7 +182,7 @@ private class UploadScheduleRetryCoordinator(
             nextRetryAtMillis = clock() + firstDelay,
             code = code,
         )
-        retryJob = scope.launch {
+        retryJob = scope.launch(health.context()) {
             var attemptNumber = 1
             var waitMillis = firstDelay
             while (true) {
@@ -215,26 +218,35 @@ private class UploadScheduleRetryCoordinator(
 
 }
 
+/** Every scheduling attempt, including detached retries, opens only the current consent partition. */
+internal class IdentityCaptureUploadScheduler(
+    private val delegate: CaptureUploadScheduler,
+    private val boundary: CaptureWorkBoundary,
+) : CaptureUploadScheduler {
+    override suspend fun schedule(): UploadScheduleResult = boundary.run(UploadScheduleResult.PAUSED_CAPTURE_CREDENTIAL) { delegate.schedule() }
+}
+
 class WorkManagerCaptureUploadScheduler(
     context: Context,
     private val intake: EncryptedCaptureIntakeStore,
     private val credentials: CaptureCredentialProvider,
     private val health: CaptureHealthStore,
     private val clock: () -> Long = { System.currentTimeMillis() },
+    private val boundary: CaptureWorkBoundary,
 ) : CaptureUploadScheduler {
     private val retryingScheduler = RetryingCaptureUploadScheduler(
-        delegate = WorkManagerEnqueueScheduler(
+        delegate = IdentityCaptureUploadScheduler(WorkManagerEnqueueScheduler(
             context = context,
             intake = intake,
             credentials = credentials,
             health = health,
             clock = clock,
-        ),
+        ), boundary),
         health = health,
         clock = clock,
     )
 
-    override suspend fun schedule(): UploadScheduleResult = retryingScheduler.schedule()
+    override suspend fun schedule(): UploadScheduleResult = boundary.run(UploadScheduleResult.PAUSED_CAPTURE_CREDENTIAL) { retryingScheduler.schedule() }
 
     companion object {
         const val UNIQUE_WORK_NAME = "border-ledger-capture-upload"

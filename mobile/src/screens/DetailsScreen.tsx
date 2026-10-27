@@ -22,15 +22,20 @@ const ports:DetailsPorts={
   onChanged:NativeReview.onChanged,
  },
  accounts:{
+  onLunchFlowChanged:NativeAccounts.onLunchFlowChanged,
+  readLunchFlowConnection:async()=>await NativeAccounts.readLunchFlowConnection() as import('../features/details/contracts').LunchFlowConnection,
+  startLunchFlowAuthorization:NativeAccounts.startLunchFlowAuthorization,
+  cancelLunchFlowAuthorization:NativeAccounts.cancelLunchFlowAuthorization,
+  disconnectLunchFlow:(operationId,binding)=>NativeAccounts.disconnectLunchFlow({operationId,...binding}),
   getSnapshot:NativeAccounts.getSnapshot,
   readAccounts:(cursor,limit)=>NativeAccounts.readAccounts({cursor,limit}),
   readConnections:NativeAccounts.readConnections,
-  readLunchFlowAccounts:async():Promise<LunchFlowAccounts>=>{
-   const value=await NativeAccounts.readLunchFlowAccounts();
+  readLunchFlowAccounts:async(binding):Promise<LunchFlowAccounts>=>{
+   const value=await NativeAccounts.readLunchFlowAccounts(binding);
    return {...value,accounts:value.accounts.map(account=>({...account,kind:(['chequing','savings','credit'] as const).includes(account.kind as LunchFlowAccountKind)?account.kind as LunchFlowAccountKind:null}))};
   },
-  readLunchFlowStatus:async():Promise<LunchFlowAccounts>=>{
-   const value=await NativeAccounts.readLunchFlowStatus();
+  readLunchFlowStatus:async(binding):Promise<LunchFlowAccounts>=>{
+   const value=await NativeAccounts.readLunchFlowStatus(binding);
    return {...value,accounts:value.accounts.map(account=>({...account,kind:(['chequing','savings','credit'] as const).includes(account.kind as LunchFlowAccountKind)?account.kind as LunchFlowAccountKind:null}))};
   },
   startConnect:(operationId,reconnect)=>NativeAccounts.startConnect({operationId,reconnectConnectionId:reconnect}),
@@ -39,8 +44,8 @@ const ports:DetailsPorts={
   startCancelPending:(operationId,pendingConnectionId)=>NativeAccounts.startCancelPending({operationId,pendingConnectionId}),
   startSync:operationId=>NativeAccounts.startSync({operationId}),
   startDisconnect:(operationId,connectionId)=>NativeAccounts.startDisconnect({operationId,connectionId}),
-  startLunchFlowAccountSelection:(operationId,accounts)=>NativeAccounts.startLunchFlowAccountSelection({operationId,accounts}),
-  startLunchFlowSync:operationId=>NativeAccounts.startLunchFlowSync({operationId}),
+  startLunchFlowAccountSelection:(operationId,accounts,binding)=>NativeAccounts.startLunchFlowAccountSelection({operationId,accounts,...binding}),
+  startLunchFlowSync:(operationId,binding)=>NativeAccounts.startLunchFlowSync({operationId,...binding}),
   onStateChanged:NativeAccounts.onStateChanged,
  },
  session:{
@@ -65,11 +70,12 @@ function ReviewPanel({dark,controller,selected,draft,setDraft,setSelected,finish
 }
 
 function AccountsPanel({dark,controller}:{dark:boolean;controller:Controller}) {
-  return <AccountsView dark={dark} state={controller.accounts.current()} mutation={controller.mutation.current()} lunchFlowBusy={controller.lunchFlowBusy}
+  return <AccountsView dark={dark} state={controller.accounts.current()} mutation={controller.mutation.current()} lunchFlowBusy={controller.lunchFlowBusy} lunchFlowMessage={controller.lunchFlowMessage}
     onRetry={()=>{void controller.loadAccounts();}} onLoadMore={()=>{void controller.loadAccounts(true);}}
     onConnect={reconnect=>{void controller.connect({operationId:operationId(),reconnect});}} onCancelConnect={()=>{void controller.cancelConnect();}}
     onSelect={ids=>{void controller.selectAccounts({operationId:operationId(),ids});}} onCancel={()=>{void controller.cancelPending({operationId:operationId()});}}
     onSync={()=>{void controller.sync({operationId:operationId()});}} onDisconnect={id=>{void controller.disconnect({operationId:operationId(),connectionId:id,confirmed:true});}}
+    onLunchFlowAuthorize={()=>{void controller.authorizeLunchFlow();}} onLunchFlowCancel={()=>{void controller.cancelLunchFlow();}} onLunchFlowDisconnect={binding=>{void controller.disconnectLunchFlow({operationId:operationId(),...binding});}}
     onLunchFlowSelection={accounts=>{void controller.selectLunchFlow({operationId:operationId(),accounts});}}
     onLunchFlowSync={()=>{void controller.syncLunchFlow({operationId:operationId()});}}/>;
 }

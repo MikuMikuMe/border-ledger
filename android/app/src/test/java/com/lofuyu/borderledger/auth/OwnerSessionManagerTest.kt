@@ -23,12 +23,49 @@ import org.junit.Test
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class OwnerSessionManagerTest {
     private val callback = CallbackConfiguration(
         scheme = "https",
         host = "pf.example.com",
         path = "/android/auth/callback",
     )
+
+    @Test
+    fun coldHeadlessCaptureRestoresPersistedOwnerWithoutAnyUiCall() = runTest {
+        val capture = TestCaptureCredentialProvider(com.lofuyu.borderledger.IdentityFixture().credential)
+        val manager = manager(TestOwnerSessionStore(session = syntheticSession("2099-01-01T00:00:00Z")), TestOwnerLoginClient(), capture)
+        val boundary = CaptureWorkBoundary(capture, manager::currentBinding, prepareOwner = manager::restore)
+        assertTrue(manager.state.value is OwnerSessionState.Restoring)
+        var pending = true
+        val store = object : com.lofuyu.borderledger.local.CaptureUploadStore {
+            override suspend fun nextBatch(limit: Int) = if (pending) listOf(com.lofuyu.borderledger.local.QueuedAlert("local", "personal", "event", byteArrayOf(1), 1)) else emptyList()
+            override suspend fun applyAcknowledgements(acknowledgements: List<com.lofuyu.borderledger.local.AlertAcknowledgement>) { pending = false }
+            override suspend fun purgeAcknowledged() = Unit
+            override suspend fun pendingCount() = if (pending) 1 else 0
+        }
+        val client = object : com.lofuyu.borderledger.api.CaptureUploadClient {
+            override suspend fun upload(batch: List<com.lofuyu.borderledger.api.CaptureUploadEvent>) = com.lofuyu.borderledger.api.CaptureUploadResult.Success(
+                listOf(com.lofuyu.borderledger.api.CaptureEventAcknowledgement("event", "accepted", "provisional", emptyList())))
+        }
+        val worker = com.lofuyu.borderledger.sync.CaptureUploadCoordinator(store, client, com.lofuyu.borderledger.capture.CaptureHealthStore(), batchEncoder = { byteArrayOf(1) }, boundary = boundary)
+        assertTrue(worker.sync() is com.lofuyu.borderledger.sync.UploadSyncResult.Completed)
+        assertFalse(pending)
+    }
+
+    @Test
+    fun coldHeadlessSignedOutAndLegacyOwnersCannotAcquireCaptureWork() = runTest {
+        val legacy = syntheticSession("2099-01-01T00:00:00Z").copy(identity = null, epoch = null)
+        for (record in listOf(null, legacy)) {
+            val capture = TestCaptureCredentialProvider(com.lofuyu.borderledger.IdentityFixture().credential)
+            val policy = TestLocalDataPolicy()
+            val manager = manager(TestOwnerSessionStore(session = record), TestOwnerLoginClient(), capture, policy)
+            val boundary = CaptureWorkBoundary(capture, manager::currentBinding, prepareOwner = manager::restore)
+            assertFalse(boundary.run(false) { true })
+            assertTrue(manager.state.value is OwnerSessionState.SignedOut)
+            if (record != null) assertEquals(1, policy.revocations.size)
+        }
+    }
 
     @Test
     fun callbackExchangeCommitsBeforeSignedInAndDuplicateCallbackIsReplaySafe() = runTest {
@@ -254,7 +291,7 @@ class OwnerSessionManagerTest {
                 generation = 1,
                 expiresAt = "2099-01-01T00:00:00Z",
                 revocationCapability = "synthetic-capture-revocation",
-            ),
+            identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), sessionEpoch = "test-session"),
         )
         val local = TestLocalDataPolicy()
         val manager = manager(store, TestOwnerLoginClient(), capture, local)
@@ -279,7 +316,7 @@ class OwnerSessionManagerTest {
                 generation = 1,
                 expiresAt = "2099-01-01T00:00:00Z",
                 revocationCapability = "synthetic-capture-revocation",
-            ),
+            identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), sessionEpoch = "test-session"),
         )
         val local = TestLocalDataPolicy()
         val manager = manager(store, client, capture, local)
@@ -298,9 +335,7 @@ class OwnerSessionManagerTest {
     @Test
     fun ownerAndCaptureInterceptorsRejectEachOthersRoutes() = runTest {
         val owner = OwnerAuthInterceptor(
-            provider = object : OwnerCredentialProvider {
-                override suspend fun accessToken(): String = "synthetic-owner-access"
-            },
+            provider = com.lofuyu.borderledger.ownerCredentials("synthetic-owner-access"),
             environment = ApiEnvironment("https://pf.example.com", "sandbox"),
         )
         val capture = CaptureAuthInterceptor(
@@ -311,7 +346,7 @@ class OwnerSessionManagerTest {
                     generation = 1,
                     expiresAt = "2099-01-01T00:00:00Z",
                     revocationCapability = "synthetic-revocation",
-                )
+                identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), sessionEpoch = "test-session")
 
                 override suspend fun save(value: CaptureCredentialRecord) = Unit
                 override suspend fun clear() = Unit
@@ -322,7 +357,7 @@ class OwnerSessionManagerTest {
         val ownerRequest = MobileRequest("GET", "https://pf.example.com/api/mobile/v1/accounts")
         val captureRequest = MobileRequest("POST", "https://pf.example.com/api/mobile/v1/alerts")
         assertEquals("Bearer synthetic-owner-access", owner.intercept(ownerRequest).headers["Authorization"])
-        assertEquals("Bearer synthetic-capture", capture.intercept(captureRequest).headers["Authorization"])
+        assertEquals("Bearer synthetic-capture", kotlinx.coroutines.withContext(CaptureWork(TestCaptureCredentialProvider(CaptureCredentialRecord("synthetic-capture", "synthetic-device", 1, "2099-01-01T00:00:00Z", "synthetic-revocation", LedgerIdentity("owner", "personal"), "test-session")).current()!!)) { capture.intercept(captureRequest) }.headers["Authorization"])
         assertThrows<CredentialBoundaryException> { owner.intercept(captureRequest) }
         assertThrows<CredentialBoundaryException> { capture.intercept(ownerRequest) }
         assertThrows<CredentialBoundaryException> {
@@ -336,9 +371,7 @@ class OwnerSessionManagerTest {
     @Test
     fun ownerCanReadAlertsButCannotPostCaptureAlerts() = runTest {
         val owner = OwnerAuthInterceptor(
-            provider = object : OwnerCredentialProvider {
-                override suspend fun accessToken(): String = "synthetic-owner-access"
-            },
+            provider = com.lofuyu.borderledger.ownerCredentials("synthetic-owner-access"),
             environment = ApiEnvironment("https://pf.example.com", "sandbox"),
         )
 
@@ -372,7 +405,7 @@ class OwnerSessionManagerTest {
         revision = 1,
         revocationCapability = "synthetic-owner-revocation",
         deviceId = "synthetic-device",
-    )
+    identity = com.lofuyu.borderledger.auth.LedgerIdentity("owner", "personal"), epoch = "test-session")
 }
 
 private class TestOwnerSessionStore(
@@ -450,7 +483,7 @@ private class TestOwnerLoginClient(
         scopes = listOf("ledger:read", "devices:manage"),
         revision = 2,
         revocationCapability = "synthetic-owner-revocation-new",
-    )
+    userId = "owner", ledgerId = "personal")
 }
 
 private class TestCaptureCredentialProvider(var value: CaptureCredentialRecord?) : CaptureCredentialProvider {
@@ -479,7 +512,7 @@ private fun syntheticTokenResponse() = OwnerTokenResponse(
     scopes = listOf("ledger:read", "devices:manage"),
     revision = 1,
     revocationCapability = "synthetic-owner-revocation",
-)
+userId = "owner", ledgerId = "personal")
 
 private suspend inline fun <reified T : Throwable> assertThrows(block: suspend () -> Unit) {
     try {

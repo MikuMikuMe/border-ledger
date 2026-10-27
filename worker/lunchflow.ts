@@ -2,7 +2,7 @@ import { classifyTransaction } from '../src/domain/ledger';
 import type { TransactionKind } from '../src/domain/types';
 import { getCurrencyMeta } from '../src/domain/currencies';
 
-export const LUNCHFLOW_API_BASE_URL = 'https://lunchflow.app/api/v1';
+export const LUNCHFLOW_API_BASE_URL = 'https://www.lunchflow.app/api/v1';
 export const LUNCHFLOW_REQUEST_TIMEOUT_MS = 15_000;
 export const LUNCHFLOW_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const LUNCHFLOW_MAX_ACCOUNTS = 25;
@@ -14,6 +14,7 @@ export interface LunchFlowApiEnv {
 }
 
 export interface LunchFlowAccount {
+  bankConnectionId?: string;
   id: string;
   name: string;
   institutionName: string;
@@ -194,7 +195,7 @@ async function boundedResponseText(response: Response, maxBytes: number) {
   return readUnstreamedResponse(response, maxBytes);
 }
 
-async function boundedJson(response: Response, maxBytes: number) {
+export async function boundedJson(response: Response, maxBytes: number) {
   const text = await boundedResponseText(response, maxBytes);
   try {
     return JSON.parse(text) as unknown;
@@ -361,7 +362,7 @@ function parseTransaction(value: unknown, providerAccountId: string, ids: Set<st
   } satisfies LunchFlowTransaction;
 }
 
-function parseTransactions(payload: unknown, providerAccountId: string) {
+export function parseTransactions(payload: unknown, providerAccountId: string) {
   const object = objectValue(payload, { message: 'Lunch Flow returned an invalid transactions response.' });
   const transactions = snapshotRows(object, 'transactions', LUNCHFLOW_MAX_TRANSACTIONS);
   requireTransactionTotal(object, transactions);

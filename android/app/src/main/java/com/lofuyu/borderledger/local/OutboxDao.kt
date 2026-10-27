@@ -5,6 +5,8 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import com.lofuyu.borderledger.auth.SessionBinding
+import java.security.MessageDigest
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -46,11 +48,11 @@ interface OutboxDao {
 }
 
 /** Encrypted collection implementation used until the production Room driver is pinned. */
-class EncryptedOutboxDao(private val records: EncryptedRecordStore) : OutboxDao {
+class EncryptedOutboxDao(private val records: EncryptedRecordStore, private val binding: SessionBinding? = null) : OutboxDao {
     private val mutex = Mutex()
 
     override suspend fun enqueue(event: QueuedAlert): EnqueueResult = mutex.withLock {
-        require(event.ownerLedgerId == "personal") { "Only the personal ledger is supported." }
+        require(binding != null && event.ownerLedgerId == binding.identity.ledgerId) { "An authenticated ledger binding is required." }
         val current = readItems()
         val same = current.firstOrNull { it.ownerLedgerId == event.ownerLedgerId && it.eventId == event.eventId }
         if (same != null) {
@@ -84,16 +86,24 @@ class EncryptedOutboxDao(private val records: EncryptedRecordStore) : OutboxDao 
 
     override suspend fun pendingCount(): Int = mutex.withLock { readItems().count { !it.acknowledged } }
 
+    private fun recordName(): String? {
+        val bound = binding ?: return null
+        val identity = listOf(bound.identity.userId, bound.identity.ledgerId, bound.epoch).joinToString("") { "${it.length}:$it" }
+        val digest = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray()).joinToString("") { "%02x".format(it) }
+        return "${LedgerRecord.OUTBOX_QUEUE}_$digest"
+    }
+
     private suspend fun readItems(): List<QueuedAlert> {
-        val bytes = records.read(LedgerRecord.OUTBOX_QUEUE) ?: return emptyList()
+        val bytes = records.read(recordName() ?: return emptyList()) ?: return emptyList()
         return decode(bytes)
     }
 
     private suspend fun writeItems(items: List<QueuedAlert>) {
+        if (binding == null) return
         if (items.isEmpty()) {
-            records.delete(LedgerRecord.OUTBOX_QUEUE)
+            records.delete(requireNotNull(recordName()))
         } else {
-            records.write(LedgerRecord.OUTBOX_QUEUE, encode(items))
+            records.write(requireNotNull(recordName()), encode(items))
         }
     }
 

@@ -17,6 +17,11 @@ export const task17MigrationNames = [...task16MigrationNames, '0017-import-dupli
 export const task18MigrationNames = [...task17MigrationNames, '0018-fx-snapshots.sql'] as const;
 export const task19MigrationNames = [...task18MigrationNames, '0019-owner-installation-binding.sql'] as const;
 export const task20MigrationNames = [...task19MigrationNames, '0020-lunchflow.sql'] as const;
+export const task22MigrationNames = [...task20MigrationNames.slice(0, 11), '0011-native-connections.sql', ...task20MigrationNames.slice(11), '0021-hosted-users.sql', '0022-unbound-auth.sql'] as const;
+
+export const task23MigrationNames = [...task22MigrationNames, '0023-plaid-tenant-connections.sql'] as const;
+
+export const task24MigrationNames = [...task23MigrationNames, '0024-alert-raw-identities.sql'] as const;
 
 function migrationStatements(sql: string) {
   return sql

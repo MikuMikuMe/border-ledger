@@ -1,3 +1,4 @@
+import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CONNECTION_PENDING_TTL_MS,
@@ -12,16 +13,17 @@ import type { OwnerContext } from '../worker/mobile-auth';
 import { createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
 import worker from '../worker/index';
 
+const TEST_NOW=new Date();
 const fixtures: Array<{ close(): void }> = [];
 const owner: OwnerContext = {
   credentialType: 'owner',
-  ledgerId: 'personal',
+  ledgerId: 'personal', userId: 'owner',
   familyId: 'task14-owner-family',
   subjectHash: 'task14-owner-subject',
   deviceId: 'task14-device',
   accessGeneration: 1,
   scopes: ['connections:manage', 'ledger:read'],
-  expiresAt: '2026-10-14T13:00:00.000Z',
+  expiresAt: '2099-01-01T00:00:00.000Z',
   environmentHash: 'task14-environment',
 };
 
@@ -52,18 +54,18 @@ async function fixture() {
   await value.db.prepare(`INSERT INTO owner_session_families
     (id, ledger_id, subject_hash, access_generation, refresh_generation, access_expires_at, refresh_expires_at, scope_json, environment_hash, created_at)
     VALUES (?, 'personal', ?, 1, 1, ?, ?, ?, ?, ?)`)
-    .bind(owner.familyId, owner.subjectHash, '2026-10-14T13:00:00.000Z', '2026-10-14T13:00:00.000Z', JSON.stringify(owner.scopes), owner.environmentHash, '2026-10-14T12:00:00.000Z').run();
+    .bind(owner.familyId, owner.subjectHash, '2099-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z', JSON.stringify(owner.scopes), owner.environmentHash, TEST_NOW.toISOString()).run();
   fixtures.push(value);
   return value;
 }
 
 async function routeOwner(db: import('../worker/db-types').D1Database) {
-  const expiresAt = '2026-10-14T13:00:00.000Z';
+  const expiresAt = '2099-01-01T00:00:00.000Z';
   const environmentHash = await hashSecret(ROUTE_ENVIRONMENT);
   await db.prepare(`INSERT INTO owner_session_families
     (id, ledger_id, subject_hash, access_generation, refresh_generation, access_expires_at, refresh_expires_at, scope_json, environment_hash, created_at)
     VALUES (?, 'personal', ?, 1, 1, ?, ?, ?, ?, ?)`)
-    .bind('route-task14-family', 'route-task14-owner', expiresAt, expiresAt, JSON.stringify(['connections:manage', 'ledger:read']), environmentHash, '2026-10-14T12:00:00.000Z').run();
+    .bind('route-task14-family', 'route-task14-owner', expiresAt, expiresAt, JSON.stringify(['connections:manage', 'ledger:read']), environmentHash, TEST_NOW.toISOString()).run();
   return createOpaqueCredential({
     kind: 'owner-access', familyId: 'route-task14-family', generation: 1, expiresAt, environmentHash,
   }, {
@@ -89,7 +91,7 @@ function routeEnv(db: import('../worker/db-types').D1Database) {
     PLAID_CLIENT_USER_ID: 'stable-owner',
     PLAID_WEBHOOK_URL: 'https://pf.example.com/api/webhooks/plaid',
     PLAID_ANDROID_PACKAGE_NAME: 'com.lofuyu.borderledger',
-    now: () => new Date('2026-10-14T12:00:00.000Z'),
+    now: () => new Date(TEST_NOW),
     ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
   };
 }
@@ -105,7 +107,7 @@ function serviceEnv(db: import('../worker/db-types').D1Database, queue?: { send(
     PLAID_WEBHOOK_URL: 'https://pf.example.com/api/webhooks/plaid',
     LEDGER_APP_ORIGIN: 'https://pf.example.com',
     SYNC_QUEUE: queue,
-    now: () => new Date('2026-10-14T12:00:00.000Z'),
+    now: () => new Date(TEST_NOW),
   };
 }
 
@@ -120,7 +122,7 @@ describe('Task 14 connection service boundaries', () => {
       PLAID_ANDROID_PACKAGE_NAME: 'com.lofuyu.borderledger',
       PLAID_ANDROID_REDIRECT_URI: 'https://pf.example.com/android/plaid/oauth',
       PLAID_WEBHOOK_URL: 'https://pf.example.com/api/webhooks/plaid',
-    });
+    },owner);
 
     expect(payload).toMatchObject({
       user: { client_user_id: 'owner-stable-id' },
@@ -222,7 +224,7 @@ describe('Task 14 connection service boundaries', () => {
     await expect(service.readConnections(owner)).resolves.toMatchObject([{ state: 'connected', institution: 'Synthetic Bank' }]);
     expect(fake.calls).toEqual([]);
     await expect(service.requestSync(owner, 'sync-3')).resolves.toMatchObject({ state: 'syncing', queued: true });
-    expect(queued).toEqual([{ type: 'plaid-sync', itemId: 'item-task14' }]);
+    expect(queued).toEqual([{ type: 'plaid-sync', itemId: 'item-task14',userId:'owner',ledgerId:'personal',generation:2,connectionRevision:2 }]);
   });
 
   it('revokes with recent owner approval before deleting local credentials and keeps history', async () => {
@@ -276,6 +278,6 @@ describe('production native Plaid configuration', () => {
       PLAID_ENV: 'production',
       PLAID_ANDROID_PACKAGE_NAME: 'com.lofuyu.borderledger',
       LEDGER_APP_ORIGIN: 'http://localhost:8787',
-    })).toThrow('The Plaid webhook URL is not configured.');
+    },owner)).toThrow('The Plaid webhook URL is not configured.');
   });
 });

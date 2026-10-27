@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { IdentityResponse as Response, privateFetchSpy } from './helpers/web-session';
 
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -9,7 +10,7 @@ import { demoAccounts, demoTransactions } from '../src/domain/demo-data';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function mockLunchFlowAccountApp(plaidRequests: string[]) {
-  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+  return privateFetchSpy().mockImplementation(async (input) => {
     const path = new URL(String(input), 'https://ledger.example.test').pathname;
     if (path === '/api/accounts') {
       return new Response(JSON.stringify({ accounts: [{
@@ -48,7 +49,7 @@ describe('account card options', () => {
   });
 
   it('opens account options when the three-dot button is clicked', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    privateFetchSpy().mockImplementation(async (input) => {
       if (String(input).endsWith('/api/accounts')) return new Response(JSON.stringify({ accounts: demoAccounts.map((account) => ({ ...account, last_synced_at: account.lastSyncedAt, plaid_item_id: account.plaidItemId ?? null })) }));
       return new Response(JSON.stringify({ transactions: demoTransactions.map((transaction) => ({ ...transaction, account_id: transaction.accountId, amount_minor: transaction.amountMinor })) }));
     });
@@ -82,7 +83,7 @@ describe('account card options', () => {
 
   it('waits for explicit account selection after Plaid Link succeeds', async () => {
     let plaidOptions: any = null;
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const fetchMock = privateFetchSpy().mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith('/api/plaid/link-token')) return new Response(JSON.stringify({ link_token: 'link-token' }), { status: 200 });
       if (url.endsWith('/api/accounts')) return new Response(JSON.stringify({ accounts: [] }), { status: 200 });

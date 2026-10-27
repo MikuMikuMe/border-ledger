@@ -1,5 +1,7 @@
-import type { D1Database } from './db-types';
-import { bindConsentedCaptureDevice } from './mobile-capture-device-binding';
+import { assertFinancialAuthority, financialAuthorityGuard, financialAuthorityPredicate, immutableFinancialContext, type FinancialContext } from './financial-authority';
+import { approvedSourceMapping, devicePublicationGuard, sourceConfigStatements } from './device-publication';
+import type { D1Database, D1Statement } from './db-types';
+import { prepareConsentedCaptureDevice } from './mobile-capture-device-binding';
 import { getCurrencyMeta, supportedCurrencyCodes } from '../src/domain/currencies';
 import {
   createOpaqueCredential,
@@ -62,7 +64,7 @@ export class MobileDeviceError extends Error {
 
 interface DeviceRow {
   id: string;
-  ledger_id: 'personal';
+  ledger_id: string;
   device_name: string;
   platform: string;
   status: string;
@@ -112,35 +114,23 @@ function sourceConfig(value: unknown): SourceConfigInput {
   return { expectedRevision: safeRevision(body.expectedRevision), mappings };
 }
 
-async function readDeviceRow(db: D1Database, deviceId: string) {
+async function readDeviceRow(db: D1Database, context: FinancialContext, deviceId: string) {
   return db.prepare(`SELECT id, ledger_id, device_name, platform, status, expires_at, revoked_at, source_config_revision
-    FROM mobile_devices WHERE id = ? AND ledger_id = 'personal'`).bind(bounded(deviceId, 'device id', 128)).first<DeviceRow>();
+    FROM mobile_devices WHERE id = ? AND ledger_id = ?`).bind(bounded(deviceId, 'device id', 128), context.ledgerId).first<DeviceRow>();
 }
 
-async function approvedMappingCount(db: D1Database, mapping: SourceMappingInput) {
-  const source = await db.prepare(`SELECT id FROM source_profiles WHERE id = ? AND ledger_id = 'personal' AND status = 'approved'`).bind(mapping.sourceProfileId).first<{ id: string }>();
-  if (!source) throw new MobileDeviceError('forbidden', 'The source profile is not approved.', 403);
-  for (const currency of mapping.allowedCurrencies) {
-    const allowed = await db.prepare(`SELECT 1 AS allowed FROM account_currencies WHERE account_id = ? AND currency = ?`).bind(mapping.accountId, currency).first<{ allowed: number }>();
-    if (!allowed) throw new MobileDeviceError('forbidden', 'The account currency is not approved.', 403);
+async function validateSourceConfig(db:D1Database, context:FinancialContext, input:SourceConfigInput) {
+  for(const mapping of input.mappings) for(const currency of mapping.allowedCurrencies) {
+    const allowed=approvedSourceMapping(context,mapping,currency);
+    if(!await db.prepare(`SELECT 1 WHERE ${allowed.sql}`).bind(...allowed.bindings).first())
+      throw new MobileDeviceError('forbidden','The source mapping, hint or account currency is not approved.',403);
   }
-  const approved = await db.prepare(`SELECT account_id, hint_kind, hint_value FROM source_account_mappings
-    WHERE ledger_id = 'personal' AND source_profile_id = ? AND approval_status = 'approved'`).bind(mapping.sourceProfileId).all<{ account_id: string; hint_kind: string; hint_value: string }>();
-  const matches = mapping.instrumentHint
-    ? approved.results.filter((item) => item.account_id === mapping.accountId && item.hint_kind === mapping.instrumentHint!.kind && item.hint_value === mapping.instrumentHint!.value)
-    : approved.results.filter((item) => item.account_id === mapping.accountId && item.hint_kind === 'none' && item.hint_value === '');
-  if (matches.length !== 1) throw new MobileDeviceError('forbidden', 'The source mapping is not approved for this account.', 403);
-  return matches.length;
 }
 
-async function validateSourceConfig(db: D1Database, input: SourceConfigInput) {
-  for (const mapping of input.mappings) await approvedMappingCount(db, mapping);
-}
-
-async function readMappings(db: D1Database, deviceId: string): Promise<SourceMappingInput[]> {
+async function readMappings(db: D1Database, context: FinancialContext, deviceId: string): Promise<SourceMappingInput[]> {
   const rows = await db.prepare(`SELECT source_profile_id, account_id, currency, instrument_hint_kind, instrument_hint_value
-    FROM device_source_scopes WHERE device_id = ? AND status = 'approved'
-    ORDER BY source_profile_id, account_id, instrument_hint_kind, instrument_hint_value, currency`).bind(deviceId).all<{
+    FROM device_source_scopes WHERE device_id = ? AND ledger_id = ? AND status = 'approved'
+    ORDER BY source_profile_id, account_id, instrument_hint_kind, instrument_hint_value, currency`).bind(deviceId, context.ledgerId).all<{
       source_profile_id: string;
       account_id: string;
       currency: string;
@@ -160,11 +150,15 @@ async function readMappings(db: D1Database, deviceId: string): Promise<SourceMap
   return [...groups.values()];
 }
 
-export async function readDevice(db: D1Database, deviceId: string): Promise<DeviceView> {
-  const row = await readDeviceRow(db, deviceId);
+export async function readDevice(db: D1Database, input: FinancialContext, deviceId: string): Promise<DeviceView> {
+  const context=immutableFinancialContext(input);
+  await assertFinancialAuthority(db,context,'devices:manage');
+  const row = await readDeviceRow(db, context, deviceId);
   if (!row) throw new MobileDeviceError('not_found', 'The mobile device was not found.', 404);
   const latestCredential = await db.prepare(`SELECT expires_at FROM capture_credentials
-    WHERE device_id = ? AND revoked_at IS NULL ORDER BY generation DESC LIMIT 1`).bind(row.id).first<{ expires_at: string }>();
+    WHERE device_id = ? AND ledger_id = ? AND revoked_at IS NULL ORDER BY generation DESC LIMIT 1`).bind(row.id, context.ledgerId).first<{ expires_at: string }>();
+  const mappings=await readMappings(db,context,row.id);
+  await assertFinancialAuthority(db,context,'devices:manage');
   return {
     id: row.id,
     name: row.device_name,
@@ -172,20 +166,45 @@ export async function readDevice(db: D1Database, deviceId: string): Promise<Devi
     status: row.status,
     credentialExpiresAt: latestCredential?.expires_at ?? row.expires_at,
     revokedAt: row.revoked_at,
-    sourceConfig: { expectedRevision: row.source_config_revision, mappings: await readMappings(db, row.id) },
+    sourceConfig: { expectedRevision: row.source_config_revision, mappings },
     revision: row.source_config_revision,
   };
 }
 
-export async function readDevices(db: D1Database): Promise<DeviceView[]> {
-  const rows = await db.prepare(`SELECT id FROM mobile_devices WHERE ledger_id = 'personal' ORDER BY created_at, id`).all<{ id: string }>();
-  return Promise.all(rows.results.map((row) => readDevice(db, row.id)));
+export async function readDevices(db:D1Database,input:FinancialContext):Promise<DeviceView[]> {
+  const context=immutableFinancialContext(input);
+  await assertFinancialAuthority(db,context,'devices:manage');
+  const rows=await db.prepare('SELECT id FROM mobile_devices WHERE ledger_id=? ORDER BY created_at,id').bind(context.ledgerId).all<{id:string}>();
+  const devices=await Promise.all(rows.results.map(row=>readDevice(db,context,row.id)));
+  await assertFinancialAuthority(db,context,'devices:manage');
+  return devices;
 }
 
-export async function replaceDeviceSourceConfig(db: D1Database, deviceId: string, input: unknown): Promise<DeviceView> {
-  const config = sourceConfig(input);
-  await validateSourceConfig(db, config);
-  return writeDeviceSourceConfig(db, { deviceId, config });
+export async function replaceDeviceSourceConfig(db:D1Database,input:FinancialContext,deviceId:string,body:unknown):Promise<DeviceView> {
+  const context=immutableFinancialContext(input);
+  const config=sourceConfig(body);
+  await assertFinancialAuthority(db,context,'devices:manage');
+  requireWritableDevice(await readDeviceRow(db,context,deviceId),config);
+  await validateSourceConfig(db,context,config);
+  await publishDeviceConfiguration(db,context,{deviceId,config},[financialAuthorityGuard(db,context,'devices:manage'),...sourceConfigStatements(db,context,deviceId,config)]);
+  return readDevice(db,context,deviceId);
+}
+
+function isDeviceGuardFailure(error:unknown) {
+  const cause=error instanceof Error?error.cause:undefined;
+  return [error,cause].some(value=>/NOT NULL constraint failed: ledger_preferences\.ledger_id|ledger_preferences ledger mismatch/.test(String(value)));
+}
+
+async function publishDeviceConfiguration(db:D1Database,context:FinancialContext,update:{deviceId:string;config:SourceConfigInput},statements:D1Statement[]) {
+  try {await db.batch(statements);} catch(error) {
+    await assertFinancialAuthority(db,context,'devices:manage');
+    if(!isDeviceGuardFailure(error))throw error;
+    const current=await readDeviceRow(db,context,update.deviceId);
+    await assertFinancialAuthority(db,context,'devices:manage');
+    if(current && current.source_config_revision!==update.config.expectedRevision)
+      throw new MobileDeviceError('revision_conflict','The source configuration revision is stale.',409,current.source_config_revision);
+    throw error;
+  }
 }
 
 function requireWritableDevice(row: DeviceRow | null, config: SourceConfigInput): DeviceRow {
@@ -193,31 +212,6 @@ function requireWritableDevice(row: DeviceRow | null, config: SourceConfigInput)
   if (row.status === 'revoked') throw new MobileDeviceError('revoked', 'The mobile device is revoked.', 409);
   if (config.expectedRevision !== row.source_config_revision) throw new MobileDeviceError('revision_conflict', 'The source configuration revision is stale.', 409, row.source_config_revision);
   return row;
-}
-
-function deviceScopeStatements(db: D1Database, device: DeviceRow, config: SourceConfigInput) {
-  return config.mappings.flatMap((mapping) => mapping.allowedCurrencies.map((currency) => db.prepare(`INSERT INTO device_source_scopes
-    (id, device_id, source_profile_id, account_id, currency, instrument_hint_kind, instrument_hint_value, status, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', NULL)`).bind(
-    crypto.randomUUID(), device.id, mapping.sourceProfileId, mapping.accountId, currency,
-    mapping.instrumentHint?.kind ?? 'none', mapping.instrumentHint?.value ?? '',
-  )));
-}
-
-async function writeDeviceSourceConfig(db: D1Database, update: { deviceId: string; config: SourceConfigInput }): Promise<DeviceView> {
-  const { deviceId, config } = update;
-  const device = requireWritableDevice(await readDeviceRow(db, deviceId), config);
-  const updated = await db.prepare(`UPDATE mobile_devices SET source_config_revision = source_config_revision + 1, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND ledger_id = 'personal' AND status <> 'revoked' AND source_config_revision = ?`).bind(deviceId, config.expectedRevision).run();
-  if (updated.meta?.changes !== 1) {
-    const current = await readDeviceRow(db, deviceId);
-    throw new MobileDeviceError('revision_conflict', 'The source configuration revision is stale.', 409, current?.source_config_revision);
-  }
-  await db.batch([
-    db.prepare('DELETE FROM device_source_scopes WHERE device_id = ?').bind(deviceId),
-    ...deviceScopeStatements(db, device, config),
-  ]);
-  return readDevice(db, deviceId);
 }
 
 function isCaptureAuthorizationBody(input: unknown): input is Record<string, unknown> {
@@ -234,47 +228,61 @@ function captureAuthorizationInput(input: unknown) {
   return { credentialHash, captureConfig };
 }
 
-export async function issueCaptureAuthorization(db: D1Database, owner: OwnerContext, input: unknown, config: MobileAuthConfig) {
-  const { credentialHash, captureConfig } = captureAuthorizationInput(input);
-  await validateSourceConfig(db, captureConfig);
-  if (!owner.deviceId && captureConfig.expectedRevision !== 0) throw new MobileDeviceError('revision_conflict', 'A new capture device must start at revision zero.', 409, 0);
-  const deviceId = await bindConsentedCaptureDevice(db, { ...owner, consent: true }, config);
-  const updated = await writeDeviceSourceConfig(db, { deviceId, config: captureConfig });
-  const at = now(config);
-  const expiresAt = isoAfter(at, CAPTURE_LIFETIME_MS);
-  const current = await db.prepare(`SELECT generation FROM capture_credentials WHERE device_id = ? ORDER BY generation DESC LIMIT 1`).bind(deviceId).first<{ generation: number }>();
-  const generation = (current?.generation ?? 0) + 1;
-  const credentialId = crypto.randomUUID();
-  const revocationCapability = await createOpaqueCredential({ kind: 'revocation', grantType: 'capture-credential', grantId: credentialId, generation, expiresAt, environmentHash: await hashSecret(config.environment) }, config);
-  const environmentHash = await hashSecret(config.environment);
-  await db.batch([
-    db.prepare(`UPDATE capture_credentials SET revoked_at = COALESCE(revoked_at, ?)
-      WHERE device_id = ? AND revoked_at IS NULL`).bind(at.toISOString(), deviceId),
-    db.prepare(`UPDATE mobile_devices SET expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(expiresAt, deviceId),
-    db.prepare(`INSERT INTO capture_credentials
-      (id, device_id, credential_hash, credential_type, scope, generation, issued_at, expires_at, environment_hash, revocation_capability_hash)
-      VALUES (?, ?, ?, 'capture', 'alerts:write', ?, ?, ?, ?, ?)`).bind(credentialId, deviceId, credentialHash, generation, at.toISOString(), expiresAt, environmentHash, await hashSecret(revocationCapability)),
+export async function issueCaptureAuthorization(db:D1Database,inputOwner:OwnerContext,input:unknown,config:MobileAuthConfig) {
+  const owner=immutableFinancialContext(inputOwner);
+  const {credentialHash,captureConfig}=captureAuthorizationInput(input);
+  await assertFinancialAuthority(db,owner,'devices:manage');
+  await validateSourceConfig(db,owner,captureConfig);
+  const plan=await prepareConsentedCaptureDevice(db,{...owner,consent:true},config);
+  const deviceId=plan.deviceId;
+  if(plan.newDevice && captureConfig.expectedRevision!==0)throw new MobileDeviceError('revision_conflict','A new capture device must start at revision zero.',409,0);
+  if(!plan.newDevice)requireWritableDevice(await readDeviceRow(db,owner,deviceId),captureConfig);
+  const current=await db.prepare('SELECT generation FROM capture_credentials WHERE device_id=? AND ledger_id=? ORDER BY generation DESC LIMIT 1').bind(deviceId,owner.ledgerId).first<{generation:number}>();
+  const generation=(current?.generation??0)+1;
+  const at=now(config);const expiresAt=isoAfter(at,CAPTURE_LIFETIME_MS);
+  const credentialId=crypto.randomUUID();const environmentHash=await hashSecret(config.environment);
+  const revocationCapability=await createOpaqueCredential({kind:'revocation',grantType:'capture-credential',grantId:credentialId,generation,expiresAt,environmentHash},config);
+  const capabilityHash=await hashSecret(revocationCapability);
+  await publishDeviceConfiguration(db,owner,{deviceId,config:captureConfig},[
+    ...plan.statements,
+    devicePublicationGuard(db,owner,'COALESCE((SELECT MAX(generation) FROM capture_credentials WHERE device_id=? AND ledger_id=?),0)=?',[deviceId,owner.ledgerId,generation-1]),
+    ...sourceConfigStatements(db,owner,deviceId,captureConfig),
+    db.prepare('UPDATE capture_credentials SET revoked_at=COALESCE(revoked_at,?) WHERE device_id=? AND ledger_id=?').bind(at.toISOString(),deviceId,owner.ledgerId),
+    db.prepare('UPDATE mobile_devices SET expires_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND ledger_id=?').bind(expiresAt,deviceId,owner.ledgerId),
+    db.prepare(`INSERT INTO capture_credentials(id,ledger_id,device_id,credential_hash,credential_type,scope,generation,issued_at,expires_at,environment_hash,revocation_capability_hash)
+      VALUES (?,?,?,?,'capture','alerts:write',?,?,?,?,?)`).bind(credentialId,owner.ledgerId,deviceId,credentialHash,generation,at.toISOString(),expiresAt,environmentHash,capabilityHash),
   ]);
-  return { ...updated, deviceId, generation, credentialExpiresAt: expiresAt, revocationCapability };
+  const updated=await readDevice(db,owner,deviceId);
+  await assertIssuedCaptureAuthorization(db,owner,{credentialId,deviceId,generation,revision:captureConfig.expectedRevision+1});
+  return {...updated,userId:owner.userId,ledgerId:owner.ledgerId,deviceId,generation,credentialExpiresAt:expiresAt,revocationCapability};
 }
 
-export async function revokeDevice(db: D1Database, owner: OwnerContext, deviceId: string, config: MobileAuthConfig) {
-  const row = await readDeviceRow(db, deviceId);
-  if (!row) throw new MobileDeviceError('not_found', 'The mobile device was not found.', 404);
-  if (owner.deviceId !== deviceId) {
-    const family = await db.prepare(`SELECT created_at FROM owner_session_families WHERE id = ? AND ledger_id = 'personal'`).bind(owner.familyId).first<{ created_at: string }>();
-    if (!family) throw new MobileDeviceError('recent_approval_required', 'A recent owner approval is required.', 403);
-    try {
-      requireRecentOwnerApproval(family.created_at, config);
-    } catch {
-      throw new MobileDeviceError('recent_approval_required', 'A recent owner approval is required.', 403);
-    }
-  }
-  const revokedAt = now(config).toISOString();
-  await db.batch([
-    db.prepare(`UPDATE mobile_devices SET status = 'revoked', revoked_at = COALESCE(revoked_at, ?), updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND ledger_id = 'personal'`).bind(revokedAt, deviceId),
-    db.prepare(`UPDATE capture_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE device_id = ?`).bind(revokedAt, deviceId),
-  ]);
+async function assertIssuedCaptureAuthorization(db:D1Database,owner:OwnerContext,binding:{credentialId:string;deviceId:string;generation:number;revision:number}) {
+  const authority=financialAuthorityPredicate(owner,'devices:manage');
+  const active=await db.prepare(`SELECT 1 FROM capture_credentials c JOIN mobile_devices d ON d.id=c.device_id AND d.ledger_id=c.ledger_id
+    WHERE c.id=? AND c.ledger_id=? AND c.device_id=? AND c.generation=? AND c.environment_hash=? AND c.revoked_at IS NULL
+    AND julianday(c.expires_at)>julianday('now') AND d.status='paired' AND d.revoked_at IS NULL AND d.source_config_revision=? AND ${authority.sql}`)
+    .bind(binding.credentialId,owner.ledgerId,binding.deviceId,binding.generation,owner.environmentHash,binding.revision,...authority.bindings).first();
+  if(!active)throw new MobileDeviceError('capture_changed','The capture authorization changed before delivery. Retry with the current device configuration.',409);
 }
 
+async function recentDeviceApproval(db:D1Database,owner:OwnerContext,deviceId:string,config:MobileAuthConfig) {
+  const family=await db.prepare('SELECT device_id,created_at FROM owner_session_families WHERE id=? AND ledger_id=?').bind(owner.familyId,owner.ledgerId).first<{created_at:string;device_id:string|null}>();
+  if(!family)throw new MobileDeviceError('recent_approval_required','A recent owner approval is required.',403);
+  if(family.device_id===deviceId)return;
+  try {requireRecentOwnerApproval(family.created_at,config);} catch {throw new MobileDeviceError('recent_approval_required','A recent owner approval is required.',403);}
+}
+
+export async function revokeDevice(db:D1Database,inputOwner:OwnerContext,deviceId:string,config:MobileAuthConfig) {
+  const owner=immutableFinancialContext(inputOwner);
+  await assertFinancialAuthority(db,owner,'devices:manage');
+  if(!await readDeviceRow(db,owner,deviceId))throw new MobileDeviceError('not_found','The mobile device was not found.',404);
+  await recentDeviceApproval(db,owner,deviceId,config);
+  const revokedAt=now(config).toISOString();
+  await db.batch([
+    financialAuthorityGuard(db,owner,'devices:manage'),
+    devicePublicationGuard(db,owner,`EXISTS (SELECT 1 FROM owner_session_families WHERE id=? AND ledger_id=? AND (device_id=? OR (julianday(created_at)<=julianday('now') AND julianday(created_at)>=julianday('now','-10 minutes'))))`,[owner.familyId,owner.ledgerId,deviceId]),
+    db.prepare("UPDATE mobile_devices SET status='revoked',revoked_at=COALESCE(revoked_at,?),updated_at=CURRENT_TIMESTAMP WHERE id=? AND ledger_id=?").bind(revokedAt,deviceId,owner.ledgerId),
+    db.prepare('UPDATE capture_credentials SET revoked_at=COALESCE(revoked_at,?) WHERE device_id=? AND ledger_id=?').bind(revokedAt,deviceId,owner.ledgerId),
+  ]);
+}

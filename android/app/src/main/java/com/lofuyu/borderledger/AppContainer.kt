@@ -68,23 +68,33 @@ class AppContainer(
 
     val ownerSessionStore = EncryptedOwnerSessionStore(records)
     private val storedCaptureCredentialProvider = EncryptedCaptureCredentialProvider(records)
-    val captureHealth = CaptureHealthStore()
+    val captureHealth: CaptureHealthStore = CaptureHealthStore(owner = { ownerSessionManager.currentBinding() })
     val captureProfiles: CaptureSourceProfileProvider = captureProfileProvider
-    val captureIntakeStore = EncryptedCaptureIntakeStore(records)
+    val captureWork = com.lofuyu.borderledger.auth.CaptureWorkBoundary(storedCaptureCredentialProvider, owner = { ownerSessionManager.currentBinding() }, commit = { binding, block -> ownerSessionManager.commitIfCurrent(binding, block) },
+        prepareOwner = { if (ownerSessionManager.state.value is com.lofuyu.borderledger.auth.OwnerSessionState.Restoring) ownerSessionManager.restore() },
+        workContext = captureHealth::context)
+    val captureIntakeStore = EncryptedCaptureIntakeStore(com.lofuyu.borderledger.auth.CaptureIdentityRecords(records, captureWork))
     val captureIntake = BankNotificationIntake(
         profiles = captureProfiles,
         store = captureIntakeStore,
         health = captureHealth,
         parserFor = { profile -> SourceParserRegistry.parserFor(profile) },
+        boundary = captureWork,
     )
     val captureUploadScheduler = WorkManagerCaptureUploadScheduler(
         context = appContext,
         intake = captureIntakeStore,
         credentials = storedCaptureCredentialProvider,
         health = captureHealth,
+        boundary = captureWork,
     )
     val captureCredentialProvider: CaptureCredentialProvider = SchedulingCaptureCredentialProvider(
         delegate = storedCaptureCredentialProvider,
+        onCredentialSaved = {
+            captureHealth.pauseMonitoring()
+            captureIntake.activateCurrentConsent()
+            captureHealth.resumeAfterConsent()
+        },
         onCredentialUsable = { captureUploadScheduler.schedule() },
     )
     private val captureUploadClient = HttpWorkerCaptureUploadClient(
@@ -96,6 +106,7 @@ class AppContainer(
         store = captureIntakeStore,
         client = captureUploadClient,
         health = captureHealth,
+        boundary = captureWork,
     )
     val notificationListenerRuntime = createCaptureNotificationListenerRuntime(
         profiles = captureProfiles,
@@ -208,6 +219,7 @@ class AppContainer(
         captureApi = captureClient,
         credentials = captureCredentialProvider,
         profileRepository = captureProfileRepository,
+        retainRevocation = localDataPolicy::queueRevocation,
     )
     val apiEnvironment = ApiEnvironment(
         canonicalOrigin = "https://${BuildConfig.MOBILE_CALLBACK_HOST}",

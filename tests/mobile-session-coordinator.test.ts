@@ -50,7 +50,7 @@ describe('SessionCoordinator', () => {
     f.preferences.getSnapshot = vi.fn(() => new Promise<DisplaySnapshot>((resolve) => { resolveDisplay = resolve; }));
 
     const starting = f.coordinator.start();
-    const signedIn = { ...signedOut, state: 'signed_in' } as SafeSessionSnapshot;
+    const signedIn = { ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session' } as SafeSessionSnapshot;
     f.emitSession(signedIn);
     f.emitDisplay({ ...display, reducedMotion: true });
     resolveSession(signedOut);
@@ -87,7 +87,7 @@ describe('SessionCoordinator', () => {
     await f.coordinator.start();
 
     const launching = f.coordinator.beginLogin(false);
-    f.emitSession({ ...signedOut, state: 'signed_in', pendingDestination: '/capture' });
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: '/capture' });
     resolveLaunch({ ...signedOut, state: 'awaiting_browser' });
     await launching;
 
@@ -101,7 +101,7 @@ describe('SessionCoordinator', () => {
     await f.coordinator.resume();
     expect(f.session.refreshOnResume).toHaveBeenCalledTimes(1);
 
-    const signedIn = { ...signedOut, state: 'signed_in', pendingDestination: '/capture' } as SafeSessionSnapshot;
+    const signedIn = { ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: '/capture' } as SafeSessionSnapshot;
     f.emitSession(signedIn);
     await vi.waitFor(() => expect(f.coordinator.current().destination).toBe('capture'));
     f.emitSession(signedIn);
@@ -125,17 +125,28 @@ describe('SessionCoordinator', () => {
       .mockResolvedValueOnce('/capture')
       .mockResolvedValue(null);
     await f.coordinator.start();
-    f.emitSession({ ...signedOut, state: 'signed_in', pendingDestination: '/capture' });
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: '/capture' });
     await vi.waitFor(() => expect(f.coordinator.current().destination).toBe('capture'));
 
     f.emitSession({ ...signedOut, state: 'refreshing' });
     expect(f.coordinator.current().route).toBe('shell');
-    f.emitSession({ ...signedOut, state: 'signed_in' });
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session' });
     await Promise.resolve();
 
     expect(f.coordinator.current().destination).toBe('capture');
     expect(f.coordinator.current().route).toBe('shell');
     expect(f.session.consumePendingDestination).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets navigation when signed-in identity changes without a signed-out event', async () => {
+    const f = fixture();
+    await f.coordinator.start();
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'a', ledgerId: 'a-ledger', sessionEpoch: 'a-session', pendingDestination: '/capture' });
+    await vi.waitFor(() => expect(f.coordinator.current().destination).toBe('capture'));
+    f.session.consumePendingDestination = vi.fn(async () => null);
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'b', ledgerId: 'b-ledger', sessionEpoch: 'b-session' });
+    expect(f.coordinator.current().destination).toBe('overview');
+    expect(f.coordinator.current().session.userId).toBe('b');
   });
 
   it('leaves the durable destination for a replacement when disposed before the initial snapshot resolves', async () => {
@@ -150,12 +161,12 @@ describe('SessionCoordinator', () => {
     });
     const starting = f.coordinator.start();
     f.coordinator.dispose();
-    resolveSnapshot({ ...signedOut, state: 'signed_in', pendingDestination: '/capture' });
+    resolveSnapshot({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: '/capture' });
     await starting;
 
     expect(f.session.consumePendingDestination).not.toHaveBeenCalled();
     expect(pendingDestination).toBe('/capture');
-    f.session.getSnapshot = vi.fn(async (): Promise<SafeSessionSnapshot> => ({ ...signedOut, state: 'signed_in', pendingDestination }));
+    f.session.getSnapshot = vi.fn(async (): Promise<SafeSessionSnapshot> => ({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination }));
     const replacement = new SessionCoordinator(f.session, f.preferences);
     await replacement.start();
     await vi.waitFor(() => expect(replacement.current().destination).toBe('capture'));
@@ -170,7 +181,7 @@ describe('SessionCoordinator', () => {
     f.coordinator.dispose();
     f.session.getSnapshot = vi.fn(async () => signedOut);
     await f.coordinator.start();
-    resolveSnapshot({ ...signedOut, state: 'signed_in', pendingDestination: '/capture' });
+    resolveSnapshot({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: '/capture' });
     await firstStart;
 
     expect(f.coordinator.current().session.state).toBe('signed_out');
@@ -188,9 +199,9 @@ describe('SessionCoordinator', () => {
       }))
       .mockResolvedValue('activity');
     await f.coordinator.start();
-    f.emitSession({ ...signedOut, state: 'signed_in', pendingDestination: '/capture' });
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: '/capture' });
     f.emitSession(signedOut);
-    f.emitSession({ ...signedOut, state: 'signed_in', pendingDestination: 'activity' });
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: 'activity' });
     await vi.waitFor(() => expect(f.coordinator.current().destination).toBe('activity'));
 
     if (outcome === 'resolve') resolveDestination('/capture');
@@ -206,7 +217,7 @@ describe('SessionCoordinator', () => {
     let resolveDestination!: (value: string | null) => void;
     f.session.consumePendingDestination = vi.fn(() => new Promise<string | null>((resolve) => { resolveDestination = resolve; }));
     await f.coordinator.start();
-    f.emitSession({ ...signedOut, state: 'signed_in', pendingDestination: '/capture' });
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: '/capture' });
     f.coordinator.dispose();
     resolveDestination('/capture');
     await Promise.resolve();
@@ -219,7 +230,7 @@ describe('SessionCoordinator', () => {
     f.coordinator.listen((value) => {
       if (value.session.state === 'signed_in') f.coordinator.dispose();
     });
-    f.emitSession({ ...signedOut, state: 'signed_in', pendingDestination: '/capture' });
+    f.emitSession({ ...signedOut, state: 'signed_in', userId: 'fixture-owner', ledgerId: 'fixture-ledger', sessionEpoch: 'fixture-session', pendingDestination: '/capture' });
     await Promise.resolve();
     expect(f.session.consumePendingDestination).not.toHaveBeenCalled();
   });

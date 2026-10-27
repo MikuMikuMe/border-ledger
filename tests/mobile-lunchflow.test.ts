@@ -10,10 +10,12 @@ vi.mock('../mobile/node_modules/react-native/index.js', () => ({
   AccessibilityInfo: { setAccessibilityFocus: () => {} }, findNodeHandle: () => null, StyleSheet: { create: (value: unknown) => value },
 }));
 
+const connectionStatus:import('../mobile/src/features/details/contracts').LunchFlowConnection={userId:'owner',ledgerId:'personal',connectionId:'lf',generation:2,adapter:'personal',configured:true,connected:true,canReconnect:false,reconnectRequired:false,remoteRevocation:'not_requested',reason:'legacy_cutover_required',retryable:false};
 const lunchFlow: LunchFlowAccounts = {
-  configured: true,
+  configured: true,connectionId:'lf',generation:2,
   accounts: [
     {
+      connectionId:'lf',providerBankConnectionId:null,lastAttemptAt:null,
       providerAccountId: 'lf-chequing-1',
       name: 'Everyday chequing',
       institution: 'RBC',
@@ -26,6 +28,7 @@ const lunchFlow: LunchFlowAccounts = {
       lastError: null,
     },
     {
+      connectionId:'lf',providerBankConnectionId:null,lastAttemptAt:null,
       providerAccountId: 'lf-visa-1',
       name: 'RBC Visa',
       institution: 'RBC',
@@ -62,6 +65,7 @@ function fixture() {
       onChanged: () => ({ remove: () => {} }),
     },
     accounts: {
+      readLunchFlowConnection:async()=>(connectionStatus),
       getSnapshot: async () => link,
       readAccounts: async () => ({ accounts: [account], nextCursor: null, limit: 50 }),
       readConnections: async () => [connection],
@@ -116,7 +120,7 @@ describe('mobile LunchFlow account controller', () => {
     const controller = new DetailsController(fixtureValue.ports);
     await controller.start();
     await controller.syncLunchFlow({ operationId: 'lunchflow-sync-1' });
-    expect(fixtureValue.writes).toContainEqual(['lunchflow_sync', 'lunchflow-sync-1']);
+    expect(fixtureValue.writes).toContainEqual(['lunchflow_sync', 'lunchflow-sync-1',{connectionId:'lf',expectedGeneration:2}]);
     expect(controller.accounts.current().data?.lunchFlow?.accounts[1]?.lastError).toBe('provider_unavailable');
     controller.dispose();
   });
@@ -214,7 +218,7 @@ describe('mobile LunchFlow account view', () => {
     const { AccountsView } = await import('../mobile/src/features/details/DetailsViews');
     const props = {
       dark: false,
-      state: { phase: 'ready', data: { page: { accounts: [], nextCursor: null, limit: 50 }, connections: [], link, lunchFlow }, message: null },
+      state: { phase: 'ready', data: { page: { accounts: [], nextCursor: null, limit: 50 }, connections: [], link, lunchFlow,lunchFlowConnection:connectionStatus }, message: null },
       mutation: { blocked: false, status: 'ready' },
       onRetry: () => {}, onLoadMore: () => {}, onConnect: () => {}, onCancelConnect: () => {}, onSelect: () => {}, onCancel: () => {}, onSync: () => {}, onDisconnect: () => {},
       onLunchFlowSelection: () => {}, onLunchFlowSync: () => {},
@@ -234,7 +238,7 @@ describe('mobile LunchFlow account view', () => {
     const { AccountsView } = await import('../mobile/src/features/details/DetailsViews');
     const props = {
       dark: false,
-      state: { phase: 'ready', data: { page: { accounts: [], nextCursor: null, limit: 50 }, connections: [], link, lunchFlow }, message: null },
+      state: { phase: 'ready', data: { page: { accounts: [], nextCursor: null, limit: 50 }, connections: [], link, lunchFlow,lunchFlowConnection:connectionStatus }, message: null },
       mutation: { blocked: false, status: 'ready' },
       lunchFlowBusy: true,
       onRetry: () => {}, onLoadMore: () => {}, onConnect: () => {}, onCancelConnect: () => {}, onSelect: () => {}, onCancel: () => {}, onSync: () => {}, onDisconnect: () => {},

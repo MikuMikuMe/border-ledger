@@ -1,3 +1,4 @@
+import type { LedgerContext } from './tenant-context';
 import { getCurrencyMeta } from '../src/domain/currencies';
 import type { D1Database } from './db-types';
 import { notSupersededAlertTransactionPredicate } from './ledger-reports';
@@ -79,7 +80,7 @@ function boundedFilter(params: URLSearchParams, name: string, max: number) {
 /** Owner-only canonical Activity page. The source currency and amount sign are
  * preserved exactly as stored; the Android client decides only how to display
  * them, never how to convert them. */
-export async function readMobileTransactionPage(db: D1Database, params: URLSearchParams) {
+export async function readMobileTransactionPage(db: D1Database, context: LedgerContext, params: URLSearchParams) {
   const { limit, cursor } = pageQuery(params);
   const query = boundedFilter(params, 'query', MAX_QUERY_LENGTH)?.trim() || null;
   const currency = params.get('currency');
@@ -90,8 +91,8 @@ export async function readMobileTransactionPage(db: D1Database, params: URLSearc
   if (source !== null && !VALID_SOURCES.has(source)) invalid('The transaction source is not valid.');
   const category = boundedFilter(params, 'category', MAX_CATEGORY_LENGTH);
 
-  const clauses = [notSupersededAlertTransactionPredicate('t')];
-  const bindings: unknown[] = [];
+  const clauses = ['t.ledger_id = ?', notSupersededAlertTransactionPredicate('t')];
+  const bindings: unknown[] = [context.ledgerId];
   if (cursor) {
     clauses.push('(t.date < ? OR (t.date = ? AND t.id < ?))');
     bindings.push(cursor.date, cursor.date, cursor.id);
@@ -121,8 +122,8 @@ export async function readMobileTransactionPage(db: D1Database, params: URLSearc
   const result = await db.prepare(`SELECT t.id, t.account_id, t.date, t.merchant, t.amount_minor, t.currency,
       t.category, t.kind, t.status, t.source, t.note,
       (SELECT MAX(annotation.revision) FROM annotation_revisions annotation
-        WHERE annotation.ledger_id = 'personal' AND annotation.transaction_id = t.id) AS annotation_revision
-    FROM transactions t JOIN accounts a ON a.id = t.account_id
+        WHERE annotation.ledger_id = t.ledger_id AND annotation.transaction_id = t.id) AS annotation_revision
+    FROM transactions t JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
     WHERE ${clauses.join(' AND ')}
     ORDER BY t.date DESC, t.id DESC LIMIT ?`).bind(...bindings, limit + 1).all<TransactionRow>();
   const hasMore = result.results.length > limit;

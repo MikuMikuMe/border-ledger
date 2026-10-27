@@ -388,3 +388,8 @@ h2 { margin-bottom: 0; font: 600 18px/1.15 'IBM Plex Sans', sans-serif; letter-s
   .lunchflow-selection-state { padding-top: 0; text-align: left; }
   .lunchflow-account-controls { grid-template-columns: 1fr; }
 }
+
+.lunchflow-connection-controls { margin-block: 12px 24px; padding-block-end: 20px; border-bottom: 1px solid var(--rule); }
+.lunchflow-connection-controls > p { max-width: 68ch; line-height: 1.5; margin-block: 0 16px; }
+.lunchflow-connection-controls .lunchflow-actions button { min-height: 44px; font-size: 14px; }
+.lunchflow-connection-controls .lunchflow-state p { margin-block: 0 16px; line-height: 1.5; }

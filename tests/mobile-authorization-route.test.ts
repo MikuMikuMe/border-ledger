@@ -19,6 +19,7 @@ describe('mobile authorization approval route', () => {
   it('returns the fixed callback URL the browser approval page must validate', async () => {
     const fixture = createSqliteD1Fixture();
     fixtures.push(fixture);
+    await fixture.db.prepare("INSERT INTO user_identities(issuer,subject,user_id) VALUES ('https://team.cloudflareaccess.com', 'owner-subject', 'owner')").run();
     const config = {
       canonicalOrigin: ORIGIN,
       callbackUrl: CALLBACK_URL,
