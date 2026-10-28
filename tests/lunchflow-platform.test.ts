@@ -12,9 +12,42 @@ describe('Lunch Flow Platform public contract',()=>{
     const provider=createLunchFlowPlatform(env,fetcher);
     expect(await provider.exchange('auth-code')).toEqual(tokens);
     expect(requests[0].url).toBe('https://www.lunchflow.app/api/platform/oauth/token');
-    expect(requests[0].init.redirect).toBe('error');
+    expect(requests[0].init.redirect).toBe('manual');
     expect(JSON.parse(String(requests[0].init.body))).toEqual({grant_type:'authorization_code',code:'auth-code',redirect_uri:env.LUNCHFLOW_REDIRECT_URI,client_id:'test-client',client_secret:'test-secret'});
     expect(new Headers(requests[0].init.headers).get('content-type')).toBe('application/json');
+  });
+  it('rejects OAuth, account, and transaction redirects without following or forwarding credentials', async () => {
+    async function assertRedirectRejected(operation: (provider: ReturnType<typeof createLunchFlowPlatform>) => Promise<unknown>, expectedUrl: string, authorization: string | null) {
+      const requests: Request[] = [];
+      const provider = createLunchFlowPlatform(env, async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        return new Response('synthetic redirect', { status: 303, headers: { location: 'https://redirect.example/final' } });
+      });
+
+      await expect(operation(provider)).rejects.toMatchObject({ code: 'provider_rejected', status: 502, uncertain: false });
+      expect(requests).toHaveLength(1);
+      expect(requests[0].url).toBe(expectedUrl);
+      expect(requests[0].redirect).toBe('manual');
+      expect(requests[0].headers.get('authorization')).toBe(authorization);
+      expect(requests.some(({ url }) => url === 'https://redirect.example/final')).toBe(false);
+    }
+
+    await assertRedirectRejected(
+      provider => provider.exchange('auth-code'),
+      'https://www.lunchflow.app/api/platform/oauth/token',
+      null,
+    );
+    await assertRedirectRejected(
+      provider => provider.listAccounts('test-access'),
+      'https://www.lunchflow.app/api/platform/v1/accounts',
+      'Bearer test-access',
+    );
+    await assertRedirectRejected(
+      provider => provider.listTransactions('test-access', '42'),
+      'https://www.lunchflow.app/api/platform/v1/accounts/42/transactions?include_pending=true',
+      'Bearer test-access',
+    );
   });
   it('preserves bank identity independently and accepts absent optional currency/status',async()=>{
     const provider=createLunchFlowPlatform(env,async(input,init)=>{

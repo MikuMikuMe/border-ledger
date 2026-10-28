@@ -60,15 +60,33 @@ describe('Lunch Flow adapter', () => {
   it('discovers accounts at the canonical host without following credential-bearing redirects', async () => {
     const fetcher: typeof fetch = async (input, init) => {
       const request = new Request(input, init);
-      expect(request.redirect).toBe('error');
+      expect(request.redirect).toBe('manual');
       expect(request.headers.get('x-api-key')).toBe('server-only-test-key');
-      // The apex host redirects to www; fetch with redirect:error rejects it.
+      // The adapter uses the canonical host and keeps redirects manual.
       if (new URL(request.url).hostname === 'lunchflow.app') throw new TypeError('Redirect rejected');
       expect(request.url).toBe('https://www.lunchflow.app/api/v1/accounts');
       return Response.json({ accounts: [{ id: 'one', name: 'Test', status: 'ACTIVE' }], total: 1 });
     };
     const provider = createLunchFlowProvider({ LUNCHFLOW_API_KEY: 'server-only-test-key' }, fetcher);
     await expect(provider.listAccounts()).resolves.toMatchObject([{ id: 'one' }]);
+  });
+
+  it('rejects a redirect response without following it', async () => {
+    const requests: Request[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      return new Response('synthetic redirect', {
+        status: 303,
+        headers: { location: 'https://redirect.example/final' },
+      });
+    };
+    const provider = createLunchFlowProvider({ LUNCHFLOW_API_KEY: 'server-only-test-key' }, fetcher);
+
+    await expect(provider.listAccounts()).rejects.toMatchObject({ code: 'provider_rejected', status: 502 });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe('https://www.lunchflow.app/api/v1/accounts');
+    expect(requests[0].redirect).toBe('manual');
   });
 
   it('sends the server-only key and includes pending rows in a complete snapshot request', async () => {
@@ -97,6 +115,38 @@ describe('Lunch Flow adapter', () => {
   it('rejects a transaction with a missing pending flag', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       transactions: [{ ...providerTransaction(), isPending: undefined }],
+      total: 1,
+    }), { status: 200 }));
+    const provider = createLunchFlowProvider({ LUNCHFLOW_API_KEY: 'server-only-test-key' }, fetcher as unknown as typeof fetch);
+
+    await expect(provider.listTransactions('account-synthetic-1')).rejects.toMatchObject({ code: 'malformed_response' });
+  });
+
+  it.each(['', '   '])('accepts a blank optional description and uses merchant fallback (%j)', async (description) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      transactions: [providerTransaction({ description })],
+      total: 1,
+    }), { status: 200 }));
+    const provider = createLunchFlowProvider({ LUNCHFLOW_API_KEY: 'server-only-test-key' }, fetcher as unknown as typeof fetch);
+
+    const [transaction] = await provider.listTransactions('account-synthetic-1');
+    expect(transaction.description).toBeNull();
+    await expect(mapLunchFlowTransaction(transaction, 'account-synthetic-1')).resolves.toMatchObject({ merchant: 'Synthetic Cafe' });
+  });
+
+  it('rejects non-string optional transaction text', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      transactions: [{ ...providerTransaction(), description: 42 }],
+      total: 1,
+    }), { status: 200 }));
+    const provider = createLunchFlowProvider({ LUNCHFLOW_API_KEY: 'server-only-test-key' }, fetcher as unknown as typeof fetch);
+
+    await expect(provider.listTransactions('account-synthetic-1')).rejects.toMatchObject({ code: 'malformed_response' });
+  });
+
+  it('rejects an overlong whitespace-only description', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      transactions: [providerTransaction({ description: ' '.repeat(513) })],
       total: 1,
     }), { status: 200 }));
     const provider = createLunchFlowProvider({ LUNCHFLOW_API_KEY: 'server-only-test-key' }, fetcher as unknown as typeof fetch);
