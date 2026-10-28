@@ -97,7 +97,7 @@ async function request(fetcher: typeof fetch, url: string, init: RequestInit, em
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),15000);
   try {
-    const response=await fetcher(url,{...init,redirect:'error',signal:controller.signal});
+    const response=await fetcher(url,{...init,redirect:'manual',signal:controller.signal});
     if(empty && (response.status===204 || response.status===404)) { await response.body?.cancel(); return undefined; }
     if(!response.ok) { await response.body?.cancel(); throw new PlatformRequestError(response.status>=500, response.status===429?503:502); }
     return await boundedJson(response,8*1024*1024);

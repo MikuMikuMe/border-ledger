@@ -257,7 +257,7 @@ async function providerGet<T>(env: LunchFlowApiEnv, path: string, fetcher: typeo
     const response = await fetcher(url.toString(), {
       method: 'GET',
       headers: { accept: 'application/json', 'x-api-key': config.key },
-      redirect: 'error',
+      redirect: 'manual',
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -339,6 +339,10 @@ function transactionCurrency(value: unknown) {
 function optionalBoundedText(value: unknown, options: BoundedTextOptions) {
   if (value === null) return null;
   if (value === undefined) return null;
+  if (typeof value === 'string' && value.trim().length === 0) {
+    if (value.length > options.max) return malformedResponse(options.field);
+    return null;
+  }
   return boundedText(value, options);
 }
 
