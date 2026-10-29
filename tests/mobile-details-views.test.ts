@@ -11,7 +11,7 @@ const ready=<T,>(data:T)=>({phase:'ready',data,message:null});const mutation={bl
 const actions={onRetry:()=>{},onLoadMore:()=>{},onOpen:()=>{},onClose:()=>{},onSave:()=>{},onDraft:()=>{},onResolve:()=>{},onClassify:()=>{},onConnect:()=>{},onSelect:()=>{},onCancel:()=>{},onCancelConnect:()=>{},onSync:()=>{},onDisconnect:()=>{}};
 const render=(component:unknown,props:unknown)=>{let tree:any;act(()=>{tree=create(React.createElement(component,props));});return tree;};
 const json=(tree:any)=>tree.root.findAll((n:any)=>n.type==='Text').map((n:any)=>n.children.join('')).join('\n');
-const button=(tree:any,label:string)=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel===label)[0];
+const button=(tree:any,label:string)=>tree.root.findAll((n:any)=>n.type==='Pressable'&&(n.props.accessibilityLabel===label||n.props.accessibilityLabel?.startsWith(label+' · ')))[0];
 describe('detail view fixtures and accessibility',()=>{
   it('hides selected evidence immediately when authorization locks the queue',()=>{
     const tree=render(ReviewView,{...actions,dark:false,state:{phase:'locked',data:null,message:'Renew your owner session'},selected:alert,mutation});

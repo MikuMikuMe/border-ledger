@@ -21,6 +21,7 @@ class BorderLedgerApplication : Application(), ReactApplication {
     override val reactHost: ReactHost by lazy {
         getDefaultReactHost(
             context = applicationContext,
+            useDevSupport = BuildConfig.DEBUG,
             packageList = PackageList(this).packages.apply {
                 add(com.lofuyu.borderledger.react.NativeServicePackage(nativeServices))
             },

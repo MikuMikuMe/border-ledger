@@ -41,13 +41,34 @@ describe('native financial view fixtures and accessibility',()=>{
   });
   it('renders full-window report totals, signed chart/table alternative and FX coverage',()=>{
     const tree=render(OverviewView,{...actions,dark:true,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD','CNY']});
-    expect(text(tree)).toContain('Spending over time');expect(text(tree)).toContain('2026-10-16');
+    expect(text(tree)).toContain('Spending over time');
+    expect(tree.root.findAll((n:any)=>n.props.accessible&&n.props.accessibilityLabel?.includes('confirmed')).length).toBe(0);
+    act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Daily breakdown')[0].props.onPress());
+    expect(tree.root.findAll((n:any)=>n.props.accessible&&n.props.accessibilityLabel?.includes('confirmed')).length).toBeGreaterThan(0);
+    act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report details')[0].props.onPress());
     expect(text(tree)).toContain('purchase_date');expect(text(tree)).toContain('Excluded');
     const week=tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report window: Week')[0];
     expect(week.props.accessibilityRole).toBe('radio');expect(week.props.style.minHeight).toBeGreaterThanOrEqual(48);
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(0);
     act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report filters')[0].props.onPress());
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(1);
+  });
+  it('keeps report context, heading, and refresh visible',()=>{
+    const tree=render(OverviewView,{...actions,dark:true,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD','CNY']});
+    expect(text(tree)).toContain('purchase_date');expect(text(tree)).toContain('America/Toronto');
+    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Refresh report')).toHaveLength(1);
+    expect(tree.root.findAll((n:any)=>n.type==='Text'&&n.props.accessibilityRole==='header'&&n.children.join('')==='Net spending by source currency')).toHaveLength(1);
+  });
+  it('keeps report filters available when a report cannot load',()=>{
+    const tree=render(OverviewView,{...actions,dark:false,state:{phase:'error',data:null,message:'Unavailable'},snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});
+    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report filters')).toHaveLength(1);
+  });
+  it('shows activity as a single accessible ledger row with its merchant and amount',()=>{
+    const tree=render(ActivityView,{...actions,dark:false,state:ready({items:[transaction],nextCursor:null,limit:50}),filters:{},selected:null});
+    const row=tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel?.startsWith('Open activity:'))[0];
+    expect(row.props.accessibilityRole).toBe('button');expect(row.props.accessibilityLabel).toContain(transaction.status);expect(row.props.accessibilityLabel).toContain(transaction.category);expect(row.props.accessibilityLabel).toContain('Source:');expect(row.props.accessibilityLabel.match(/10\.00/g)).toHaveLength(1);
+    const rowText=row.findAll((n:any)=>n.type==='Text').map((n:any)=>n.children.join('')).join(' ');
+    expect(row.findAll((n:any)=>n.type==='Text').some((n:any)=>n.children.join('')===transaction.merchant)).toBe(true);expect(rowText).toContain('10.00');expect(rowText).toContain('CAD');
   });
   it('opens the actual transaction and exposes editable labeled fields with draft preservation',()=>{
     let opened='';let saved:any;
@@ -67,7 +88,7 @@ describe('native financial view fixtures and accessibility',()=>{
     let id='';
     const money=[{currency:'CAD',amountMinor:'1000'}];
     const tree=render(RecurringView,{...actions,onOpen:(value:string)=>{id=value;},dark:false,state:ready({page:{items:[stream],nextCursor:'next',limit:50,state:'ready',coverageWarnings:['Limited coverage'],checkedAt:'2026-10-17',sourceUpdatedAt:null,lastError:null},summary:{monthlyByCurrency:money,yearlyByCurrency:[{currency:'CAD',amountMinor:'12000'}],subscriptionByCurrency:money,actualCostByCurrency:[{currency:'CAD',amountMinor:'800'}],upcoming:[{stream,nextExpectedAmountMinor:'1000'}],latestPaymentChanges:[stream],streamCount:1,state:'ready',coverageWarnings:[],checkedAt:'2026-10-17',sourceUpdatedAt:null,lastError:null}}),filters:{},currencies:['CAD']});
-    expect(text(tree)).toContain('Expected yearly');expect(text(tree)).toContain('Actual posted cost');expect(text(tree)).toContain('Limited coverage');
+    expect(text(tree)).toContain('Expected yearly');expect(text(tree)).toContain('Actual posted cost');expect(tree.root.findAll((n:any)=>n.type==='Text'&&n.props.accessibilityRole==='header'&&n.children.join('')==='Expected yearly')).toHaveLength(1);expect(text(tree)).toContain('Limited coverage');
     act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel?.startsWith('Open recurring'))[0].props.onPress());expect(id).toBe('fixture_stream');
   });
 });

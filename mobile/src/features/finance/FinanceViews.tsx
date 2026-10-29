@@ -20,6 +20,13 @@ export function DetailModal({dark,title,onClose,children}:Theme&{title:string;on
 export function Action({dark,label,text,onPress,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;onPress():void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
   const p=palette(dark);return <Pressable accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={onPress} disabled={disabled} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
 }
+export function LedgerRow({dark,label,title,amount,details,onPress}:Theme&{label:string;title:string;amount?:string;details:string[];onPress():void}) {
+  const p=palette(dark);
+  return <Pressable accessibilityRole="button" accessibilityLabel={[label,amount,...details].filter(Boolean).join(' · ')} onPress={onPress} style={({pressed})=>[styles.ledgerRow,{borderColor:p.border},pressed&&styles.rowPressed]}>
+    <View style={styles.ledgerTop}><Text style={[styles.ledgerTitle,{color:p.text}]}>{title}</Text>{amount?<Text style={[styles.ledgerAmount,{color:p.text}]}>{amount}</Text>:null}</View>
+    {details.map((detail,index)=><Text key={index} style={[styles.ledgerMeta,{color:p.muted}]}>{detail}</Text>)}
+  </Pressable>;
+}
 function Choices({dark,label,values,value,onChange}:Theme&{label:string;values:string[];value:string|null;onChange(value:string|null):void}) {
   return <View style={styles.section}><Copy dark={dark} heading>{label}</Copy><ScrollView horizontal contentContainerStyle={{gap:8}}>{[null,...new Set([...(value?[value]:[]),...values])].map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'All'}`} text={v??'All'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</ScrollView></View>;
 }
@@ -27,50 +34,66 @@ function FilterDisclosure({dark,label,summary,children}:Theme&{label:string;summ
   const [expanded,setExpanded]=useState(false),p=palette(dark);
   return <View>
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{expanded}} onPress={()=>setExpanded(!expanded)} style={{minHeight:48,paddingVertical:12}}>
-      <Text style={[styles.copy,{color:p.accent}]}>{expanded?'Hide':'Show'} {label.toLowerCase()} · {summary}</Text>
+      <Text style={[styles.disclosureLabel,{color:p.accent}]}>{expanded?'Hide':'Show'} {label.toLowerCase()}</Text>
+      <Text style={[styles.reportNote,{color:p.muted}]}>{summary}</Text>
     </Pressable>
     {expanded?children:null}
   </View>;
 }
 export function Status({dark,state,onRetry,label}:Theme&{state:LoadState<unknown>;onRetry():void;label:string}) {
-  return <View style={styles.section} accessibilityLiveRegion="polite" accessibilityRole={state.message?'alert':undefined}>
+  if(state.phase==='ready'&&!state.message)return <Pressable accessibilityRole="button" accessibilityLabel={`Refresh ${label}`} accessibilityState={{disabled:false}} disabled={false} onPress={onRetry} style={styles.quietRefresh}><Text style={[styles.disclosureLabel,{color:palette(dark).accent}]}>Refresh {label}</Text></Pressable>;
+  return <View style={styles.status} accessibilityLiveRegion="polite" accessibilityRole={state.message?'alert':undefined}>
     {state.phase==='loading'?<><ActivityIndicator accessibilityLabel={`Loading ${label}`} color={palette(dark).accent}/><Copy dark={dark}>Loading {label}…</Copy></>:null}
     {state.message?<Copy dark={dark} error>{state.message}</Copy>:null}
     <Action dark={dark} label={`Refresh ${label}`} onPress={onRetry} disabled={state.phase==='loading'}/>
   </View>;
 }
 function MoneyRows({dark,label,values}:Theme&{label:string;values:{currency:string;amountMinor:string}[]}) {
-  return <Card dark={dark}><Copy dark={dark} heading>{label}</Copy>{values.length?values.map(v=><Copy key={v.currency} dark={dark}>{v.currency} · {formatMoney(v.amountMinor,v.currency)}</Copy>):<Copy dark={dark}>No supported amount is available.</Copy>}</Card>;
+  return <Card dark={dark}><Text accessibilityRole="header" style={[styles.copy,{color:palette(dark).text}]}>{label}</Text>{values.length?values.map(v=><Text key={v.currency} style={[styles.total,{color:palette(dark).text}]}>{formatMoney(v.amountMinor,v.currency)} <Text style={styles.currency}>{v.currency}</Text></Text>):<Copy dark={dark}>No supported amount is available.</Copy>}</Card>;
+}
+function RecurringMoneySummary({dark,summary}:Theme&{summary:RecurringData['summary']}) {
+  if(!summary)return null;
+  const groups=[{label:'Expected monthly',values:summary.monthlyByCurrency},{label:'Expected yearly',values:summary.yearlyByCurrency},{label:'Subscriptions',values:summary.subscriptionByCurrency},{label:'Actual posted cost',values:summary.actualCostByCurrency}];
+  const p=palette(dark);
+  return <Card dark={dark}>{groups.map((group,index)=><View key={group.label} style={[styles.moneySummaryRow,index>0&&{borderTopWidth:1,borderColor:p.border}]}>
+    <Text accessibilityRole="header" style={[styles.copy,{color:p.muted}]}>{group.label}</Text>
+    {group.values.length?group.values.map(value=><Text key={value.currency} style={[styles.moneySummaryValue,{color:p.text}]}>{formatMoney(value.amountMinor,value.currency)} {value.currency}</Text>):<Text style={[styles.ledgerMeta,{color:p.muted}]}>Unavailable</Text>}
+  </View>)}</Card>;
 }
 export function OverviewView({dark,state,snapshot,lens,currencies,onLens,onRetry}:Theme&{state:LoadState<Report>;snapshot:Snapshot|null;lens:Lens;currencies:string[];onLens(value:Lens):void;onRetry():void}) {
   const report=state.data,view=report?reportView(report,lens.include,lens.source):null;
-  return <View style={styles.section}>
-
-    {snapshot?<Copy dark={dark}>Snapshot {snapshot.snapshotAt} · {snapshot.timeZone} · {snapshot.accounts.length} account(s)</Copy>:null}
-    <View style={styles.wrap}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} text={window} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}</View><FilterDisclosure dark={dark} label="Report filters" summary={`${lens.source??'All currencies'} / ${lens.target??'No conversion'} / ${lens.include?'Including provisional':'Confirmed only'}`}><Action dark={dark} label="Include provisional" selected={lens.include} onPress={()=>onLens({...lens,include:!lens.include})}/>
+  const reportFilters = <FilterDisclosure dark={dark} label="Report filters" summary={`${lens.source??'All currencies'} · ${lens.target??'No conversion'} · ${lens.include?'Including provisional':'Confirmed only'}`}><Action dark={dark} label="Include provisional" selected={lens.include} onPress={()=>onLens({...lens,include:!lens.include})}/>
     <Choices dark={dark} label="Source currency (no conversion)" values={currencies} value={lens.source} onChange={source=>onLens({...lens,source})}/>
-    <Choices dark={dark} label="Reporting currency" values={reportingCurrencies} value={lens.target} onChange={target=>onLens({...lens,target})}/></FilterDisclosure>
-    <Status dark={dark} state={state} onRetry={onRetry} label="report"/>
+    <Choices dark={dark} label="Reporting currency" values={reportingCurrencies} value={lens.target} onChange={target=>onLens({...lens,target})}/></FilterDisclosure>;
+  return <View style={styles.overview}>
+    <View style={styles.periods}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} text={window} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}</View>
+
+    {state.phase!=='ready'||!report?<Status dark={dark} state={state} onRetry={onRetry} label="report"/>:null}
+    {!report?reportFilters:null}
     {report&&view?<>
-      <Copy dark={dark}>{report.from??'Full history'} to {report.to??'today'} · {report.timeBasis} · {report.timeZone??snapshot?.timeZone}</Copy>
-      <Copy dark={dark}>As of {report.asOf??'unavailable'} · {lens.include?'Confirmed + provisional':'Confirmed only'}</Copy>
+      <Text style={[styles.reportPeriod,{color:palette(dark).muted}]}>{report.from??'Full history'}  –  {report.to??'today'}</Text>
+      <Text style={[styles.reportNote,{color:palette(dark).muted}]}>{report.timeBasis} · {report.timeZone??snapshot?.timeZone??'Timezone unavailable'} · As of {report.asOf??'unavailable'}</Text>
       {report.reportingCurrency?<Copy dark={dark} error={!report.fx.complete}>{report.fx.complete?'Locked to purchase dates using Frankfurter daily rates.':`Partial conversion. Unavailable source currencies: ${report.fx.unavailableSourceCurrencies.join(', ')||'see source audit'}.`}</Copy>:null}
       <MoneyRows dark={dark} label={report.reportingCurrency?`Total spending in ${report.reportingCurrency}`:'Net spending by source currency'} values={view.totals.map(v=>({currency:v.currency,amountMinor:v.amount}))}/>
-      <Copy dark={dark}>{report.reviewCount} record(s) need review · Excluded: {report.excludedCount}</Copy>
-      <Copy dark={dark} heading>Spending over time</Copy>
+      <Text style={[styles.reportNote,{color:palette(dark).muted}]}>{lens.include?'Confirmed + provisional':'Confirmed only'} · {report.reviewCount} need review · {report.excludedCount} excluded</Text>
+      <Text style={[styles.reportNote,{color:palette(dark).muted}]}>Server snapshot · unsent captures excluded</Text>
+      {reportFilters}
+      {state.phase==='ready'&&!state.message?<Status dark={dark} state={state} onRetry={onRetry} label="report"/>:null}
+      <Text style={[styles.sectionHeading,{color:palette(dark).text}]} accessibilityRole="header">Spending over time</Text>
       {view.unavailable?<Copy dark={dark} error>Chart unavailable: conversion rates are not available for the locked purchase dates.</Copy>:null}
       {!view.lanes.length&&!view.unavailable?<Copy dark={dark}>No daily totals are available for this reporting lens.</Copy>:null}
       {view.lanes.map(lane=>{
         const max=lane.points.reduce((m,p)=>{const n=BigInt(p.amount);const abs=n<0n?-n:n;return abs>m?abs:m;},1n);
-        return <Card dark={dark} key={lane.currency}><Copy dark={dark} heading>{lane.currency} · {report.reportingCurrency?'Locked target':'Source currency'}</Copy>
-          <View importantForAccessibility="no-hide-descendants" style={styles.chart}>{lane.points.map(point=>{const n=BigInt(point.amount),negative=n<0n,abs=negative?-n:n;const height=Number(abs*100n/max);return <View key={point.date} style={styles.barColumn}><View style={[styles.bar,{height:Math.max(2,height/2),backgroundColor:negative?palette(dark).error:palette(dark).accent,top:negative?50:50-height/2}]}/></View>;})}</View>
-          {lane.points.map(point=><View key={point.date} accessible accessibilityLabel={`${point.date}, ${lane.currency}, ${formatMoney(point.amount,lane.currency)}, confirmed ${formatMoney(point.confirmed,lane.currency)}${lens.include?`, provisional ${formatMoney(point.provisional,lane.currency)}`:''}`}><Copy dark={dark}>{point.date} · {formatMoney(point.amount,lane.currency)}</Copy><Copy dark={dark}>Confirmed {formatMoney(point.confirmed,lane.currency)}{lens.include?` · Provisional ${formatMoney(point.provisional,lane.currency)}`:''}</Copy></View>)}
+        return <Card dark={dark} key={lane.currency}><Text style={[styles.laneTitle,{color:palette(dark).text}]}>{lane.currency} <Text style={[styles.reportNote,{color:palette(dark).muted}]}>· {report.reportingCurrency?'Converted':'Source currency'}</Text></Text>
+          <View importantForAccessibility="no-hide-descendants" style={styles.chart}><View style={[styles.chartBaseline,{borderColor:palette(dark).border}]}/>{lane.points.map(point=>{const n=BigInt(point.amount),negative=n<0n,abs=negative?-n:n;const height=Number(abs*100n/max);return <View key={point.date} style={styles.barColumn}><View style={[styles.bar,{height:Math.max(2,height/2),backgroundColor:negative?palette(dark).error:palette(dark).accent,top:negative?50:50-height/2}]}/></View>;})}</View>
+          <View style={styles.chartDates}><Text style={[styles.reportNote,{color:palette(dark).muted}]}>{lane.points[0]?.date}</Text><Text style={[styles.reportNote,{color:palette(dark).muted}]}>{lane.points[lane.points.length-1]?.date}</Text></View>
+          <FilterDisclosure dark={dark} label="Daily breakdown" summary={`${lane.points.length} days`}>{lane.points.map(point=><View key={point.date} accessible accessibilityLabel={`${point.date}, ${lane.currency}, ${formatMoney(point.amount,lane.currency)}, confirmed ${formatMoney(point.confirmed,lane.currency)}${lens.include?`, provisional ${formatMoney(point.provisional,lane.currency)}`:''}`} style={[styles.dailyRow,{borderColor:palette(dark).border}]}><Text style={[styles.copy,{color:palette(dark).text}]}>{point.date}</Text><Text style={[styles.copy,styles.dailyAmount,{color:palette(dark).text}]}>{formatMoney(point.amount,lane.currency)}</Text>{lens.include?<Text style={[styles.reportNote,{color:palette(dark).muted}]}>Confirmed {formatMoney(point.confirmed,lane.currency)} · Provisional {formatMoney(point.provisional,lane.currency)}</Text>:null}</View>)}</FilterDisclosure>
         </Card>;
       })}
       {report.reportingCurrency?<MoneyRows dark={dark} label="Source currency audit" values={view.sourceTotals.map(v=>({currency:v.currency,amountMinor:v.amount}))}/>:null}
       {report.fx.chineseBankBand?<Card dark={dark}><Copy dark={dark} heading>Chinese bank estimate band</Copy><Copy dark={dark}>{report.fx.chineseBankBand.eligible?`${formatMoney(report.fx.chineseBankBand.lowerMinorUnits,report.fx.chineseBankBand.currency)} – ${formatMoney(report.fx.chineseBankBand.upperMinorUnits,report.fx.chineseBankBand.currency)}`:'Not eligible for an estimate band.'}</Copy><Copy dark={dark}>Estimate only · {report.fx.chineseBankBand.percentageBasisPoints/100}% · actual bank settlement may differ.</Copy></Card>:null}
-      <Copy dark={dark}>Server snapshot only; unsent capture records are not included.</Copy><Copy dark={dark} heading>Source coverage</Copy>{[...report.sourceCoverage].sort((a,b)=>a.source.localeCompare(b.source)).map(s=><Copy key={s.source} dark={dark}>{s.source}: {s.count}</Copy>)}
-      <Copy dark={dark}>FX provider {report.fx.provider} · {report.fx.lockedDateCount} locked date(s) · {report.fx.earliest??'unavailable'} to {report.fx.latest??'unavailable'}</Copy>
+      <FilterDisclosure dark={dark} label="Report details" summary="Coverage and refresh"><Copy dark={dark}>Server snapshot only; unsent capture records are not included.</Copy><Copy dark={dark}>As of {report.asOf??'unavailable'} · {report.timeBasis} · {report.timeZone??snapshot?.timeZone??'Timezone unavailable'}</Copy>{snapshot?<Copy dark={dark}>Snapshot {snapshot.snapshotAt} · {snapshot.accounts.length} account(s)</Copy>:null}<Copy dark={dark}>Excluded: {report.excludedCount}</Copy><Copy dark={dark} heading>Source coverage</Copy>{[...report.sourceCoverage].sort((a,b)=>a.source.localeCompare(b.source)).map(s=><Copy key={s.source} dark={dark}>{s.source}: {s.count}</Copy>)}
+      <Copy dark={dark}>FX provider {report.fx.provider} · {report.fx.lockedDateCount} locked date(s) · {report.fx.earliest??'unavailable'} to {report.fx.latest??'unavailable'}</Copy></FilterDisclosure>
     </>:state.phase==='ready'?<Copy dark={dark}>No report is available. Connect an account and refresh the owner snapshot.</Copy>:null}
   </View>;
 }
@@ -91,12 +114,8 @@ function ActivityFilters({dark,facetRows,filters,onFilter}:{dark:boolean;facetRo
   </>;
 }
 function ActivityRow({dark,transaction,onOpen}:{dark:boolean;transaction:Transaction;onOpen(id:string):void}){
-  return <Card dark={dark}>
-    <Action dark={dark} label={`Open activity: ${transaction.merchant??'Merchant unavailable'}, ${transaction.currency} ${formatMoney(transaction.signedMinorUnits,transaction.currency)}`} onPress={()=>onOpen(transaction.id)}/>
-    <Copy dark={dark}>{transaction.occurredAt} · {transaction.status} · {transaction.kind}</Copy>
-    <Copy dark={dark}>{transaction.accountLabel??'Account unavailable'} · Source: {transaction.sourceLabel??'unavailable'}</Copy>
-    <Copy dark={dark}>{transaction.category??'Uncategorized'}</Copy>
-  </Card>;
+  const title=transaction.merchant??'Merchant unavailable';
+  return <LedgerRow dark={dark} label={`Open activity: ${title}`} title={title} amount={`${formatMoney(transaction.signedMinorUnits,transaction.currency)} ${transaction.currency}`} details={[`${transaction.occurredAt} · ${transaction.status} · ${transaction.kind}`,`Account: ${transaction.accountLabel??'unavailable'} · Source: ${transaction.sourceLabel??'unavailable'} · Category: ${transaction.category??'Uncategorized'}`]} onPress={()=>onOpen(transaction.id)}/>;
 }
 function ActivityResults({dark,state,rows,onLoadMore,onOpen}:{dark:boolean;state:LoadState<Transactions>;rows:Transaction[];onLoadMore():void;onOpen(id:string):void}){
   return <>
@@ -144,7 +163,7 @@ function mutationMessage(status:string){return mutationMessages[status]??mutatio
 function mutationError(status:string){return status==='revision_conflict'||status==='rejected'||status==='reconciliation_required';}
 export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,onOpen,onLoadMore,selected,onClose,onClassify,mutation}:Theme&{state:LoadState<RecurringData>;filters:{currency?:string|null;classification?:string|null};currencies:string[];onRetry():void;onFilter(value:{currency?:string|null;classification?:string|null}):void;onOpen(id:string):void;onLoadMore():void;selected?:Stream|null;onClose?():void;onClassify?(classification:string):void;mutation?:MutationState}) {
   const page=state.data?.page,summary=state.data?.summary;
-  const row=(s:Stream,support:string,key:string)=><Card dark={dark} key={key}><Action dark={dark} label={`Open recurring: ${s.merchantName??'Merchant unavailable'}`} onPress={()=>onOpen(s.id)}/><Copy dark={dark}>{s.currency} · {s.classification} · {s.frequency} · Source {s.sourceStatus}</Copy><Copy dark={dark}>Expected source amount: {s.averageAmountMinor===null?'unavailable':formatMoney(s.averageAmountMinor,s.currency)}</Copy><Copy dark={dark}>Next expected: {s.predictedNextDate??'unavailable'} · {support}</Copy></Card>;
+  const row=(s:Stream,support:string,key:string)=><LedgerRow dark={dark} key={key} label={`Open recurring: ${s.merchantName??'Merchant unavailable'}`} title={s.merchantName??'Merchant unavailable'} amount={s.averageAmountMinor===null?'Unavailable':formatMoney(s.averageAmountMinor,s.currency)} details={[`${s.currency} · ${s.classification} · ${s.frequency} · Source ${s.sourceStatus}`,`Next expected: ${s.predictedNextDate??'unavailable'} · ${support}`]} onPress={()=>onOpen(s.id)}/>;
   return <View style={styles.section}>
     <Copy dark={dark}>Expected commitments stay separate from actual posted cost.</Copy>
     <FilterDisclosure dark={dark} label="Recurring filters" summary={`${filters.currency??'All currencies'} / ${filters.classification??'All classifications'}`}><Choices dark={dark} label="Recurring currency" values={currencies} value={filters.currency??null} onChange={currency=>onFilter({...filters,currency})}/>
@@ -152,7 +171,7 @@ export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,on
     <Status dark={dark} state={state} onRetry={onRetry} label="Recurring"/>
     {page?<><Copy dark={dark}>{page.state} · Checked {page.checkedAt??'unavailable'} · Source updated {page.sourceUpdatedAt??'unavailable'}</Copy>{page.state!=='ready'||!page.items.length?<Copy dark={dark}>{recurringMessage(page.state)}</Copy>:null}{page.coverageWarnings.map((w,i)=><Copy key={i} dark={dark}>{w}</Copy>)}{page.lastError?<Copy dark={dark} error>Source error: {page.lastError}</Copy>:null}</>:null}
     {summary?<>
-      <MoneyRows dark={dark} label="Expected monthly" values={summary.monthlyByCurrency}/><MoneyRows dark={dark} label="Expected yearly" values={summary.yearlyByCurrency}/><MoneyRows dark={dark} label="Subscriptions" values={summary.subscriptionByCurrency}/><MoneyRows dark={dark} label="Actual posted cost" values={summary.actualCostByCurrency}/>
+      <RecurringMoneySummary dark={dark} summary={summary}/>
       <Copy dark={dark}>{summary.state} · {summary.streamCount} stream(s) · Checked {summary.checkedAt??'unavailable'}</Copy>{summary.coverageWarnings.map((w,i)=><Copy dark={dark} key={i}>{w}</Copy>)}{summary.lastError?<Copy dark={dark} error>Source error: {summary.lastError}</Copy>:null}
       <Copy dark={dark} heading>Upcoming · next 30 days</Copy>{summary.upcoming.map((u,i)=>row(u.stream,`Expected ${u.nextExpectedAmountMinor===null?'amount unavailable':formatMoney(u.nextExpectedAmountMinor,u.stream.currency)}`,`upcoming-${i}`))}
       <Copy dark={dark} heading>Latest payment changes</Copy>{summary.latestPaymentChanges.map(s=>row(s,'Amount changed',`change-${s.id}`))}
@@ -163,7 +182,14 @@ export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,on
   </View>;
 }
 const styles=StyleSheet.create({
-  section:{gap:12,marginTop:16},copy:{fontFamily:'DMSans',fontSize:15,lineHeight:23,flexShrink:1},heading:{fontFamily:'Newsreader',fontSize:24,lineHeight:30,marginTop:8},
-  card:{padding:16,borderWidth:1,borderRadius:20,gap:8},wrap:{flexDirection:'row',flexWrap:'wrap',gap:8},action:{minHeight:48,borderWidth:1,borderRadius:16,paddingHorizontal:14,paddingVertical:10,justifyContent:'center',flexShrink:1},
-  input:{minHeight:48,borderWidth:1,borderRadius:12,padding:12,fontFamily:'DMSans',fontSize:16},chart:{height:100,flexDirection:'row',borderBottomWidth:1,borderColor:'#68706D'},barColumn:{flex:1,height:100},bar:{position:'absolute',left:'15%',width:'70%'},
+  moneySummaryRow:{paddingVertical:12,gap:4},moneySummaryValue:{fontFamily:'DMSans',fontSize:18,lineHeight:25,fontWeight:'600',fontVariant:['tabular-nums']},
+  quietRefresh:{minHeight:48,alignSelf:'flex-start',justifyContent:'center',paddingVertical:8},status:{gap:12,marginVertical:8},
+  ledgerRow:{minHeight:64,paddingVertical:14,borderBottomWidth:1,gap:4},ledgerTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'baseline',gap:12},ledgerTitle:{fontFamily:'DMSans',fontSize:17,lineHeight:24,fontWeight:'600',flexShrink:1},ledgerAmount:{fontFamily:'DMSans',fontSize:16,lineHeight:24,fontWeight:'600',fontVariant:['tabular-nums'],flexShrink:1,textAlign:'right'},ledgerMeta:{fontFamily:'DMSans',fontSize:13,lineHeight:20},rowPressed:{opacity:0.65},
+  dailyRow:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',gap:4,paddingVertical:8,borderBottomWidth:StyleSheet.hairlineWidth},dailyAmount:{fontVariant:['tabular-nums']},
+  disclosureLabel:{fontFamily:'DMSans',fontSize:15,lineHeight:22,fontWeight:'600'},
+  overview:{gap:12,marginTop:12},periods:{flexDirection:'row',flexWrap:'wrap',gap:8},reportPeriod:{fontFamily:'DMSans',fontSize:14,lineHeight:20,marginTop:4},reportNote:{fontFamily:'DMSans',fontSize:13,lineHeight:20},sectionHeading:{fontFamily:'DMSans',fontSize:21,lineHeight:28,fontWeight:'600',marginTop:16},laneTitle:{fontFamily:'DMSans',fontSize:16,lineHeight:24,fontWeight:'600'},chartDates:{flexDirection:'row',justifyContent:'space-between'},
+  total:{fontFamily:'DMSans',fontSize:30,lineHeight:40,fontWeight:'600',fontVariant:['tabular-nums']},currency:{fontSize:15,fontWeight:'400'},
+  section:{gap:12,marginTop:16},copy:{fontFamily:'DMSans',fontSize:15,lineHeight:23,flexShrink:1},heading:{fontFamily:'DMSans',fontSize:21,lineHeight:28,fontWeight:'600',marginTop:12},
+  card:{padding:16,borderWidth:1,borderRadius:14,gap:8},wrap:{flexDirection:'row',flexWrap:'wrap',gap:8},action:{minHeight:48,borderWidth:1,borderRadius:8,paddingHorizontal:14,paddingVertical:10,justifyContent:'center',flexShrink:1},
+  input:{minHeight:48,borderWidth:1,borderRadius:12,padding:12,fontFamily:'DMSans',fontSize:16},chart:{height:100,flexDirection:'row'},chartBaseline:{position:'absolute',left:0,right:0,top:50,borderTopWidth:1},barColumn:{flex:1,height:100},bar:{position:'absolute',left:'15%',width:'70%'},
 });
