@@ -249,8 +249,20 @@ it('keeps raw lifecycle target IDs and cursor continuity across two native ledge
     const stale=await callRoute(env,routeRequest(`/api/mobile/v1/alerts/${reversalId}/review`,native,'PATCH',{expectedRevision:1,decision:'ignore'}));
     expect(stale.status).toBe(409);expect(await stale.json()).toMatchObject({currentRevision:2});
   }
-  const foreignCursor=await responseJson<{items:Array<{eventId:string;sourceEvidence:{sourceProfileId:string}}> }>(await callRoute(env,routeRequest(`/api/mobile/v1/alerts?limit=1&cursor=${cursors.get('owner')}`,{token:tokens.get('second')!})),200);
+  // A cursor is a timestamp and raw event ID, not a tenant identity. Align the timestamp
+  // with the second ledger to test identical raw IDs without relying on wall-clock timing.
+  const ownerCursor=JSON.parse(Buffer.from(cursors.get('owner')!,'base64url').toString('utf8')) as {createdAt:string;eventId:string};
+  const secondCursor=JSON.parse(Buffer.from(cursors.get('second')!,'base64url').toString('utf8')) as {createdAt:string;eventId:string};
+  expect(ownerCursor.eventId).toBe(secondCursor.eventId);
+  const cursorFor=(createdAt:string)=>Buffer.from(JSON.stringify({...ownerCursor,createdAt})).toString('base64url');
+  const native={token:tokens.get('second')!};
+  const originalCursorPage=await responseJson<{items:Array<{sourceEvidence:{sourceProfileId:string}}> }>(await callRoute(env,routeRequest(`/api/mobile/v1/alerts?limit=1&cursor=${cursors.get('owner')}`,native)),200);
+  expect(originalCursorPage.items.every(item=>item.sourceEvidence.sourceProfileId==='second-profile')).toBe(true);
+  const foreignCursor=await responseJson<{items:Array<{eventId:string;sourceEvidence:{sourceProfileId:string}}> }>(await callRoute(env,routeRequest(`/api/mobile/v1/alerts?limit=1&cursor=${cursorFor(secondCursor.createdAt)}`,native)),200);
   expect(foreignCursor.items).toMatchObject([{eventId:purchaseId,sourceEvidence:{sourceProfileId:'second-profile'}}]);
+  // An older cursor than every row must return an empty page.
+  const older=await responseJson<{items:unknown[]}>(await callRoute(env,routeRequest(`/api/mobile/v1/alerts?limit=1&cursor=${cursorFor('2000-01-01 00:00:00')}`,native)),200);
+  expect(older.items).toEqual([]);
 });
 
 it('configures and revokes each native device without accepting guessed foreign mappings',async()=>{
