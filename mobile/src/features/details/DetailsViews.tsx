@@ -3,7 +3,7 @@ import {LunchFlowSection} from './LunchFlowAccounts';
 import type {LunchFlowBinding} from './contracts';
 import React,{useEffect,useState} from 'react';
 import {Pressable,StyleSheet,TextInput,View} from 'react-native';
-import {Action,Card,Copy,DetailModal,MutationStatus,Status} from '../finance/FinanceViews';
+import {Action,Card,Copy,DetailModal,LedgerRow,MutationStatus,Status} from '../finance/FinanceViews';
 import {formatMoney,type LoadState} from '../finance/model';
 import type {MutationState} from '../finance/contracts';
 import type {Account,AccountsData,Alert,Connection,Detail,LinkSnapshot,LunchFlowSelection,ReviewPage} from './contracts';
@@ -47,7 +47,7 @@ export function RecurringDetailView({dark,state,mutation,onRetry,onLoadMore,onCl
 function ReviewList({dark,state,onOpen,onLoadMore}:{dark:boolean;state:LoadState<ReviewPage>;onOpen(alert:Alert):void;onLoadMore():void}){
   return <>
     {state.data&&!state.data.items.length?<Copy dark={dark}>No owner alert projections are present.</Copy>:null}
-    {state.data?.items.map(alert=><Card key={alert.eventId} dark={dark}><Action dark={dark} label={`Review ${alert.eventType}, ${alert.state}, r${alert.revision}`} onPress={()=>onOpen(alert)}/><Copy dark={dark}>{alert.reportingDate??'Date unavailable'} · {money(alert.affectedMoney??alert.countedMoney)}</Copy><Copy dark={dark}>{alert.reasonCodes.join(', ')}</Copy></Card>)}
+    {state.data?.items.map(alert=><LedgerRow key={alert.eventId} dark={dark} label={`Review ${alert.eventType}, ${alert.state}, r${alert.revision}`} title={alert.eventType} amount={money(alert.affectedMoney??alert.countedMoney)} details={[`${alert.reportingDate??'Date unavailable'} · ${alert.state} · r${alert.revision}`,alert.reasonCodes.join(', ')]} onPress={()=>onOpen(alert)}/>)}
     {state.data?.nextCursor?<Action dark={dark} label="Load more Review" onPress={onLoadMore} disabled={state.phase==='loading'}/>:null}
   </>;
 }
@@ -108,7 +108,7 @@ function ConnectionCards({dark,data,disabled,onConnect,onDisconnect}:{dark:boole
 }
 
 function AccountCards({dark,data,onSelect}:{dark:boolean;data:AccountsData;onSelect(account:Account):void}){
-  return <>{!data.page.accounts.length?<Copy dark={dark}>No selected accounts are available.</Copy>:null}{data.page.accounts.map(account=><View key={account.providerAccountId}><Action dark={dark} label={`Open account ${account.name}`} onPress={()=>onSelect(account)}/><Copy dark={dark}>{account.currency} · {account.kind} · {account.mask?`••${account.mask}`:'mask unavailable'}</Copy></View>)}</>;
+  return <>{!data.page.accounts.length?<Copy dark={dark}>No selected accounts are available.</Copy>:null}{data.page.accounts.map(account=><LedgerRow key={account.providerAccountId} dark={dark} label={`Open account ${account.name}`} title={account.name} details={[`${account.currency} · ${account.kind} · ${account.mask?`••${account.mask}`:'mask unavailable'}`]} onPress={()=>onSelect(account)}/>)}</>;
 }
 
 function PendingAccountChooser({dark,link,disabled,selected,setSelected,onSelect,onCancel}:{dark:boolean;link:LinkSnapshot;disabled:boolean;selected:string[];setSelected:React.Dispatch<React.SetStateAction<string[]>>;onSelect(ids:string[]):void;onCancel():void}){

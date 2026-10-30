@@ -51,6 +51,10 @@ describe('Android React Native production surface', () => {
     expect(existsSync(resolve(root, 'android/app/src/main/res/drawable-nodpi/border_ledger_logo.png'))).toBe(true);
   });
 
+  it('enables Metro only for the app debug build', () => {
+    expect(application).toContain('useDevSupport = BuildConfig.DEBUG');
+  });
+
   it('registers native modules in release without starting React Native in headless workers', () => {
     expect(application).toContain('add(com.lofuyu.borderledger.react.NativeServicePackage(nativeServices))');
     const onCreate = application.match(/override fun onCreate\(\)\s*\{([\s\S]*?)\n    \}/)?.[1];

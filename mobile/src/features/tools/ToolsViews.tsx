@@ -16,8 +16,17 @@ const stack={gap:12,marginTop:18};
 const blocked=(controller:ToolsController)=>controller.mutation.current().blocked||controller.mutation.current().status==='revision_conflict';
 const ready=(phase:string)=>phase==='ready';
 
+const toolColors=(dark:boolean)=>dark?{text:'#EEF1E8',muted:'#B1BDB5',surface:'#1D2925',border:'#43534B',accent:'#83C9B1'}:{text:'#18201F',muted:'#4F5C56',surface:'#FBF9F4',border:'#D2CCC0',accent:'#1B6B5B'};
+function ToolSection({dark,title,children}: {dark:boolean;title:string;children:React.ReactNode}){
+ const p=toolColors(dark);
+ return <View style={{padding:16,borderWidth:1,borderRadius:14,borderColor:p.border,backgroundColor:p.surface,gap:12}}><Text accessibilityRole="header" style={{fontFamily:'DMSans',fontSize:19,lineHeight:26,fontWeight:'600',color:p.text}}>{title}</Text>{children}</View>;
+}
+function ToolLabel({dark,children}:{dark:boolean;children:React.ReactNode}){
+ return <Text style={{fontFamily:'DMSans',fontSize:14,lineHeight:21,color:toolColors(dark).muted}}>{children}</Text>;
+}
+
 function Check({dark,label,checked,onPress,disabled=false}:{dark:boolean;label:string;checked:boolean;onPress():void;disabled?:boolean}){
- return <Pressable accessibilityRole="checkbox" accessibilityLabel={label} accessibilityState={{checked,disabled}} disabled={disabled} onPress={onPress} style={{minHeight:48,borderWidth:1,borderRadius:12,borderColor:dark?'#43534B':'#D2CCC0',padding:12,justifyContent:'center',opacity:disabled?0.6:1}}><Text style={{color:dark?'#EEF1E8':'#18201F',fontFamily:'DMSans',fontSize:15}}>{checked?'☑ ':'☐ '}{label}</Text></Pressable>;
+ return <Pressable accessibilityRole="checkbox" accessibilityLabel={label} accessibilityState={{checked,disabled}} disabled={disabled} onPress={onPress} style={{minHeight:48,borderWidth:1,borderRadius:12,borderColor:dark?'#43534B':'#D2CCC0',padding:12,justifyContent:'center',opacity:disabled?0.6:1}}><Text style={{color:dark?'#EEF1E8':'#18201F',fontFamily:'DMSans',fontSize:15}}>{label} · {checked?'On':'Off'}</Text></Pressable>;
 }
 
 function Field({dark,label,value,onChange}:{dark:boolean;label:string;value:string;onChange(v:string):void}){
@@ -37,11 +46,14 @@ function CaptureProfiles({dark,controller,snapshot,state,setConsent}:{dark:boole
 function CaptureSetupActions({dark,controller,snapshot,state,consent,setConsent,operationId}:{dark:boolean;controller:ToolsController;snapshot:CaptureSnapshot;state:CaptureState;consent:boolean;setConsent(value:boolean):void;operationId():string}){
  const isBlocked=blocked(controller),notReady=!ready(state.phase),hasSource=Boolean(snapshot.selectedSourceProfileId);
  return <>
+  <Copy dark={dark} heading>Notification access</Copy>
   <Copy dark={dark}>Listener access: {snapshot.notificationAccess} · App notifications: {snapshot.appNotificationPermission}</Copy>
   <Action dark={dark} label="Open notification access settings" onPress={()=>{void controller.notificationSettings();}}/>
   <Action dark={dark} label="Open Border Ledger notification settings" onPress={()=>{void controller.notificationSettings(true);}}/>
+  <Copy dark={dark} heading>Verify the source</Copy>
   <Copy dark={dark}>Source test: {snapshot.sourceTest}. Only matching listener evidence can pass this test.</Copy>
   <Action dark={dark} label="Test selected source" disabled={!hasSource||isBlocked||notReady} onPress={()=>{setConsent(false);void controller.requestTest();}}/>
+  <Copy dark={dark} heading>Capture authorization</Copy>
   <Check dark={dark} label="Consent to this capture scope" checked={consent} disabled={isBlocked} onPress={()=>setConsent(!consent)}/>
   <Copy dark={dark}>Source {snapshot.selectedSourceProfileId??'not selected'} · Currency {snapshot.selectedCurrency??'not selected'}. Capture authorization is separate from owner sign-in. Credentials stay in Android secure storage.</Copy>
   <Action dark={dark} label="Authorize capture" disabled={isBlocked||notReady||!canAuthorize(snapshot,consent)} onPress={()=>{void controller.authorize(operationId(),consent);setConsent(false);}}/>
@@ -59,6 +71,7 @@ function CaptureDetails({dark,controller,snapshot,state,consent,setConsent,opera
   <Copy dark={dark} heading>Secure notification capture</Copy>
   <Copy dark={dark}>Choose an approved source, grant notification access, then test a real bank notification. Authorize only the scope you review below.</Copy>
   <Copy dark={dark}>Capture: {snapshot.health} · API: {snapshot.apiHealth} · Source setup: {snapshot.sourceSetupStatus}</Copy>
+  <Copy dark={dark} heading>Approved source</Copy>
   <CaptureProfiles dark={dark} controller={controller} snapshot={snapshot} state={state} setConsent={setConsent}/>
   <CaptureSetupActions dark={dark} controller={controller} snapshot={snapshot} state={state} consent={consent} setConsent={setConsent} operationId={operationId}/>
  </>;
@@ -76,7 +89,7 @@ function DeviceMappings({dark,device}:{dark:boolean;device:Device}){
 
 function DeviceCard({dark,controller,device,interactive,onCapture,onRevoke}:{dark:boolean;controller:ToolsController;device:Device;interactive:boolean;onCapture?():void;onRevoke(id:string):void}){
  const canOpen=device.status==='paired'&&!device.revokedAt&&device.sourceMappings.length>0;
- return <Card dark={dark}><Copy dark={dark} heading>{device.name}</Copy><Copy dark={dark}>{device.platform} · {device.status} · Revision {device.revision}</Copy><Copy dark={dark}>Capture expires {device.credentialExpiresAt??'not authorized'} · Revoked {device.revokedAt??'no'}</Copy><Copy dark={dark} heading>Source scope (read-only)</Copy><Copy dark={dark}>{device.sourceMappings.length?'Source mappings are shown from the owner device snapshot. Editing is unavailable in this screen.':'Import-only: source setup unavailable.'}</Copy><DeviceMappings dark={dark} device={device}/>{canOpen?<Action dark={dark} label={`Open secure capture setup for ${device.name}`} onPress={()=>onCapture?.()}/>:null}{!device.revokedAt?<Action dark={dark} label={`Revoke ${device.name}`} disabled={blocked(controller)||!interactive} onPress={()=>onRevoke(device.id)}/>:null}</Card>;
+ return <ToolSection dark={dark} title={device.name}><ToolLabel dark={dark}>{device.platform} · {device.status} · Revision {device.revision}</ToolLabel><Copy dark={dark}>Capture expires {device.credentialExpiresAt??'not authorized'} · Revoked {device.revokedAt??'no'}</Copy><Copy dark={dark} heading>Source scope (read-only)</Copy><ToolLabel dark={dark}>{device.sourceMappings.length?'Source mappings are shown from the owner device snapshot. Editing is unavailable in this screen.':'Import-only: source setup unavailable.'}</ToolLabel><DeviceMappings dark={dark} device={device}/>{canOpen?<Action dark={dark} label={`Open secure capture setup for ${device.name}`} onPress={()=>onCapture?.()}/>:null}{!device.revokedAt?<Action dark={dark} label={`Revoke ${device.name}`} disabled={blocked(controller)||!interactive} onPress={()=>onRevoke(device.id)}/>:null}</ToolSection>;
 }
 
 export function DevicesView({dark,controller,operationId,onCapture}:Props){
@@ -85,7 +98,7 @@ export function DevicesView({dark,controller,operationId,onCapture}:Props){
 }
 
 function WeekStartChoices({dark,weekStart,onChange}:{dark:boolean;weekStart:number;onChange(day:number):void}){
- return <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{[{day:0,label:'Sunday'},{day:1,label:'Monday'}].map(choice=><Action dark={dark} key={choice.day} label={`Week starts: ${choice.label}`} radio selected={weekStart===choice.day} onPress={()=>onChange(choice.day)}/>)}</View>;
+ return <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{[{day:0,label:'Sunday'},{day:1,label:'Monday'}].map(choice=><Action dark={dark} key={choice.day} label={`Week starts: ${choice.label}`} text={choice.label} radio selected={weekStart===choice.day} onPress={()=>onChange(choice.day)}/>)}</View>;
 }
 
 function CurrencyChooser({dark,draft,setDraft,search,setSearch,onClose}:{dark:boolean;draft:ReportingUpdate;setDraft(value:ReportingUpdate):void;search:string;setSearch(value:string):void;onClose():void}){
@@ -95,7 +108,7 @@ function CurrencyChooser({dark,draft,setDraft,search,setSearch,onClose}:{dark:bo
 
 function DevicePreferenceChoices({dark,controller,display}:{dark:boolean;controller:ToolsController;display:ReturnType<ToolsController['display']['current']>}){
  const value=display.data;if(!value)return null;
- return <><View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{['System','Light','Dark'].map(appearanceMode=><Action dark={dark} key={appearanceMode} label={`Appearance: ${appearanceMode}`} radio selected={value.appearanceMode===appearanceMode} disabled={!ready(display.phase)} onPress={()=>{void controller.updateDisplay({...value,appearanceMode});}}/>)}</View><View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{['All','NeedsReview','Provisional'].map(filter=><Action dark={dark} key={filter} label={`Device filter: ${filter}`} radio selected={value.filter===filter} disabled={!ready(display.phase)} onPress={()=>{void controller.updateDisplay({...value,filter});}}/>)}</View><Check dark={dark} label="Reduce motion" checked={value.reducedMotion} disabled={!ready(display.phase)} onPress={()=>{void controller.updateDisplay({...value,reducedMotion:!value.reducedMotion});}}/><Copy dark={dark}>Theme, filter and motion are stored only on this device.</Copy></>;
+ return <><ToolLabel dark={dark}>Appearance</ToolLabel><View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{['System','Light','Dark'].map(appearanceMode=><Action dark={dark} key={appearanceMode} label={`Appearance: ${appearanceMode}`} text={appearanceMode} radio selected={value.appearanceMode===appearanceMode} disabled={!ready(display.phase)} onPress={()=>{void controller.updateDisplay({...value,appearanceMode});}}/>)}</View><ToolLabel dark={dark}>Default filter</ToolLabel><View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{['All','NeedsReview','Provisional'].map(filter=><Action dark={dark} key={filter} label={`Device filter: ${filter}`} text={filter==='NeedsReview'?'Needs review':filter} radio selected={value.filter===filter} disabled={!ready(display.phase)} onPress={()=>{void controller.updateDisplay({...value,filter});}}/>)}</View><Check dark={dark} label="Reduce motion" checked={value.reducedMotion} disabled={!ready(display.phase)} onPress={()=>{void controller.updateDisplay({...value,reducedMotion:!value.reducedMotion});}}/><Copy dark={dark}>Theme, filter and motion are stored only on this device.</Copy></>;
 }
 
 export function SettingsView({dark,controller,operationId}:Props){
@@ -103,7 +116,7 @@ export function SettingsView({dark,controller,operationId}:Props){
  const [draft,setDraft]=useState<ReportingUpdate>({reportingTimezone:'',weekStart:1,preferredCurrency:null}),[chooseCurrency,setChooseCurrency]=useState(false),[search,setSearch]=useState('');
  useEffect(()=>{if(reporting)setDraft({reportingTimezone:reporting.reportingTimezone,weekStart:reporting.weekStart,preferredCurrency:reporting.preferredCurrency});},[reporting?.revision]);
  const openCurrency=()=>{setSearch('');setChooseCurrency(true);};
- return <View style={stack}><Copy dark={dark} heading>Shared reporting</Copy><Status dark={dark} state={state} label="reporting preferences" onRetry={()=>{void controller.loadReporting(true);}}/>{reporting?<><Copy dark={dark}>Revision {reporting.revision}. This changes report grouping only; original event times remain intact.</Copy><Field dark={dark} label="Reporting timezone" value={draft.reportingTimezone} onChange={reportingTimezone=>setDraft({...draft,reportingTimezone})}/><WeekStartChoices dark={dark} weekStart={draft.weekStart} onChange={weekStart=>setDraft({...draft,weekStart})}/><Copy dark={dark} heading>Total spending currency</Copy><Action dark={dark} label="Choose reporting currency" text={draft.preferredCurrency??'Source currencies (no conversion)'} onPress={openCurrency}/><Action dark={dark} label="Save reporting preferences" disabled={blocked(controller)||!ready(state.phase)||!draft.reportingTimezone.trim()} onPress={()=>{void controller.saveReporting(operationId(),draft);}}/></>:null}<Copy dark={dark} heading>This device</Copy><Status dark={dark} state={display} label="device preferences" onRetry={()=>{void controller.loadDisplay();}}/><DevicePreferenceChoices dark={dark} controller={controller} display={display}/>{chooseCurrency&&reporting?<CurrencyChooser dark={dark} draft={draft} setDraft={setDraft} search={search} setSearch={setSearch} onClose={()=>setChooseCurrency(false)}/>:null}</View>;
+ return <View style={stack}><ToolSection dark={dark} title="Shared reporting"><Status dark={dark} state={state} label="reporting preferences" onRetry={()=>{void controller.loadReporting(true);}}/>{reporting?<><ToolLabel dark={dark}>Revision {reporting.revision}. This changes report grouping only; original event times remain intact.</ToolLabel><Field dark={dark} label="Reporting timezone" value={draft.reportingTimezone} onChange={reportingTimezone=>setDraft({...draft,reportingTimezone})}/><ToolLabel dark={dark}>Week starts on</ToolLabel><WeekStartChoices dark={dark} weekStart={draft.weekStart} onChange={weekStart=>setDraft({...draft,weekStart})}/><ToolLabel dark={dark}>Total spending currency</ToolLabel><Action dark={dark} label="Choose reporting currency" text={draft.preferredCurrency??'Source currencies (no conversion)'} onPress={openCurrency}/><Action dark={dark} label="Save reporting preferences" disabled={blocked(controller)||!ready(state.phase)||!draft.reportingTimezone.trim()} onPress={()=>{void controller.saveReporting(operationId(),draft);}}/></>:null}</ToolSection><ToolSection dark={dark} title="This device"><Status dark={dark} state={display} label="device preferences" onRetry={()=>{void controller.loadDisplay();}}/><DevicePreferenceChoices dark={dark} controller={controller} display={display}/></ToolSection>{chooseCurrency&&reporting?<CurrencyChooser dark={dark} draft={draft} setDraft={setDraft} search={search} setSearch={setSearch} onClose={()=>setChooseCurrency(false)}/>:null}</View>;
 }
 
 function AccountPicker({dark,accounts,account,setAccount}:{dark:boolean;accounts:AccountState;account:string;setAccount(value:string):void}){
@@ -121,7 +134,7 @@ function ChooseStatement({dark,controller,accounts,account,snapshot,canUse,opera
 
 function ImportRows({dark,controller,rows,draftReady}:{dark:boolean;controller:ToolsController;rows:RowsState;draftReady:boolean}){
  const data=rows.data;if(!data)return null;
- return <>{data.items.map(row=><Card dark={dark} key={row.rowId}><Check dark={dark} label={`Select import row ${row.rowIndex}`} checked={row.selected} disabled={!draftReady||!ready(rows.phase)} onPress={()=>{void controller.selectRow(row.rowId,!row.selected);}}/><Copy dark={dark}>{row.merchant} · {row.date} · {row.currency} {formatMoney(row.amountMinor,row.currency)}</Copy><Copy dark={dark}>{row.category} · {row.kind} · {row.status} · Account {row.accountId}</Copy></Card>)}{data.items.length<data.total?<Action dark={dark} label="Load more import rows" disabled={rows.phase==='loading'} onPress={()=>{void controller.loadRows(true);}}/>:null}</>;
+ return <>{data.items.map(row=>{const disabled=!draftReady||!ready(rows.phase),p=toolColors(dark);return <Pressable key={row.rowId} accessibilityRole="checkbox" accessibilityLabel={`Select import row ${row.rowIndex} · ${row.merchant} · ${formatMoney(row.amountMinor,row.currency)} · ${row.currency} · ${row.date} · ${row.category} · ${row.kind} · ${row.status} · Account ${row.accountId}`} accessibilityState={{checked:row.selected,disabled}} disabled={disabled} onPress={()=>{void controller.selectRow(row.rowId,!row.selected);}} style={{minHeight:64,paddingVertical:14,borderBottomWidth:1,borderColor:p.border,gap:4,opacity:disabled?0.6:1}}><View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'baseline',gap:12}}><Text style={{fontFamily:'DMSans',fontSize:16,lineHeight:24,fontWeight:'600',color:p.text,flexShrink:1}}>{row.merchant}</Text><Text style={{fontFamily:'DMSans',fontSize:16,lineHeight:24,fontWeight:'600',fontVariant:['tabular-nums'],color:p.text,flexShrink:1,textAlign:'right'}}>{formatMoney(row.amountMinor,row.currency)}</Text></View><ToolLabel dark={dark}>{row.date} · {row.currency} · {row.category} · {row.kind} · {row.status} · Account {row.accountId}</ToolLabel><Text style={{fontFamily:'DMSans',fontSize:13,lineHeight:20,color:p.accent}}>{row.selected?'Selected':'Not selected'}</Text></Pressable>;})}{data.items.length<data.total?<Action dark={dark} label="Load more import rows" disabled={rows.phase==='loading'} onPress={()=>{void controller.loadRows(true);}}/>:null}</>;
 }
 
 function DuplicateCards({dark,controller,snapshot,draftReady,operationId}:{dark:boolean;controller:ToolsController;snapshot:FileSnapshot;draftReady:boolean;operationId():string}){
@@ -131,7 +144,7 @@ function DuplicateCards({dark,controller,snapshot,draftReady,operationId}:{dark:
 function ImportPreview({dark,controller,snapshot,rows,ready:canUse,draftReady,operationId,onReview}:PreviewProps){
  if(!snapshot.previewId)return null;
  const tooMany=snapshot.selectedRowCount>500;
- return <><Copy dark={dark} heading>Worker preview</Copy><Copy dark={dark}>{snapshot.rowCount} rows · {snapshot.selectedRowCount} selected · Revision {snapshot.revision} · Expires {snapshot.expiresAt}</Copy>{tooMany?<Copy dark={dark} error>Select no more than 500 rows before committing. Deselect rows in the preview to continue.</Copy>:null}<Copy dark={dark}>Nothing has been committed yet. Resolve each open duplicate before committing.</Copy><Status dark={dark} state={rows} label="import rows" onRetry={()=>{void controller.loadRows();}}/><ImportRows dark={dark} controller={controller} rows={rows} draftReady={draftReady}/><DuplicateCards dark={dark} controller={controller} snapshot={snapshot} draftReady={draftReady} operationId={operationId}/><Action dark={dark} label={`Review commit of ${snapshot.selectedRowCount} selected rows`} disabled={!canUse||!canCommit(snapshot)} onPress={onReview}/><Action dark={dark} label="Cancel staged import" disabled={!canUse||!['ready','error'].includes(snapshot.importState)} onPress={()=>{void controller.cancelImport(operationId());}}/></>;
+ return <><Copy dark={dark} heading>Import preview</Copy><Copy dark={dark}>{snapshot.rowCount} rows · {snapshot.selectedRowCount} selected · Revision {snapshot.revision} · Expires {snapshot.expiresAt}</Copy>{tooMany?<Copy dark={dark} error>Select no more than 500 rows before committing. Deselect rows in the preview to continue.</Copy>:null}<Copy dark={dark}>Nothing has been committed yet. Resolve each open duplicate before committing.</Copy><Status dark={dark} state={rows} label="import rows" onRetry={()=>{void controller.loadRows();}}/><ImportRows dark={dark} controller={controller} rows={rows} draftReady={draftReady}/><DuplicateCards dark={dark} controller={controller} snapshot={snapshot} draftReady={draftReady} operationId={operationId}/><Action dark={dark} label={`Review commit of ${snapshot.selectedRowCount} selected rows`} text={`Review ${snapshot.selectedRowCount} selected ${snapshot.selectedRowCount===1?'row':'rows'}`} disabled={!canUse||!canCommit(snapshot)} onPress={onReview}/><Action dark={dark} label="Cancel staged import" disabled={!canUse||!['ready','error'].includes(snapshot.importState)} onPress={()=>{void controller.cancelImport(operationId());}}/></>;
 }
 
 function FileReceipts({dark,snapshot}:{dark:boolean;snapshot:FileSnapshot}){
@@ -139,7 +152,7 @@ function FileReceipts({dark,snapshot}:{dark:boolean;snapshot:FileSnapshot}){
 }
 
 function ExportSection({dark,controller,operationId,canUse}:{dark:boolean;controller:ToolsController;operationId():string;canUse:boolean}){
- return <><Copy dark={dark} heading>Export ledger</Copy><Copy dark={dark}>Export all canonical ledger rows. Android streams the CSV to your chosen document destination. Canceling the picker creates no success receipt.</Copy><Action dark={dark} label="Save ledger CSV" disabled={!canUse} onPress={()=>{void controller.exportFile(operationId(),false);}}/><Action dark={dark} label="Save and share ledger CSV" disabled={!canUse} onPress={()=>{void controller.exportFile(operationId(),true);}}/></>;
+ return <ToolSection dark={dark} title="Export ledger"><Copy dark={dark}>Export all canonical ledger rows. Android streams the CSV to your chosen document destination. Canceling the picker creates no success receipt.</Copy><Action dark={dark} label="Save ledger CSV" disabled={!canUse} onPress={()=>{void controller.exportFile(operationId(),false);}}/><Action dark={dark} label="Save and share ledger CSV" disabled={!canUse} onPress={()=>{void controller.exportFile(operationId(),true);}}/></ToolSection>;
 }
 
 function FileSnapshotContent({dark,controller,snapshot,rows,canUse,draftReady,operationId,onReview}:{dark:boolean;controller:ToolsController;snapshot:FileSnapshot;rows:RowsState;canUse:boolean;draftReady:boolean;operationId():string;onReview():void}){
@@ -153,7 +166,7 @@ function FileBody({dark,controller,snapshot,rows,canUse,draftReady,operationId,o
 
 function CommitModal({dark,controller,snapshot,canUse,confirm,setConfirm,operationId}:{dark:boolean;controller:ToolsController;snapshot:FileSnapshot|null;canUse:boolean;confirm:boolean;setConfirm(value:boolean):void;operationId():string}){
  if(!confirm||!snapshot)return null;
- return <DetailModal dark={dark} title="Confirm selected import rows" onClose={()=>setConfirm(false)}><Copy dark={dark}>Publish {snapshot.selectedRowCount} reviewed rows from preview {snapshot.previewId}, revision {snapshot.revision}? Wait for a Worker receipt before treating this as complete.</Copy><Action dark={dark} label="Confirm import commit" disabled={!canUse||!canCommit(snapshot)} onPress={()=>{setConfirm(false);void controller.commitImport(operationId());}}/><Action dark={dark} label="Back to import review" onPress={()=>setConfirm(false)}/></DetailModal>;
+ return <DetailModal dark={dark} title="Confirm selected import rows" onClose={()=>setConfirm(false)}><Copy dark={dark}>Import {snapshot.selectedRowCount} reviewed {snapshot.selectedRowCount===1?'row':'rows'}? Wait for confirmation before treating the import as complete.</Copy><ToolLabel dark={dark}>Preview {snapshot.previewId} · Revision {snapshot.revision}</ToolLabel><Action dark={dark} label="Confirm import commit" disabled={!canUse||!canCommit(snapshot)} onPress={()=>{setConfirm(false);void controller.commitImport(operationId());}}/><Action dark={dark} label="Back to import review" onPress={()=>setConfirm(false)}/></DetailModal>;
 }
 
 export function FilesView({dark,controller,operationId}:Props){
