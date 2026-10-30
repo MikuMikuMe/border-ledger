@@ -1,15 +1,34 @@
 import {describe, expect, it,vi} from 'vitest';
-import {formatMoney, reportQuery, reportView, filterActivity, mergeRows, recurringMessage, Resource, MutationGate} from '../mobile/src/features/finance/model';
+import {formatMoney, previousReportQuery, comparableTotals, fillReportDays, reportQuery, reportView, filterActivity, mergeRows, recurringMessage, Resource, MutationGate} from '../mobile/src/features/finance/model';
 import {report, transaction, stream, states} from './fixtures/mobile-finance';
 
 describe('F02/F03 report lens', () => {
   it('uses the reporting timezone and configured Sunday week boundary', () => {
     expect(reportQuery({window:'Week',now:new Date('2026-10-18T01:00:00Z'),preferences:{reportingTimezone:'America/Toronto',weekStart:0,preferredCurrency:null,revision:2,updatedAt:null},includeProvisional:false,currency:null,reportingCurrency:null})).toEqual({startDate:'2026-10-11',endDate:'2026-10-17',timeZone:'America/Toronto',includeProvisional:false,currency:null,reportingCurrency:null});
   });
+  it('compares an equal preceding range and refuses mismatched or partial reports',()=>{
+    const query={startDate:'2026-10-01',endDate:'2026-10-17',timeZone:'America/Toronto',includeProvisional:false,currency:null,reportingCurrency:null};
+    expect(previousReportQuery(query)).toMatchObject({startDate:'2026-09-14',endDate:'2026-09-30'});
+    const previous={...report,from:'2026-09-14',to:'2026-09-30',currencyTotals:[{...report.currencyTotals[1],confirmedMinorUnits:'400'}]};
+    expect(comparableTotals(report,previous,false,null)).toEqual([{currency:'CAD',previous:'400',difference:'600'},{currency:'CNY',previous:'0',difference:'2000'}]);
+    expect(comparableTotals(previous,report,false,null)).toEqual([]);
+    const previousOnly={...previous,currencyTotals:[...previous.currencyTotals,{...report.currencyTotals[0],currency:'USD',confirmedMinorUnits:'300'}]};
+    expect(comparableTotals(report,previousOnly,false,null)).toContainEqual({currency:'USD',previous:'300',difference:'-300'});
+    expect(comparableTotals(report,{...previous,sourceCoverage:[{source:'other',count:1}]},false,null)).toEqual([]);
+    expect(comparableTotals({...report,currencyTotals:[],sourceCoverage:[]},previous,false,null)).toContainEqual({currency:'CAD',previous:'400',difference:'-400'});
+    expect(comparableTotals(report,{...previous,timeZone:'UTC'},false,null)).toEqual([]);
+    expect(comparableTotals(report,{...previous,from:'2026-09-13'},false,null)).toEqual([]);
+    expect(comparableTotals({...report,reportingCurrency:'CAD'}, {...previous,reportingCurrency:'CAD'},false,null)).toEqual([]);
+  });
   it('keeps source currencies separate and sorts chart dates with refund signs', () => {
     const view=reportView(report,false,null);
     expect(view.totals).toEqual([{currency:'CAD',amount:'1000'},{currency:'CNY',amount:'2000'}]);
     expect(view.lanes[0].points.map(p=>[p.date,p.amount])).toEqual([['2026-10-16','-200'],['2026-10-17','1200']]);
+  });
+  it('places missing dates in the recorded daily timeline as zeroes',()=>{
+    const lane=reportView(report,false,null).lanes[0];
+    const filled=fillReportDays(lane,'2026-10-15','2026-10-18');
+    expect(filled.points.map(point=>[point.date,point.amount])).toEqual([['2026-10-15','0'],['2026-10-16','-200'],['2026-10-17','1200'],['2026-10-18','0']]);
   });
   it('includes provisional only on request and never fabricates unavailable FX', () => {
     expect(reportView(report,true,null).totals[0].amount).toBe('1250');

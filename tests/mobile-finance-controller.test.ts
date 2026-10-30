@@ -14,6 +14,15 @@ describe('native screen controller',()=>{
     expect(f.reads).toContainEqual({startDate:'2026-10-01',endDate:'2026-10-17',timeZone:'America/Toronto',currency:null,reportingCurrency:null,includeProvisional:false});
     c.dispose();expect(f.removed()).toBe(2);
   });
+  it('loads a separate equal-length preceding report and clears it on failure',async()=>{
+    const f=fixture(),c=new FinanceController(f.ports,()=>{},()=>new Date('2026-10-17T12:00:00Z'));
+    await c.start();
+    expect(f.reads).toContainEqual({startDate:'2026-09-14',endDate:'2026-09-30',timeZone:'America/Toronto',currency:null,reportingCurrency:null,includeProvisional:false});
+    f.ports.ledger.readReport=async query=>{if(query.startDate==='2026-09-14')throw {code:'offline'};return report;};
+    await c.loadReport();await new Promise(resolve=>setTimeout(resolve,0));
+    expect(c.previousReport.current()).toMatchObject({phase:'offline',data:null});
+    expect(c.report.current().phase).toBe('ready');c.dispose();
+  });
   it('sends every Activity filter to the server, resets cursor and retains cached rows offline',async()=>{
     const f=fixture(),c=new FinanceController(f.ports);await c.start();
     await c.filterActivity({query:'Cafe',currency:'CAD',category:'Food',status:'confirmed',source:'plaid'});

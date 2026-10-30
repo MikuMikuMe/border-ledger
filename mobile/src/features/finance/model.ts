@@ -12,6 +12,35 @@ export function reportQuery({window,now,preferences:p,includeProvisional,currenc
   if(window==='Week')start.setUTCDate(start.getUTCDate()-(start.getUTCDay()-p.weekStart+7)%7);
   return {startDate:start.toISOString().slice(0,10),endDate,includeProvisional,currency,reportingCurrency,timeZone:p.reportingTimezone};
 }
+export function previousReportQuery(query:ReportQuery):ReportQuery {
+  const start=new Date(`${query.startDate}T00:00:00Z`),end=new Date(`${query.endDate}T00:00:00Z`);
+  const days=Math.round((end.getTime()-start.getTime())/86400000)+1;
+  const previousEnd=new Date(start.getTime()-86400000),previousStart=new Date(previousEnd.getTime()-(days-1)*86400000);
+  return {...query,startDate:previousStart.toISOString().slice(0,10),endDate:previousEnd.toISOString().slice(0,10)};
+}
+function comparisonDatesMatch(current:Report,previous:Report,include:boolean,source:string|null) {
+  if(![current.from,current.to,previous.from,previous.to].every(Boolean))return false;
+  if(!current.from||!current.to)return false;
+  const query={startDate:current.from,endDate:current.to,includeProvisional:include,currency:source,reportingCurrency:current.reportingCurrency,timeZone:current.timeZone??''};
+  const expected=previousReportQuery(query);
+  return Boolean(current.asOf&&previous.asOf&&previous.from===expected.startDate&&previous.to===expected.endDate);
+}
+function comparisonSettingsMatch(current:Report,previous:Report,include:boolean) {
+  const sources=(r:Report)=>r.sourceCoverage.map(v=>v.source).sort().join('|');
+  const sameBasis=previous.timeZone===current.timeZone&&previous.timeBasis===current.timeBasis;
+  const checks=[sameBasis,previous.includeProvisional===current.includeProvisional,previous.includeProvisional===include,previous.reportingCurrency===current.reportingCurrency,Boolean(sources(current)||sources(previous)),!sources(current)||!sources(previous)||sources(previous)===sources(current),!current.reportingCurrency||[current.fx.complete,previous.fx.complete].every(Boolean)];
+  return checks.every(Boolean);
+}
+export function comparableTotals(current:Report,previous:Report,include:boolean,source:string|null) {
+  if(!comparisonDatesMatch(current,previous,include,source)||!comparisonSettingsMatch(current,previous,include))return [];
+  const prior=reportView(previous,include,source).totals,currentTotals=reportView(current,include,source).totals;
+  const currencies=[...new Set([...currentTotals,...prior].map(value=>value.currency))].sort();
+  return currencies.map(currency=>{
+    const currentAmount=currentTotals.find(value=>value.currency===currency)?.amount??'0';
+    const previousAmount=prior.find(value=>value.currency===currency)?.amount??'0';
+    return {currency,previous:previousAmount,difference:(BigInt(currentAmount)-BigInt(previousAmount)).toString()};
+  });
+}
 type CurrencyMeta=typeof currencies[number];
 function exactAmount({value,digits}:{value:string;digits:number}){const amount=BigInt(value),negative=amount<0n,absolute=negative?-amount:amount,scale=10n**BigInt(digits);return {negative,integer:absolute/scale,fraction:(absolute%scale).toString().padStart(digits,'0')};}
 function grouping(formatter:Intl.NumberFormat){
@@ -45,6 +74,18 @@ function currencyOrder(a:string,b:string){const rank=(currency:string)=>currency
 function reportLanes({daily,include}:{daily:Report['dailyTotals'];include:boolean}){
   const currencies=[...new Set(daily.map(value=>value.currency))].sort(currencyOrder);
   return currencies.map(currency=>({currency,points:daily.filter(value=>value.currency===currency).sort((a,b)=>a.date.localeCompare(b.date)).map(value=>({date:value.date,amount:moneyTotal({...value,include}),confirmed:value.confirmedMinorUnits,provisional:value.provisionalMinorUnits}))}));
+}
+export function fillReportDays(lane:ReturnType<typeof reportLanes>[number],from:string|null,to:string|null) {
+  if(!from||!to)return lane;
+  const start=new Date(`${from}T00:00:00Z`),end=new Date(`${to}T00:00:00Z`),count=(end.getTime()-start.getTime())/86400000+1;
+  if(!Number.isInteger(count))return lane;
+  if(count<1)return lane;
+  if(count>31)return lane;
+  const points=new Map(lane.points.map(point=>[point.date,point]));
+  return {...lane,points:Array.from({length:count},(_,index)=>{
+    const date=new Date(start.getTime()+index*86400000).toISOString().slice(0,10);
+    return points.get(date)??{date,amount:'0',confirmed:'0',provisional:'0'};
+  })};
 }
 function convertedTotals({report,include}:{report:Report;include:boolean}){const target=report.reportingCurrency;return target&&report.convertedTotals?[{currency:target,amount:moneyTotal({...report.convertedTotals,include})}]:[];}
 export function reportView(report:Report,include:boolean,source:string|null) {

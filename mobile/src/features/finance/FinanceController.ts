@@ -1,6 +1,6 @@
 import type {Snapshot,ActivityQuery,Report,Transactions,Transaction,Stream,Reporting,Lens,RecurringData,FinancePorts,Page,Summary} from './contracts';
 export type {FinancePorts} from './contracts';
-import {mergeRows,MutationGate,reportQuery,Resource,type LoadState} from './model';
+import {mergeRows,MutationGate,previousReportQuery,reportQuery,Resource,type LoadState} from './model';
 const PAGE_SIZE=50;
 // The page controls membership/order; previously observed higher revisions
 // control the value for IDs that reappear on refresh or under another filter.
@@ -35,14 +35,14 @@ function mergeSummary(summary:Summary,streams:Map<string,Stream>):Summary {
   return {...summary,upcoming:summary.upcoming.map(item=>({...item,stream:streams.get(item.stream.id)!})),latestPaymentChanges:rememberRows(streams,summary.latestPaymentChanges)};
 }
 export class FinanceController {
-  readonly snapshot:Resource<Snapshot|null>;readonly report:Resource<Report>;readonly activity:Resource<Transactions>;readonly recurring:Resource<RecurringData>;readonly mutation:MutationGate;
+  readonly snapshot:Resource<Snapshot|null>;readonly report:Resource<Report>;readonly previousReport:Resource<Report>;readonly activity:Resource<Transactions>;readonly recurring:Resource<RecurringData>;readonly mutation:MutationGate;
   lens:Lens={window:'Month',include:false,source:null,target:null};
   activityFilters:Partial<ActivityQuery>={};recurringFilters:{currency?:string|null;classification?:string|null}={};
-  private preferences:Reporting|null=null;private subscriptions:{remove():void}[]=[];private disposed=false;
+  private reportSequence=0;private preferences:Reporting|null=null;private subscriptions:{remove():void}[]=[];private disposed=false;
   private transactions=new Map<string,Transaction>();private streams=new Map<string,Stream>();
   get activityFacetRows():Transaction[]{return [...this.transactions.values()];}
   constructor(private ports:FinancePorts,private changed:()=>void=()=>{},private now:()=>Date=()=>new Date()) {
-    this.snapshot=new Resource(changed);this.report=new Resource(changed);this.activity=new Resource(changed);this.recurring=new Resource(changed);this.mutation=new MutationGate(changed);
+    this.snapshot=new Resource(changed);this.report=new Resource(changed);this.previousReport=new Resource(changed);this.activity=new Resource(changed);this.recurring=new Resource(changed);this.mutation=new MutationGate(changed);
   }
   async start() {
     this.subscriptions=[this.ports.ledger.onChanged(()=>{void this.reload(false);}),this.ports.recurring.onChanged(()=>{void this.loadRecurring();})];
@@ -55,9 +55,13 @@ export class FinanceController {
     await Promise.all([this.loadReport(),this.loadActivity()]);
   }
   async loadReport(reset=false) {
+    const sequence=++this.reportSequence,lens={...this.lens},now=this.now();
+    this.previousReport.reset();
     await this.report.load(async()=>{
       const preferences=await this.ports.preferences.readReporting();this.preferences=preferences;
-      return this.ports.ledger.readReport(reportQuery({window:this.lens.window,now:this.now(),preferences,includeProvisional:this.lens.include,currency:this.lens.source,reportingCurrency:this.lens.target}));
+      const query=reportQuery({window:lens.window,now,preferences,includeProvisional:lens.include,currency:lens.source,reportingCurrency:lens.target});
+      if(sequence===this.reportSequence&&!this.disposed)void this.previousReport.load(()=>this.ports.ledger.readReport(previousReportQuery(query)),false);
+      return this.ports.ledger.readReport(query);
     },!reset);
   }
   async setLens(lens:Lens){this.lens=lens;this.changed();await this.loadReport(true);}
@@ -99,5 +103,5 @@ export class FinanceController {
     const items=rememberRows(this.streams,page.items),mergedPage:Page={...page,items:previous?mergeRows(rememberRows(this.streams,previous.page.items),items):items};
     return {page:mergedPage,summary:summary?mergeSummary(summary,this.streams):null};
   }
-  dispose(){this.disposed=true;this.subscriptions.forEach(s=>s.remove());this.snapshot.dispose();this.report.dispose();this.activity.dispose();this.recurring.dispose();this.transactions.clear();this.streams.clear();}
+  dispose(){this.disposed=true;this.subscriptions.forEach(s=>s.remove());this.snapshot.dispose();this.report.dispose();this.previousReport.dispose();this.activity.dispose();this.recurring.dispose();this.transactions.clear();this.streams.clear();}
 }
