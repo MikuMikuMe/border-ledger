@@ -49,15 +49,46 @@ describe('native financial view fixtures and accessibility',()=>{
     expect(text(tree)).toContain('purchase_date');expect(text(tree)).toContain('Excluded');
     const week=tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report window: Week')[0];
     expect(week.props.accessibilityRole).toBe('radio');expect(week.props.style.minHeight).toBeGreaterThanOrEqual(48);
+  });
+  it('reveals reporting currencies in report filters',()=>{
+    const tree=render(OverviewView,{...actions,dark:true,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD','CNY']});
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(0);
     act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report filters')[0].props.onPress());
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(1);
   });
-  it('keeps report context, heading, and refresh visible',()=>{
+  it('prioritizes spending while keeping report context and refresh accessible',()=>{
     const tree=render(OverviewView,{...actions,dark:true,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD','CNY']});
-    expect(text(tree)).toContain('purchase_date');expect(text(tree)).toContain('America/Toronto');
+    expect(text(tree)).not.toContain('purchase_date');expect(text(tree)).not.toContain('America/Toronto');
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Refresh report')).toHaveLength(1);
-    expect(tree.root.findAll((n:any)=>n.type==='Text'&&n.props.accessibilityRole==='header'&&n.children.join('')==='Net spending by source currency')).toHaveLength(1);
+    expect(tree.root.findAll((n:any)=>n.type==='Text'&&n.props.accessibilityRole==='header'&&n.children.join('')==='Net spending this month')).toHaveLength(1);
+    act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report details')[0].props.onPress());
+    expect(text(tree)).toContain('purchase_date');expect(text(tree)).toContain('America/Toronto');
+  });
+  it('selects a chart day and exposes the highest positive day',()=>{
+    const tree=render(OverviewView,{...actions,dark:false,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});
+    expect(text(tree)).toContain('Highest day');
+    const day=tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel?.includes('Oct 16, 2026'))[0];
+    expect(day.props.accessibilityRole).toBe('button');act(()=>day.props.onPress());
+    expect(text(tree)).toContain('Selected day');expect(day.props.accessibilityState.selected).toBe(true);
+  });
+  it('repositions the same peak when the reporting window changes',()=>{
+    const scrollTo=vi.fn();const props={...actions,dark:false,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']};
+    let tree:any;act(()=>{tree=create(React.createElement(OverviewView,props),{createNodeMock:(node:any)=>node.type==='ScrollView'?{scrollTo}:null});});
+    expect(scrollTo).toHaveBeenLastCalledWith({x:672,animated:false});
+    act(()=>tree.update(React.createElement(OverviewView,{...props,state:ready({...report,from:'2026-10-15'})})));
+    expect(scrollTo).toHaveBeenLastCalledWith({x:0,animated:false});
+  });
+  it('explains unavailable prior reports and does not call a refund-only default a selected day',()=>{
+    const negative={...report,from:'2026-10-16',to:'2026-10-16',dailyTotals:[report.dailyTotals[1]]};
+    const tree=render(OverviewView,{...actions,dark:false,state:ready(negative),previous:{phase:'offline',data:null,message:'Offline'},snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});
+    expect(text(tree)).toContain('First day');expect(text(tree)).toContain('Previous period unavailable');
+    const bar=tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel?.includes('Oct 16, 2026, CAD'))[0];
+    expect(bar.props.accessibilityState.selected).toBe(false);
+  });
+  it('does not invent zero days when conversion is incomplete',()=>{
+    const partial={...report,reportingCurrency:'CAD',convertedDailyTotals:[{date:'2026-10-17',confirmedMinorUnits:'100',provisionalMinorUnits:'0'}]};
+    const tree=render(OverviewView,{...actions,dark:false,state:ready(partial),snapshot:null,lens:{window:'Month',include:false,source:null,target:'CAD'},currencies:['CAD']});
+    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel?.includes('Oct 16, 2026, CAD'))).toHaveLength(0);
   });
   it('keeps report filters available when a report cannot load',()=>{
     const tree=render(OverviewView,{...actions,dark:false,state:{phase:'error',data:null,message:'Unavailable'},snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});

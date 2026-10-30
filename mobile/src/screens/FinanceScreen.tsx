@@ -41,7 +41,7 @@ function currencyOptions(controller:FinanceControllerInstance):string[] {
 }
 
 function OverviewPanel({dark,controller,currencies}:{dark:boolean;controller:FinanceControllerInstance;currencies:string[]}) {
-  return <OverviewView dark={dark} state={controller.report.current()} snapshot={controller.snapshot.current().data} lens={controller.lens} currencies={currencies} onLens={lens=>{void controller.setLens(lens);}} onRetry={()=>{void controller.reload();}}/>;
+  return <OverviewView dark={dark} state={controller.report.current()} previous={controller.previousReport.current()} snapshot={controller.snapshot.current().data} lens={controller.lens} currencies={currencies} onLens={lens=>{void controller.setLens(lens);}} onRetry={()=>{void controller.reload();}}/>;
 }
 
 function ActivityPanel({dark,controller,selected,draft,setSelected,setDraft}:{dark:boolean;controller:FinanceControllerInstance;selected:Transaction|null;draft:{category:string;note:string};setSelected(value:Transaction|null):void;setDraft(value:{category:string;note:string}):void}) {
