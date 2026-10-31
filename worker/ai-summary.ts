@@ -20,7 +20,7 @@ function groupTransactions(rows:SummaryTransaction[]):SummaryGroup[] {
   for(const row of rows) {
     const key=JSON.stringify([row.category,row.currency,row.kind]);
     const current=groups.get(key)??{category:row.category,currency:row.currency,kind:row.kind,amountMinor:0,count:0};
-    current.amountMinor+=row.amountMinor;current.count++;
+    current.amountMinor+=row.kind==='transfer'?row.amountMinor:Math.abs(row.amountMinor);current.count++;
     if(!Number.isSafeInteger(current.amountMinor)) throw new RangeError('Analysis amount exceeds safe range');
     groups.set(key,current);
   }

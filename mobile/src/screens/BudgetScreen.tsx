@@ -16,7 +16,7 @@ function BudgetSetup({dark,state}:{dark:boolean;state:State}) {
 function BudgetBody({dark,state}:{dark:boolean;state:State}) {
   if(state.loading) return null;
   if(state.configured===false) return <BudgetSetup dark={dark} state={state}/>;
-  if(!state.view) return null;
+  if(!state.view || state.view.summary.month!==state.month) return null;
   return <BudgetContent dark={dark} currency={state.view.settings.currency} view={state.view} busy={state.mutation.blocked} onWrite={state.write}/>;
 }
 export function BudgetScreen({dark}:{dark:boolean}) {

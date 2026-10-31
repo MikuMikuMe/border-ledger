@@ -23,7 +23,15 @@ async function ledgerMonth(db:D1Database,context:FinancialContext,now:Date):Prom
 }
 function reserveFutureAllocations(value:number|null,allocations:{month:string;assignedMinor:number}[],month:string,currentMonth:string):number|null {
   if(value===null || month!==currentMonth) return null;
-  const future=allocations.filter(row=>row.month>month).reduce((sum,row)=>sum+BigInt(row.assignedMinor),0n);
+  const totals=new Map<string,bigint>();
+  for(const row of allocations) {
+    if(row.month>month) totals.set(row.month,(totals.get(row.month)??0n)+BigInt(row.assignedMinor));
+  }
+  let running=0n,future=0n;
+  for(const key of [...totals.keys()].sort()) {
+    running+=totals.get(key)!;
+    if(running>future) future=running;
+  }
   const result=BigInt(value)-(future>0n?future:0n);
   if(result>BigInt(Number.MAX_SAFE_INTEGER) || result<BigInt(Number.MIN_SAFE_INTEGER)) throw new RangeError('Budget amount exceeds safe range');
   return Number(result);

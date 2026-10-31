@@ -29,4 +29,15 @@ describe('analysis summaries',()=>{
       expect(ledger.groups).toMatchObject([{kind:'transfer',amountMinor:123}]);
     }finally{f.close();}
   });
+  it('aggregates magnitudes for mixed-sign transactions while retaining transfer direction',async()=>{
+    const f=createSqliteD1Fixture();try {
+      await f.db.prepare("INSERT INTO accounts(id,name,institution,kind,status,currency,ledger_id) VALUES('a','Cash','Bank','chequing','connected','CAD','personal')").run();
+      for(const [id,kind,amount] of [['r1','refund',500],['r2','refund',-500],['e1','expense',-300],['e2','expense',300],['t1','transfer',-100],['t2','transfer',40]] as const) {
+        await f.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES(?,'a','2026-10-05','Shop',?,'CAD','Food',?,'confirmed','manual',?,'personal')").bind(id,amount,kind,id).run();
+      }
+      const result=await readAiLedgerSummary(f.db,owner,{from:'2026-10-01',to:'2026-10-31',detail:true,includeTransfers:true});
+      expect(result.groups).toEqual(expect.arrayContaining([{category:'Food',currency:'CAD',kind:'refund',amountMinor:1000,count:2},{category:'Food',currency:'CAD',kind:'expense',amountMinor:600,count:2},{category:'Food',currency:'CAD',kind:'transfer',amountMinor:-60,count:2}]));
+      expect(result.transactions?.map(row=>row.amountMinor)).toEqual([-300,300,500,-500,-100,40]);
+    }finally{f.close();}
+  });
 });

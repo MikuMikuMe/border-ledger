@@ -58,6 +58,7 @@ function BudgetBody({state,accounts}:{state:ReturnType<typeof useBudget>;account
   if(state.loading) return null;
   if(state.snapshot && !state.snapshot.settings) return <form className="budget-form" onSubmit={event=>{event.preventDefault();void state.save('settings',{currency:state.currency,startMonth:state.month}).catch(()=>undefined);}}><h2>Choose your budget currency</h2><p>Transactions retain their original currency and use their dated exchange rates.</p><CurrencySelect label="Budget currency" value={state.currency} onChange={state.setCurrency}/><button disabled={state.busy || !getCurrencyMeta(state.currency)}>Create budget</button></form>;
   if(!state.data || !state.snapshot) return null;
+  if(state.data.summary.month!==state.month) return null;
   return <BudgetDetails data={state.data} snapshot={state.snapshot} accounts={accounts} busy={state.busy} save={state.save} remove={state.remove} onInvalid={()=>state.setError('Check the amount and details, then try again.')}/>;
 }
 export function BudgetView({api,initialMonth,accounts}:{api:LedgerApi;initialMonth:string;accounts:Account[]}) {

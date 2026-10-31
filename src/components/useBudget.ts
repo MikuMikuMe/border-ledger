@@ -12,7 +12,7 @@ export function useBudget(api:LedgerApi,initialMonth:string) {
       const view=state.settings?await api<BudgetViewData>(`/api/budget/view?month=${encodeURIComponent(month)}`):null;
       if(current!==sequence.current) return;
       setSnapshot(state);setData(view);if(state.settings)setCurrency(state.settings.currency);setError(null);
-    } catch {if(current===sequence.current)setError('Could not load the budget. Check your connection and try again.');}
+    } catch {if(current===sequence.current){setSnapshot(null);setData(null);setError('Could not load the budget. Check your connection and try again.');}}
     finally {if(current===sequence.current)setLoading(false);}
   },[api,month]);
   useEffect(()=>{void load();return ()=>{sequence.current++;};},[load]);

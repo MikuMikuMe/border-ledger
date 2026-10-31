@@ -98,4 +98,15 @@ describe('budget view',()=>{
    expect(result.summary.cashMinor).toBeNull();
   }finally{f.close();}
  });
+ it('reserves the greatest cumulative future commitment rather than its final net',async()=>{
+  const f=createSqliteD1Fixture();try {
+   await configureBudget(f.db,owner,'CAD','2026-10');
+   await saveManualCash(f.db,owner,{id:'cash',name:'Wallet',currency:'CAD',amountMinor:10000});
+   await setBudgetAllocation(f.db,owner,{month:'2026-11',category:'Food',assignedMinor:5000});
+   await setBudgetAllocation(f.db,owner,{month:'2026-12',category:'Food',assignedMinor:-5000});
+   expect((await readBudgetView(f.db,owner,'2026-10',{now:()=>new Date('2026-10-20T12:00:00Z')})).summary.unassignedMinor).toBe(5000);
+   await setBudgetAllocation(f.db,owner,{month:'2026-11',category:'Rent',assignedMinor:-5000});
+   expect((await readBudgetView(f.db,owner,'2026-10',{now:()=>new Date('2026-10-20T12:00:00Z')})).summary.unassignedMinor).toBe(10000);
+  }finally{f.close();}
+ });
 });
