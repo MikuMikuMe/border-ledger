@@ -1,5 +1,8 @@
 package com.lofuyu.borderledger
 
+import com.lofuyu.borderledger.budget.HttpWorkerBudgetApi
+import com.lofuyu.borderledger.analysis.HttpWorkerAnalysisApi
+
 import android.content.Context
 import com.lofuyu.borderledger.api.CaptureApi
 import com.lofuyu.borderledger.api.HttpWorkerOwnerLoginClient
@@ -147,6 +150,8 @@ class AppContainer(
         environment = BuildConfig.MOBILE_ENVIRONMENT,
         deviceId = deviceId,
     )
+    val analysisRepository = HttpWorkerAnalysisApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
+    val budgetRepository = HttpWorkerBudgetApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
     val recurringRepository = RecurringRepository(
         HttpWorkerRecurringApi(
             origin = BuildConfig.MOBILE_API_ORIGIN,
@@ -238,6 +243,3 @@ internal fun createCaptureNotificationListenerRuntime(
     intake = intake,
     uploadScheduler = uploadScheduler,
 )
-
-
-

@@ -13,6 +13,7 @@ async function jobFixture(){
 }
 function providerFetch(){return vi.spyOn(globalThis,'fetch').mockImplementation(async(input,init)=>{
  const request=new Request(input,init);expect(request.headers.get('authorization')).toBe('Bearer test-access');expect(request.headers.has('x-api-key')).toBe(false);
+ if(new URL(request.url).pathname.endsWith('/balance'))return Response.json({balance:{amount:42.50,currency:'CAD'}});
  if(new URL(request.url).pathname.endsWith('/accounts'))return Response.json({accounts:[{id:1,connection_id:9,name:'Bank',institution_name:'Bank',institution_logo:null,provider:'test',currency:'CAD',status:'ACTIVE'}],total:1});
  return Response.json({transactions:[{id:'same-tx',accountId:1,amount:-1,currency:'CAD',date:'2026-10-24',merchant:'Cafe',description:'purchase',isPending:false}],total:1});
 });}
@@ -21,7 +22,8 @@ async function deliver(f:Awaited<ReturnType<typeof jobFixture>>,body:unknown){
 }
 it('executes a bound Platform job using its own Bearer and never an owner Personal key',async()=>{
  const f=await jobFixture();try{
-  const fetcher=providerFetch();expect(await deliver(f,f.body)).toEqual({acked:1,retried:0});expect(fetcher).toHaveBeenCalledTimes(2);
+  const fetcher=providerFetch();expect(await deliver(f,f.body)).toEqual({acked:1,retried:0});expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(await f.db.prepare("SELECT amount_minor FROM lunchflow_account_balances WHERE ledger_id='second-ledger'").first()).toEqual({amount_minor:4250});
   expect(await f.db.prepare("SELECT COUNT(*) n FROM transactions WHERE ledger_id='second-ledger' AND source='lunchflow'").first()).toEqual({n:1});
  }finally{f.close();}
 });

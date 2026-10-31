@@ -1,3 +1,6 @@
+import type {AiEgressBinding} from './ai-egress';
+import { handleAiApi } from './ai-http';
+import { handleBudgetApi } from './budget-http';
 import { handlePlanApi } from './recurring-plans-http';
 import { NATIVE_PROTOCOL } from './client-identity';
 import { bindWebResponse, matchesExpectedWebSession, webIdentityHeaders } from './client-identity';
@@ -79,6 +82,10 @@ interface Env {
   PLAID_CLIENT_ID?: string;
   PLAID_SECRET?: string;
   PLAID_ENV?: string;
+  AI_CREDENTIAL_ENCRYPTION_KEY?: string;
+  AI_ALLOWED_ENDPOINT_HOSTS?: string;
+  AI_EGRESS?: AiEgressBinding;
+  AI_EGRESS_AUTH_KEY?: string;
   PLAID_ENCRYPTION_KEY?: string;
   PLAID_CLIENT_USER_ID?: string;
   PLAID_ANDROID_PACKAGE_NAME?: string;
@@ -1031,6 +1038,8 @@ async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, 
       () => handleLunchFlowRequest(request, env, context),
       () => handleAccountRoutes(request, env, url, context),
       () => handleReportRoutes(request, env, url, context),
+      () => handleBudgetApi(request, env.DB, context, '/api/budget'),
+      () => handleAiApi(request, {db:env.DB,context,root:'/api/analysis',env:{secret:env.AI_CREDENTIAL_ENCRYPTION_KEY??'',origin:env.LEDGER_APP_ORIGIN??'',allowedHosts:env.AI_ALLOWED_ENDPOINT_HOSTS,egress:env.AI_EGRESS,egressSecret:env.AI_EGRESS_AUTH_KEY}}),
       () => handlePlanApi(request, env.DB, context, '/api/recurring-plans'),
       () => handleRecurringRoutes(request, env, url, context),
       () => handleImportAndPlaidRoutes(request, env, url, context),

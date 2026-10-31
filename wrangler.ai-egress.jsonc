@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "border-ledger-ai-egress",
+  "account_id": "a0af41818e1b715f66046b0d7870ce70",
+  "main": "ai-egress/worker.ts",
+  "compatibility_date": "2026-10-12",
+  "workers_dev": false,
+  "vars": {"LEDGER_APP_ORIGIN":"https://pf.lofuyu.com"},
+  "containers": [{"class_name":"AiEgressContainer","image":"./ai-egress/Dockerfile","max_instances":1}],
+  "durable_objects": {"bindings":[{"name":"AI_CONTAINER","class_name":"AiEgressContainer"}]},
+  "migrations": [{"tag":"v1","new_sqlite_classes":["AiEgressContainer"]}]
+}

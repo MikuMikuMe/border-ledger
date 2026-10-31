@@ -1,3 +1,6 @@
+import type {AiEgressBinding} from './ai-egress';
+import { handleAiApi } from './ai-http';
+import { handleBudgetApi } from './budget-http';
 import { handlePlanApi } from './recurring-plans-http';
 import { nativeCompatibilityResponse } from './client-identity';
 import { handleLunchFlowHttp } from './lunchflow-http';
@@ -84,6 +87,10 @@ export interface MobileRouteEnv {
   PLAID_CLIENT_ID?: string;
   PLAID_SECRET?: string;
   PLAID_ENV?: string;
+  AI_CREDENTIAL_ENCRYPTION_KEY?: string;
+  AI_ALLOWED_ENDPOINT_HOSTS?: string;
+  AI_EGRESS?: AiEgressBinding;
+  AI_EGRESS_AUTH_KEY?: string;
   PLAID_ENCRYPTION_KEY?: string;
   PLAID_CLIENT_USER_ID?: string;
   PLAID_WEBHOOK_URL?: string;
@@ -463,6 +470,22 @@ function isAccessApprovalPath(pathname: string) {
   return /^\/api\/mobile-auth\/requests\/[^/]+\/approval$/.test(pathname) || /^\/api\/device-pairings\/[^/]+\/approval$/.test(pathname);
 }
 
+async function handleMobileBudgetRequest(request:Request,env:MobileRouteEnv,config:MobileAuthConfig,url:URL) {
+  const root='/api/mobile/v1/budget';
+  if(url.pathname!==root && !url.pathname.startsWith(`${root}/`)) return null;
+  const scope=request.method==='GET' ? 'ledger:read' : 'preferences:write';
+  const owner=await authenticateOwner(bearer(request),env.DB,config,scope);
+  authorizeMobileRoute(owner,url.pathname,scope);
+  return handleBudgetApi(request,env.DB,owner,root);
+}
+async function handleMobileAiRequest(request:Request,env:MobileRouteEnv,config:MobileAuthConfig,url:URL) {
+  const root='/api/mobile/v1/analysis';
+  if(url.pathname!==root && !url.pathname.startsWith(`${root}/`)) return null;
+  const scope=request.method==='PUT' || request.method==='DELETE' ? 'preferences:write' : 'ledger:read';
+  const owner=await authenticateOwner(bearer(request),env.DB,config,scope);
+  authorizeMobileRoute(owner,url.pathname,scope);
+  return handleAiApi(request,{db:env.DB,context:owner,root,env:{secret:env.AI_CREDENTIAL_ENCRYPTION_KEY??'',origin:env.LEDGER_APP_ORIGIN??'',allowedHosts:env.AI_ALLOWED_ENDPOINT_HOSTS,egress:env.AI_EGRESS,egressSecret:env.AI_EGRESS_AUTH_KEY}});
+}
 async function handleMobilePlanRequest(request: Request, env: MobileRouteEnv, config: MobileAuthConfig, url: URL) {
   const root = '/api/mobile/v1/recurring-plans';
   if (url.pathname !== root && !url.pathname.startsWith(`${root}/`)) return null;
@@ -718,7 +741,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     }
     const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
     if (lunchFlowResponse) return lunchFlowResponse;
-    const connectionResponse = await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
+    const connectionResponse = await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
     if (connectionResponse) return connectionResponse;
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/transactions') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
@@ -819,4 +842,3 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     return errorResponse(error);
   }
 }
-
