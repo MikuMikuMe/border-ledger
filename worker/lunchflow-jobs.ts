@@ -21,7 +21,8 @@ export async function verifiedLunchFlowJob(db:D1Database,body:Record<string,unkn
 export async function runLunchFlowJob(env:LunchFlowServiceEnv,body:Record<string,unknown>) {
  const binding=await verifiedLunchFlowJob(env.DB,body),accounts=parseLunchFlowQueueAccounts(body.accounts);
  if(!binding||!accounts)return;
- await createLunchFlowService(env,binding).sync(accounts);
+ if(typeof body.jobId!=='string'||!/^[0-9a-f-]{36}$/i.test(body.jobId))return;
+ await createLunchFlowService(env,binding).sync(accounts.map(account=>({...account,syncJobId:body.jobId as string})));
 }
 export async function scheduleLunchFlow(env:LunchFlowServiceEnv) {
  const rows=await env.DB.prepare(ACTIVE).all<ActiveConnection>();

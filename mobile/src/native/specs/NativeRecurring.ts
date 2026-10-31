@@ -13,7 +13,15 @@ export type History = {providerTransactionId: string; pendingProviderTransaction
 export type Detail = {stream: Stream; history: History[]; nextCursor: string | null; limit: number; classification: string};
 export type Upcoming = {stream: Stream; nextExpectedAmountMinor: string | null};
 export type Summary = {monthlyByCurrency: Money[]; yearlyByCurrency: Money[]; subscriptionByCurrency: Money[]; actualCostByCurrency: Money[]; upcoming: Upcoming[]; latestPaymentChanges: Stream[]; streamCount: number; coverageWarnings: string[]; checkedAt: string | null; sourceUpdatedAt: string | null; lastError: string | null; state: string};
+export type Plan = {id:string;accountId:string;currency:string;merchant:string;direction:string;amountMinor:string;frequency:string;startDate:string;endDate:string|null;enabled:boolean;revision:number};
+export type PlanCandidate = {id:string;date:string;merchant:string;amountMinor:string;currency:string;status:string};
+export type PlanOccurrence = {planId:string;date:string;status:string;candidateIds:string[];candidateCount:number;candidateDetails:PlanCandidate[]};
+export type PlanDraft = {accountId:string;currency:string;merchant:string;direction:string;amountMinor:string;frequency:string;startDate:string;endDate:string|null;enabled:boolean};
+export type SavePlan = {operationId:string;id:string|null;expectedRevision:number;plan:PlanDraft};
 export interface Spec extends TurboModule {
+  readPlans(): Promise<Plan[]>;
+  readPlanOccurrences(query: SummaryQuery): Promise<PlanOccurrence[]>;
+  startSavePlan(request: SavePlan): Promise<Operation>;
   readPage(query: Query): Promise<Page>;
   readSummary(query: SummaryQuery): Promise<Summary>;
   readDetail(query: DetailQuery): Promise<Detail>;

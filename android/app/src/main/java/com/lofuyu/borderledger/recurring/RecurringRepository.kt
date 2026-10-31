@@ -30,6 +30,10 @@ interface OwnerRecurringApi {
     suspend fun readSummary(query: RecurringSummaryQuery): RecurringSummaryDto
     suspend fun readDetail(id: String, cursor: String? = null, limit: Int = 50): RecurringDetailDto
     suspend fun classify(id: String, expectedRevision: Int, classification: String): RecurringClassificationAck
+    suspend fun readPlans(): List<RecurringPlanDto> = throw UnsupportedOperationException()
+    suspend fun readOccurrences(from: String, to: String): List<PlanOccurrenceDto> = throw UnsupportedOperationException()
+    suspend fun createPlan(operationId: String, input: RecurringPlanInput): RecurringPlanDto = throw UnsupportedOperationException()
+    suspend fun updatePlan(id: String, revision: Int, input: RecurringPlanInput): RecurringPlanDto = throw UnsupportedOperationException()
 }
 
 class RecurringRepository(private val api: OwnerRecurringApi) {
@@ -37,6 +41,10 @@ class RecurringRepository(private val api: OwnerRecurringApi) {
     suspend fun readSummary(query: RecurringSummaryQuery): RecurringSummaryDto = api.readSummary(query)
     suspend fun readDetail(id: String, cursor: String? = null, limit: Int = 50): RecurringDetailDto = api.readDetail(id, cursor, limit)
     suspend fun classify(id: String, expectedRevision: Int, classification: String): RecurringClassificationAck = api.classify(id, expectedRevision, classification)
+    suspend fun readPlans(): List<RecurringPlanDto> = api.readPlans()
+    suspend fun readOccurrences(from: String, to: String): List<PlanOccurrenceDto> = api.readOccurrences(from, to)
+    suspend fun createPlan(operationId: String, input: RecurringPlanInput): RecurringPlanDto = api.createPlan(operationId, input)
+    suspend fun updatePlan(id: String, revision: Int, input: RecurringPlanInput): RecurringPlanDto = api.updatePlan(id, revision, input)
 }
 
 data class RecurringHttpResponse(val status: Int, val body: ByteArray)
@@ -86,6 +94,23 @@ class HttpWorkerRecurringApi(
             ),
         )
         return RecurringJson.decodeClassificationAck(response)
+    }
+
+    override suspend fun readPlans(): List<RecurringPlanDto> = executeJson("GET", "/api/mobile/v1/recurring-plans").let(RecurringPlanJson::decodePlans)
+
+    override suspend fun readOccurrences(from: String, to: String): List<PlanOccurrenceDto> =
+        executeJson("GET", path("/api/mobile/v1/recurring-plans/occurrences", mapOf("from" to from, "to" to to))).let(RecurringPlanJson::decodeOccurrences)
+
+    override suspend fun createPlan(operationId: String, input: RecurringPlanInput): RecurringPlanDto =
+        planWrite("POST", "/api/mobile/v1/recurring-plans", JSONObject().put("operationId", operationId).put("plan", RecurringPlanJson.body(input)))
+
+    override suspend fun updatePlan(id: String, revision: Int, input: RecurringPlanInput): RecurringPlanDto =
+        planWrite("PATCH", "/api/mobile/v1/recurring-plans/${encode(id)}", JSONObject().put("expectedRevision", revision).put("plan", RecurringPlanJson.body(input)))
+
+    private suspend fun planWrite(method: String, path: String, body: JSONObject): RecurringPlanDto {
+        val request = MobileRequest(method, "$origin$path", headers = mapOf("Accept" to "application/json", "Content-Type" to "application/json; charset=utf-8"), body = body.toString().toByteArray(StandardCharsets.UTF_8))
+        val response = transport.execute(ownerInterceptor.intercept(request))
+        return planWriteResponse(response.status, response.body)
     }
 
     private suspend fun executeJson(method: String, path: String): ByteArray = execute(

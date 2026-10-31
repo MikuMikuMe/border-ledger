@@ -277,6 +277,26 @@ class RecurringModule(context: ReactApplicationContext, private val r: NativeSer
         super.invalidate()
     }
 
+    override fun readPlans(p: Promise) = s.call(p) {
+        r.container.recurringRepository.readPlans().map(BridgePayloads::recurringPlan)
+    }
+
+    override fun readPlanOccurrences(v: ReadableMap, p: Promise) = s.call(p) {
+        val from = requireNotNull(v.text("startDate")); val to = requireNotNull(v.text("endDate"))
+        r.container.recurringRepository.readOccurrences(from, to).map(BridgePayloads::planOccurrence)
+    }
+
+    override fun startSavePlan(v: ReadableMap, p: Promise) = s.call(p) {
+        val operation = requireNotNull(v.text("operationId")); val id = v.text("id"); val revision = v.integer("expectedRevision")
+        val d = requireNotNull(v.getMap("plan"))
+        val input = RecurringPlanInput(requireNotNull(d.text("accountId")), requireNotNull(d.text("currency")), requireNotNull(d.text("merchant")), requireNotNull(d.text("direction")), requireNotNull(d.text("amountMinor")).toLong(), requireNotNull(d.text("frequency")), requireNotNull(d.text("startDate")), d.text("endDate"), d.getBoolean("enabled"))
+        require(revision >= 0)
+        r.write(WriteRequest(operation, "recurring_plan_save", listOf(id, revision, input).toString()) {
+            val saved = if (id == null) r.container.recurringRepository.createPlan(operation, input) else r.container.recurringRepository.updatePlan(id, revision, input)
+            saved.id
+        })
+    }
+
     override fun readPage(q: ReadableMap, p: Promise) = s.call(p) {
         val limit = q.integer("limit")
         require(limit in 1..100)

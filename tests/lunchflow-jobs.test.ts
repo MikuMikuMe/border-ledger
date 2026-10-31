@@ -38,7 +38,8 @@ it('retries a busy connection and schedules only active connection generations',
   await f.db.prepare("UPDATE lunchflow_connections SET operation_id='busy',operation_kind='refresh',operation_expires_at='2099-01-01' WHERE id=?").bind(f.id).run();
   expect(await deliver(f,f.body)).toEqual({acked:0,retried:1});expect(fetcher).not.toHaveBeenCalled();
   await f.db.prepare('UPDATE lunchflow_connections SET operation_id=NULL,operation_kind=NULL,operation_expires_at=NULL WHERE id=?').bind(f.id).run();
-  f.messages.length=0;await scheduleLunchFlow(f.env);expect(f.messages).toEqual([f.body]);
+  f.messages.length=0;await scheduleLunchFlow(f.env);expect(f.messages).toEqual([{...f.body,jobId:expect.any(String)}]);
+  expect((f.messages[0] as {jobId:string}).jobId).not.toBe(f.body.jobId);
   await f.connections.disconnect(SECOND_LEDGER,f.id,(await f.connections.status(SECOND_LEDGER)).generation!);f.messages.length=0;await scheduleLunchFlow(f.env);expect(f.messages).toEqual([]);
  }finally{f.close();}
 });

@@ -978,7 +978,7 @@ function WorkspaceApp() {
               onNavigate={setActiveView}
             />
           ) : null}
-          {activeView === 'recurring' ? <RecurringView today={monthWindow.end} startDate={monthWindow.start} endDate={monthWindow.end} /> : null}
+          {activeView === 'recurring' ? <RecurringView today={monthWindow.end} startDate={monthWindow.start} endDate={monthWindow.end} accounts={accounts} /> : null}
           {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} /> : null}
           {activeView === 'imports' ? (
             <ImportsView

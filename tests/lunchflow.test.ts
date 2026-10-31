@@ -2,6 +2,7 @@ import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import type { D1Database, D1Statement } from '../worker/db-types';
+import { recordLunchFlowError } from '../worker/lunchflow-store';
 import {
   createLunchFlowProvider,
   LunchFlowError,
@@ -331,12 +332,92 @@ describe('Lunch Flow selection and sync', () => {
     expect(first).toEqual({ selected: 1, queued: true });
     expect(replay).toEqual(first);
     expect(queued).toEqual([
-      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
-      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', jobId:expect.any(String), ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', jobId:expect.any(String), ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
     ]);
     await expect(fixture.db.prepare('SELECT account_id, enabled, revision FROM lunchflow_accounts').all()).resolves.toMatchObject({ results: [{ enabled: 1, revision: 1 }] });
   });
 
+  it('records pending jobs and supersedes an older queued sync for the same account', async () => {
+    const provider: LunchFlowProvider = { async listAccounts() { return [providerAccount()]; }, async listTransactions() { return [providerTransaction()]; } };
+    const { fixture, service, queued } = await setup(provider);
+    await service.selectAccounts({ accounts: [{ providerAccountId: 'account-synthetic-1', currency: 'CAD', kind: 'chequing' }] });
+    await service.requestSync('owner-synthetic');
+    const messages = queued as Array<{jobId:string}>;
+    expect(messages).toHaveLength(2);
+    expect(messages[0].jobId).not.toBe(messages[1].jobId);
+    const rows=await fixture.db.prepare('SELECT job_id,state FROM recurring_lunchflow_sync_jobs ORDER BY rowid').all<{job_id:string;state:string}>();
+    expect(rows.results).toEqual([{job_id:messages[0].jobId,state:'superseded'},{job_id:messages[1].jobId,state:'pending'}]);
+  });
+  it('does not enqueue when connection scope changes before job insertion', async () => {
+    const provider: LunchFlowProvider = { async listAccounts() { return [providerAccount()]; }, async listTransactions() { return [providerTransaction()]; } };
+    const { fixture, service, queued } = await setup(provider);
+    await service.selectAccounts({ accounts: [{ providerAccountId:'account-synthetic-1', currency:'CAD', kind:'chequing' }] });
+    const batch = fixture.db.batch.bind(fixture.db);
+    vi.spyOn(fixture.db, 'batch').mockImplementationOnce(async statements => {
+      await fixture.db.prepare("UPDATE lunchflow_connections SET operation_id='busy',operation_kind='refresh',operation_expires_at='2099-01-01' WHERE id='lunchflow-personal-owner'").run();
+      return batch(statements);
+    });
+    await expect(service.requestSync('owner-synthetic')).rejects.toMatchObject({retryable:true});
+    expect(queued).toHaveLength(1);
+  });
+  it('closes partial markers when an account mapping changes before enqueue', async () => {
+    const provider: LunchFlowProvider = { async listAccounts() { return [providerAccount(),providerAccount({id:'second'})]; }, async listTransactions() { return [providerTransaction()]; } };
+    const { fixture, service, queued } = await setup(provider);
+    await service.selectAccounts({ accounts: [{providerAccountId:'account-synthetic-1',currency:'CAD',kind:'chequing'},{providerAccountId:'second',currency:'CAD',kind:'chequing'}] });
+    const firstJob = (queued[0] as {jobId:string}).jobId;
+    const batch = fixture.db.batch.bind(fixture.db);
+    vi.spyOn(fixture.db, 'batch').mockImplementationOnce(async statements => {
+      await fixture.db.prepare("UPDATE lunchflow_accounts SET enabled=0 WHERE provider_account_id='second'").run();
+      return batch(statements);
+    });
+    await expect(service.requestSync('owner-synthetic')).rejects.toMatchObject({retryable:true});
+    expect(queued).toHaveLength(1);
+    const rows = await fixture.db.prepare('SELECT state FROM recurring_lunchflow_sync_jobs WHERE job_id<>?').bind(firstJob).all<{state:string}>();
+    expect(rows.results).toEqual([{state:'superseded'}]);
+  });
+  it('fences superseded and duplicate queued snapshots', async () => {
+    const provider: LunchFlowProvider = { async listAccounts() { return [providerAccount()]; }, async listTransactions() { return [providerTransaction()]; } };
+    const { fixture, service, queued } = await setup(provider);
+    await service.selectAccounts({ accounts: [{ providerAccountId: 'account-synthetic-1', currency: 'CAD', kind: 'chequing' }] });
+    await service.requestSync('owner-synthetic');
+    const messages = queued as Array<{jobId:string}>;
+    const revision={providerAccountId:'account-synthetic-1',revision:1};
+    await processLunchFlowSync(service,[{...revision,syncJobId:messages[0].jobId}]);
+    expect((await fixture.db.prepare('SELECT count(*) AS count FROM transactions').first<{count:number}>())?.count).toBe(0);
+    await processLunchFlowSync(service,[{...revision,syncJobId:messages[1].jobId}]);
+    expect((await fixture.db.prepare('SELECT count(*) AS count FROM transactions').first<{count:number}>())?.count).toBe(1);
+    await processLunchFlowSync(service,[{...revision,syncJobId:messages[1].jobId}]);
+    const jobs=await fixture.db.prepare('SELECT state FROM recurring_lunchflow_sync_jobs ORDER BY rowid').all<{state:string}>();
+    expect(jobs.results.map(row=>row.state)).toEqual(['superseded','completed']);
+    await service.requestSync('owner-synthetic');
+    const states=await fixture.db.prepare('SELECT state FROM recurring_lunchflow_sync_jobs ORDER BY rowid').all<{state:string}>();
+    expect(states.results.map(row=>row.state)).toEqual(['superseded','superseded','pending']);
+  });
+  it('terminates a permanently failed job while retaining the provider error', async () => {
+    let changed = false;
+    const provider: LunchFlowProvider = {
+      async listAccounts() { return changed ? [] : [providerAccount()]; },
+      async listTransactions() { return [providerTransaction()]; },
+    };
+    const { fixture, service, queued } = await setup(provider);
+    await service.selectAccounts({ accounts: [{ providerAccountId: 'account-synthetic-1', currency: 'CAD', kind: 'chequing' }] });
+    changed = true;
+    const job = queued[0] as {jobId:string};
+    await expect(processLunchFlowSync(service,[{providerAccountId:'account-synthetic-1',revision:1,syncJobId:job.jobId}])).rejects.toMatchObject({retryable:false});
+    expect(await fixture.db.prepare('SELECT state FROM recurring_lunchflow_sync_jobs WHERE job_id=?').bind(job.jobId).first()).toEqual({state:'superseded'});
+    expect(await fixture.db.prepare('SELECT last_error FROM lunchflow_accounts WHERE provider_account_id=?').bind('account-synthetic-1').first()).toMatchObject({last_error:expect.stringContaining('bank connection changed')});
+  });
+  it('closes a terminal job after its connection becomes inactive without altering account errors', async () => {
+    const provider: LunchFlowProvider = { async listAccounts() { return [providerAccount()]; }, async listTransactions() { return [providerTransaction()]; } };
+    const { fixture, service, queued } = await setup(provider);
+    await service.selectAccounts({ accounts: [{ providerAccountId:'account-synthetic-1', currency:'CAD', kind:'chequing' }] });
+    const job = queued[0] as {jobId:string};
+    await fixture.db.prepare("UPDATE lunchflow_connections SET lifecycle='reconnect_required' WHERE id='lunchflow-personal-owner'").run();
+    await recordLunchFlowError(fixture.db, OWNER_LEDGER, {providerAccountId:'account-synthetic-1',revision:1,syncJobId:job.jobId}, 'Connection changed', '2026-10-22T12:00:00.000Z', true);
+    expect(await fixture.db.prepare('SELECT state FROM recurring_lunchflow_sync_jobs WHERE job_id=?').bind(job.jobId).first()).toEqual({state:'superseded'});
+    expect(await fixture.db.prepare('SELECT last_error FROM lunchflow_accounts WHERE provider_account_id=?').bind('account-synthetic-1').first()).toEqual({last_error:null});
+  });
   it('rejects reuse of an idempotency key with a different selection body', async () => {
     const provider: LunchFlowProvider = {
       async listAccounts() { return [providerAccount()]; },
@@ -462,7 +543,7 @@ describe('Lunch Flow selection and sync', () => {
     fail = false;
     await expect(service.selectAccounts(input)).resolves.toEqual({ selected: 1, queued: true });
     expect(accountReads).toBe(1);
-    expect(queued).toEqual([{ type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] }]);
+    expect(queued).toEqual([{ type: 'lunchflow-sync', jobId:expect.any(String), ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] }]);
     await expect(fixture.db.prepare('SELECT revision FROM lunchflow_accounts').first<{ revision: number }>()).resolves.toMatchObject({ revision: 1 });
   });
 
@@ -524,8 +605,8 @@ describe('Lunch Flow selection and sync', () => {
     await service.selectAccounts({ accounts: [{ providerAccountId: 'account-synthetic-1', currency: 'CAD', kind: 'chequing' }] });
 
     expect(queued).toEqual([
-      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
-      { type: 'lunchflow-sync', ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 3 }] },
+      { type: 'lunchflow-sync', jobId:expect.any(String), ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 1 }] },
+      { type: 'lunchflow-sync', jobId:expect.any(String), ...OWNER_LEDGER, connectionId:'lunchflow-personal-owner',generation:1, accounts: [{ providerAccountId: 'account-synthetic-1', revision: 3 }] },
     ]);
     await processLunchFlowSync(service, [{ providerAccountId: 'account-synthetic-1', revision: 1 }]);
     await expect(fixture.db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE source = 'lunchflow'").first<{ count: number }>()).resolves.toMatchObject({ count: 0 });

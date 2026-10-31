@@ -7,11 +7,14 @@ import type { RecurringClassification, RecurringPage, RecurringStream, Recurring
 import type { Currency } from '../domain/types';
 import { supportedCurrencyCodes } from '../domain/currencies';
 import RecurringDetails from './RecurringDetails';
+import { RecurringPlans } from './RecurringPlans';
+import type { Account } from '../domain/types';
 
 interface RecurringViewProps {
   today: string;
   startDate: string;
   endDate: string;
+  accounts: Account[];
 }
 
 type FeedStatus = 'loading' | 'ready' | 'error';
@@ -49,7 +52,7 @@ function SummaryCell({ currency, label, value, tone = 'neutral' }: { currency: C
   return <div className={`recurring-summary-cell ${currency.toLowerCase()} ${tone}`}><span>{currency} · {label}</span><strong>{formatMoney(Math.abs(value), currency, { signDisplay: 'never' })}</strong><small>{tone === 'actual' ? 'linked posted cost' : 'source estimate'}</small></div>;
 }
 
-export function RecurringView({ today, startDate, endDate }: RecurringViewProps) {
+export function RecurringView({ today, startDate, endDate, accounts }: RecurringViewProps) {
   const ledgerApi = useLedgerApi();
   const [page, setPage] = useState<RecurringPage | null>(null);
   const [summary, setSummary] = useState<RecurringSummary | null>(null);
@@ -136,6 +139,7 @@ export function RecurringView({ today, startDate, endDate }: RecurringViewProps)
 
   return <>
     <div className="page-intro recurring-page-intro"><div><p className="eyebrow">THE RECURRING LEDGER</p><h1>Make the repeatable visible.</h1><p className="intro-copy">Provider-detected streams, source currencies kept apart, and actual posted cost grounded in the ledger.</p></div><button type="button" className="outline-button" onClick={load} disabled={status === 'loading'}><RefreshCw size={16} className={status === 'loading' ? 'is-spinning' : undefined} /> Refresh recurring feed</button></div>
+    <RecurringPlans api={ledgerApi} accounts={accounts} today={today} />
     {status === 'error' ? <section className="panel recurring-state-panel is-error" role="alert"><CircleAlert size={18} /><div><strong>Could not load recurring payments</strong><p>{error}</p></div><button type="button" className="outline-button" onClick={load}>Try again <RefreshCw size={14} /></button></section> : null}
     {status === 'loading' ? <section className="panel recurring-state-panel" role="status" aria-live="polite"><RefreshCw size={18} className="is-spinning" /><div><strong>Reading your private recurring feed</strong><p>Loading the latest stored projection. No provider call is made from this screen.</p></div></section> : null}
     {status === 'ready' && notice ? <section className={`panel recurring-state-panel ${state === 'error' || state === 'stale' ? 'is-warning' : ''}`} role={state === 'error' ? 'alert' : 'status'}><span className="recurring-state-icon">{state === 'waiting' ? <Clock3 size={18} /> : state === 'unavailable' ? <ShieldCheck size={18} /> : state === 'error' || state === 'stale' ? <CircleAlert size={18} /> : <CircleCheck size={18} />}</span><div><strong>{notice.title}</strong><p>{notice.body}</p>{page?.lastError ? <small>{page.lastError}</small> : null}</div>{state === 'waiting' || state === 'stale' || state === 'error' ? <button type="button" className="quiet-button" onClick={load}>Refresh <RefreshCw size={14} /></button> : null}</section> : null}

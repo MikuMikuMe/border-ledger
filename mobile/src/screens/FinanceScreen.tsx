@@ -8,6 +8,7 @@ import NativeSession from '../native/specs/NativeSession';
 import {FinanceController,type FinancePorts} from '../features/finance/FinanceController';
 import {Action,ActivityView,OverviewView,RecurringView} from '../features/finance/FinanceViews';
 import {recurringCurrencies} from '../features/finance/model';
+import {PlanPanel} from '../features/finance/PlanPanel';
 import type {Transaction,Stream} from '../features/finance/contracts';
 
 const ports:FinancePorts={
@@ -79,9 +80,9 @@ function classifyRecurringStream(controller:FinanceControllerInstance,stream:Str
 }
 
 function RecurringPanel({dark,controller,stream,setStream,onOpenRecurring}:{dark:boolean;controller:FinanceControllerInstance;stream:Stream|null;setStream(value:Stream|null):void;onOpenRecurring?(id:string):void}) {
-  return <RecurringView dark={dark} state={controller.recurring.current()} filters={controller.recurringFilters} currencies={recurringCurrencies} selected={stream} mutation={controller.mutation.current()}
+  return <> <PlanPanel dark={dark} accounts={controller.snapshot.current().data?.accounts??[]} timeZone={controller.snapshot.current().data?.timeZone??'America/Toronto'} gate={controller.mutation} operationId={operationId}/> <RecurringView dark={dark} state={controller.recurring.current()} filters={controller.recurringFilters} currencies={recurringCurrencies} selected={stream} mutation={controller.mutation.current()}
     onRetry={()=>{void controller.loadRecurring();}} onFilter={filters=>{void controller.filterRecurring(filters);}} onOpen={id=>openRecurringStream(controller,id,onOpenRecurring,setStream)}
-    onLoadMore={()=>{void controller.loadRecurring(true);}} onClose={()=>setStream(null)} onClassify={classification=>classifyRecurringStream(controller,stream,classification,setStream)}/>;
+    onLoadMore={()=>{void controller.loadRecurring(true);}} onClose={()=>setStream(null)} onClassify={classification=>classifyRecurringStream(controller,stream,classification,setStream)}/></>;
 }
 
 function FinanceDestination({dark,destination,controller,currencies,selected,stream,draft,setSelected,setStream,setDraft,onOpenRecurring}:{dark:boolean;destination:FinanceDestination;controller:FinanceControllerInstance;currencies:string[];selected:Transaction|null;stream:Stream|null;draft:{category:string;note:string};setSelected(value:Transaction|null):void;setStream(value:Stream|null):void;setDraft(value:{category:string;note:string}):void;onOpenRecurring?(id:string):void}) {
