@@ -374,8 +374,19 @@ export function parseTransactions(payload: unknown, providerAccountId: string) {
   return transactions.map((value) => parseTransaction(value, providerAccountId, ids));
 }
 
+export function parseLunchFlowBalance(payload: unknown) {
+  const object = objectValue(payload, {message:'Lunch Flow returned an invalid balance response.'});
+  const balance = objectValue(object.balance, {message:'Lunch Flow returned an invalid balance.'});
+  const {currency,metadata} = mappedCurrency(balance.currency);
+  return {currency,amountMinor:amountMinorValue(balance.amount,metadata)};
+}
+
 export function createLunchFlowProvider(env: LunchFlowApiEnv, fetcher: typeof fetch = fetch) {
   return {
+    async getBalance(providerAccountId: string) {
+      const id = providerId(providerAccountId, {field:'account ID'});
+      return parseLunchFlowBalance(await providerGet(env, `/accounts/${encodeURIComponent(id)}/balance`, fetcher));
+    },
     async listAccounts() {
       return parseAccounts(await providerGet(env, '/accounts', fetcher));
     },

@@ -45,6 +45,10 @@ internal class BridgeSupport(private val runtime: NativeServiceRuntime) {
     private fun rejectFailure(promise: Promise, error: Exception) {
         val failure = when (error) {
             is com.lofuyu.borderledger.accounts.LunchFlowRequestFailure -> "${error.code}|Lunch Flow changed or is unavailable. Check connection status before choosing the action again."
+            is com.lofuyu.borderledger.analysis.AnalysisFailure -> when(error.code) {
+                "provider_authentication" -> "provider_authentication|The provider rejected the API key. Replace it and try again."
+                else -> "provider_rate_limit|The provider rate limit was reached. Wait and try again."
+            }
             is BridgeFailure -> "${error.code}|Refresh native service state before continuing."
             is IllegalArgumentException -> "invalid_request|The request is not valid."
             is TransportFailure.UpdateRequired -> "update_required|Update Border Ledger and sign in again."

@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cloudflare/containers": "^0.3.7",
+    "ipaddr.js": "^2.3.0",
     "jose": "6.2.13",
     "lucide-react": "1.61.0",
     "react": "19.3.1",

@@ -1,3 +1,4 @@
+import { markLunchFlowBalanceFailed, publishLunchFlowBalance } from './lunchflow-balance-store';
 import { assertConnectionApp,readLunchFlowConnection } from './lunchflow-connection-store';
 import { assertLunchFlowScope, connectionBinding, lunchFlowScopePredicate, resolveLunchFlowScope, type LunchFlowBinding, type LunchFlowScope } from './lunchflow-scope';
 import { createLunchFlowConnections, oauthConfigured, type LunchFlowConnectionEnv } from './lunchflow-connections';
@@ -32,6 +33,7 @@ import {
 export interface LunchFlowProvider {
   listAccounts(): Promise<LunchFlowAccount[]>;
   listTransactions(providerAccountId: string): Promise<LunchFlowTransaction[]>;
+  getBalance?(providerAccountId:string): Promise<{currency:string;amountMinor:number}>;
 }
 
 export interface LunchFlowServiceEnv extends LunchFlowApiEnv, LunchFlowConnectionEnv {
@@ -335,6 +337,16 @@ async function loadSelection(db:D1Database,context: LunchFlowScope, provider: Lu
   return selection;
 }
 
+async function syncPublishedBalance(env: LunchFlowServiceEnv, context: FinancialContext, provider: LunchFlowProvider, sync: {revision:LunchFlowRevision; accountId:string}) {
+  if (!provider.getBalance) return;
+  const identity={providerAccountId:sync.revision.providerAccountId,accountId:sync.accountId,revision:sync.revision.revision,observedAt:now(env)};
+  try {
+    const balance=await provider.getBalance(sync.revision.providerAccountId);
+    if (!await publishLunchFlowBalance(env.DB, context, {...identity,...balance})) await markLunchFlowBalanceFailed(env.DB, context, identity);
+  } catch {
+    await markLunchFlowBalanceFailed(env.DB, context, identity);
+  }
+}
 async function syncRevision(env: LunchFlowServiceEnv, context: FinancialContext, provider: LunchFlowProvider, revision: LunchFlowRevision) {
   const mapping = await readLunchFlowMapping(env.DB, context, revision.providerAccountId);
   if (!isCurrentSyncMapping(mapping, revision)) return null;
@@ -343,7 +355,8 @@ async function syncRevision(env: LunchFlowServiceEnv, context: FinancialContext,
     if(!current || (current.bankConnectionId??null)!==(mapping.providerBankConnectionId??null))throw selectionError('bank_connection_changed','The provider bank connection changed. Contact the operator to verify the existing account mapping.',409);
     const rows = await provider.listTransactions(revision.providerAccountId);
     const mapped = await Promise.all(rows.map((row) => mapLunchFlowTransaction(row, revision.providerAccountId, mapping.accountId)));
-    await publishLunchFlowSnapshot(env.DB, context, { revision: revision, transactions: mapped, syncedAt: now(env) });
+    const published = await publishLunchFlowSnapshot(env.DB, context, { revision: revision, transactions: mapped, syncedAt: now(env) });
+    if (!published.stale) await syncPublishedBalance(env, context, provider, {revision,accountId:mapping.accountId});
     return null;
   } catch (error) {
     const normalized = safeProviderError(error);
@@ -370,11 +383,12 @@ function createBoundLunchFlowService(env: LunchFlowServiceEnv, binding: LunchFlo
     if(context.connection.adapter==='personal')return createLunchFlowProvider(env);
     const access=await createLunchFlowConnections(env).accessToken(context,context.connection.id,context.connection.generation),platform=createLunchFlowPlatform(env);
     await assertLunchFlowScope(env.DB,context);
-    return {listAccounts:()=>platform.listAccounts(access),listTransactions:(id:string)=>platform.listTransactions(access,id)};
+    return {listAccounts:()=>platform.listAccounts(access),listTransactions:(id:string)=>platform.listTransactions(access,id),getBalance:(id:string)=>platform.getBalance(access,id)};
   }
   const provider: LunchFlowProvider = {
     listAccounts: async () => (await activeProvider()).listAccounts(),
     listTransactions: async id => (await activeProvider()).listTransactions(id),
+    ...(!suppliedProvider || suppliedProvider.getBalance ? { getBalance: async (id:string) => { const source=await activeProvider(); if (!source.getBalance) throw new Error('Balance unavailable'); return source.getBalance(id); } } : {}),
   };
 
   async function readAccounts(): Promise<LunchFlowAccountsResponse> {

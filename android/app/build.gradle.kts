@@ -138,7 +138,7 @@ android {
     }
     buildTypes {
         getByName("debug") {
-            applicationIdSuffix = ".probe"
+            applicationIdSuffix = providers.gradleProperty("borderLedgerDebugApplicationIdSuffix").orElse(".probe").get()
             val localDebugKeystore = providers.gradleProperty("borderLedgerDebugKeystore").orNull
             if (localDebugKeystore != null) {
                 signingConfig = signingConfigs.create("localDebug") {

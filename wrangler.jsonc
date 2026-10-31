@@ -5,6 +5,8 @@
   "account_id": "a0af41818e1b715f66046b0d7870ce70",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-12",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "services": [{"binding":"AI_EGRESS","service":"border-ledger-ai-egress"}],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -54,6 +56,7 @@
   },
   "env": {
     "production": {
+      "services": [{"binding":"AI_EGRESS","service":"border-ledger-ai-egress"}],
       "triggers": {
         "crons": [
           "15 6 * * *"

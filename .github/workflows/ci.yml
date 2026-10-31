@@ -26,3 +26,5 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Build the private AI egress image
+        run: docker build -f ai-egress/Dockerfile -t border-ledger-ai-egress:ci .
