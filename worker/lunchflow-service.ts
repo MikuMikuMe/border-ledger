@@ -1,5 +1,5 @@
 import { assertConnectionApp,readLunchFlowConnection } from './lunchflow-connection-store';
-import { assertLunchFlowScope, connectionBinding, resolveLunchFlowScope, type LunchFlowBinding, type LunchFlowScope } from './lunchflow-scope';
+import { assertLunchFlowScope, connectionBinding, lunchFlowScopePredicate, resolveLunchFlowScope, type LunchFlowBinding, type LunchFlowScope } from './lunchflow-scope';
 import { createLunchFlowConnections, oauthConfigured, type LunchFlowConnectionEnv } from './lunchflow-connections';
 import { createLunchFlowPlatform } from './lunchflow-platform';
 import type { LedgerContext } from './tenant-context';
@@ -185,8 +185,8 @@ function cappedAccounts<T>(accounts: readonly T[]) {
   return archivedAccountCount > 0 ? { accounts: visible, archivedAccountCount } : { accounts: visible };
 }
 
-function queueMessage(context: LedgerContext, revisions: readonly LunchFlowRevision[]) {
-  return { type: 'lunchflow-sync' as const, connectionId:connectionBinding(context).id,generation:connectionBinding(context).generation,userId: context.userId, ledgerId: context.ledgerId, accounts: revisions.map(({ providerAccountId, revision }) => ({ providerAccountId, revision })) };
+function queueMessage(context: LedgerContext, revisions: readonly LunchFlowRevision[], jobId: string) {
+  return { type: 'lunchflow-sync' as const, jobId, connectionId:connectionBinding(context).id,generation:connectionBinding(context).generation,userId: context.userId, ledgerId: context.ledgerId, accounts: revisions.map(({ providerAccountId, revision }) => ({ providerAccountId, revision })) };
 }
 
 async function mapWithConcurrency<T, R>(values: readonly T[], limit: number, mapper: (value: T) => Promise<R>) {
@@ -204,6 +204,22 @@ async function mapWithConcurrency<T, R>(values: readonly T[], limit: number, map
   return results;
 }
 
+async function trackQueuedSync(env: LunchFlowServiceEnv, context: FinancialContext, revisions: readonly LunchFlowRevision[], jobId: string) {
+  const binding = connectionBinding(context), fence = lunchFlowScopePredicate(context);
+  const statements = revisions.flatMap(item => [
+    env.DB.prepare(`UPDATE recurring_lunchflow_sync_jobs SET state='superseded' WHERE ledger_id=? AND connection_id=? AND connection_generation=? AND provider_account_id=? AND account_revision=? AND state IN ('pending','completed') AND ${fence.sql}`).bind(context.ledgerId,binding.id,binding.generation,item.providerAccountId,item.revision,...fence.bindings),
+    env.DB.prepare(`INSERT INTO recurring_lunchflow_sync_jobs(job_id,ledger_id,connection_id,connection_generation,provider_account_id,account_revision,state)
+      SELECT ?,?,?,?,?,?,'pending' WHERE ${fence.sql} AND EXISTS (SELECT 1 FROM lunchflow_accounts a WHERE a.ledger_id=? AND a.connection_id=? AND a.provider_account_id=? AND a.revision=? AND a.enabled=1)`)
+      .bind(jobId,context.ledgerId,binding.id,binding.generation,item.providerAccountId,item.revision,...fence.bindings,context.ledgerId,binding.id,item.providerAccountId,item.revision),
+  ]);
+  const results = await env.DB.batch(statements);
+  if (revisions.some((_, index) => results[index * 2 + 1]?.meta?.changes !== 1)) {
+    await env.DB.prepare(`UPDATE recurring_lunchflow_sync_jobs SET state='superseded' WHERE job_id=? AND ledger_id=? AND connection_id=? AND connection_generation=? AND state='pending'`)
+      .bind(jobId,context.ledgerId,binding.id,binding.generation).run();
+    throw new LunchFlowServiceError('sync_fenced', 'The Lunch Flow connection changed before sync was queued. Try again.', 503, true);
+  }
+}
+
 async function queueSync(env: LunchFlowServiceEnv, context: FinancialContext, revisions: readonly LunchFlowRevision[]) {
   await assertLunchFlowScope(env.DB, context);
   if (revisions.length === 0) return false;
@@ -216,8 +232,10 @@ async function queueSync(env: LunchFlowServiceEnv, context: FinancialContext, re
     );
   }
   if (!env.SYNC_QUEUE) throw new LunchFlowServiceError('queue_unavailable', 'The Lunch Flow sync could not be queued.', 503, true);
+  const jobId = crypto.randomUUID();
+  await trackQueuedSync(env, context, revisions, jobId);
   try {
-    await env.SYNC_QUEUE.send(queueMessage(context, revisions));
+    await env.SYNC_QUEUE.send(queueMessage(context, revisions, jobId));
     return true;
   } catch {
     throw new LunchFlowServiceError('queue_unavailable', 'The Lunch Flow sync could not be queued.', 503, true);
@@ -329,7 +347,7 @@ async function syncRevision(env: LunchFlowServiceEnv, context: FinancialContext,
     return null;
   } catch (error) {
     const normalized = safeProviderError(error);
-    await recordLunchFlowError(env.DB, context, revision, normalized.message);
+    await recordLunchFlowError(env.DB, context, revision, normalized.message, now(env), !normalized.retryable);
     return normalized;
   }
 }

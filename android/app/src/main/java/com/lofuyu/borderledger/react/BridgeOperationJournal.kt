@@ -292,7 +292,8 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
     private fun failureStatus(error: Exception): JournalStatus = when(error) {
         is BridgeLocalFailure -> JournalStatuses.FailedLocal
         is com.lofuyu.borderledger.accounts.LunchFlowRequestFailure -> JournalStatuses.Rejected
-        is com.lofuyu.borderledger.accounts.AccountRequestRejected -> JournalStatuses.Rejected
+        is com.lofuyu.borderledger.accounts.AccountRequestRejected,
+        is com.lofuyu.borderledger.recurring.RecurringPlanRejected -> JournalStatuses.Rejected
         is com.lofuyu.borderledger.recurring.RecurringRevisionConflict,
         is com.lofuyu.borderledger.review.ReviewRevisionConflict,
         is com.lofuyu.borderledger.ui.accounts.devices.DeviceRevisionConflict,

@@ -8,6 +8,7 @@ export const OWNER_SCOPES = [
   'imports:write',
   'exports:read',
   'recurring:classify',
+  'recurring:manage',
   'connections:manage',
   'preferences:write',
   'devices:manage',

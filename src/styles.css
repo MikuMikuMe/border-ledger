@@ -393,3 +393,18 @@ h2 { margin-bottom: 0; font: 600 18px/1.15 'IBM Plex Sans', sans-serif; letter-s
 .lunchflow-connection-controls > p { max-width: 68ch; line-height: 1.5; margin-block: 0 16px; }
 .lunchflow-connection-controls .lunchflow-actions button { min-height: 44px; font-size: 14px; }
 .lunchflow-connection-controls .lunchflow-state p { margin-block: 0 16px; line-height: 1.5; }
+
+.recurring-plan-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; padding: 18px 25px; }
+.recurring-plan-form label { display: grid; gap: 6px; font-size: 0.875rem; }
+.recurring-plan-form input, .recurring-plan-form select { min-height: 44px; min-width: 0; padding: 8px; border: 1px solid #89988f; border-radius: 6px; background: #fff; color: #263a30; }
+.recurring-plan-form > div { align-self: end; }
+.recurring-plan-row { display: flex; justify-content: space-between; gap: 16px; padding: 16px 25px; border-top: 1px solid #e8e3d9; }
+.recurring-plan-row p { margin: 5px 0; }
+.recurring-plan-row > div:last-child { display: flex; align-items: flex-start; flex-wrap: wrap; }
+@media (max-width: 760px) { .recurring-plan-row { flex-direction: column; padding-inline: 16px; } .recurring-plan-form { padding-inline: 16px; } }
+.recurring-plan-heading { padding: 20px 25px; gap: 18px; flex-wrap: wrap; }
+.recurring-plan-heading > div { min-width: 0; flex: 1 1 260px; }
+.recurring-plan-heading h2 { margin: 0; }
+.recurring-plan-heading p { margin: 6px 0 0; line-height: 1.5; }
+.recurring-plan-heading .outline-button { min-height: 44px; white-space: nowrap; }
+.recurring-plan-row .quiet-button { min-height: 44px; }

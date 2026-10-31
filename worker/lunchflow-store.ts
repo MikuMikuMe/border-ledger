@@ -35,6 +35,7 @@ export interface LunchFlowSelectionRecord {
 export interface LunchFlowRevision {
   providerAccountId: string;
   revision: number;
+  syncJobId?: string;
 }
 
 export interface LunchFlowOperationRecord {
@@ -403,12 +404,19 @@ export async function lunchFlowRequestDigest(value: unknown) {
   return sha256(JSON.stringify(value));
 }
 
-export async function recordLunchFlowError(db: D1Database, ledger: LedgerContext, revision: LunchFlowRevision, message: string, updatedAt = new Date().toISOString()) {
+export async function recordLunchFlowError(db: D1Database, ledger: LedgerContext, revision: LunchFlowRevision, message: string, updatedAt = new Date().toISOString(), terminal = false) {
   const fence=lunchFlowScopePredicate(ledger);
   const bounded = message.trim().slice(0, 512) || 'Lunch Flow sync failed.';
-  await db.prepare(`UPDATE lunchflow_accounts SET last_error = ?, updated_at = ?
-    WHERE ledger_id = ? AND connection_id = ? AND provider_account_id = ? AND enabled = 1 AND revision = ? AND ${fence.sql}`)
-    .bind(bounded, updatedAt, ledger.ledgerId,connectionBinding(ledger).id, revision.providerAccountId, revision.revision,...fence.bindings).run();
+  const jobFence = revision.syncJobId ? "AND EXISTS (SELECT 1 FROM recurring_lunchflow_sync_jobs j WHERE j.job_id=? AND j.ledger_id=lunchflow_accounts.ledger_id AND j.connection_id=lunchflow_accounts.connection_id AND j.provider_account_id=lunchflow_accounts.provider_account_id AND j.account_revision=lunchflow_accounts.revision AND j.state='pending')" : '';
+  const jobBindings = revision.syncJobId ? [revision.syncJobId] : [];
+  const accountError = db.prepare(`UPDATE lunchflow_accounts SET last_error = ?, updated_at = ?
+    WHERE ledger_id = ? AND connection_id = ? AND provider_account_id = ? AND enabled = 1 AND revision = ? ${jobFence} AND ${fence.sql}`)
+    .bind(bounded, updatedAt, ledger.ledgerId,connectionBinding(ledger).id, revision.providerAccountId, revision.revision,...jobBindings,...fence.bindings);
+  if (!terminal || !revision.syncJobId) { await accountError.run(); return; }
+  const finish = db.prepare(`UPDATE recurring_lunchflow_sync_jobs SET state='superseded'
+    WHERE job_id=? AND ledger_id=? AND connection_id=? AND connection_generation=? AND provider_account_id=? AND account_revision=? AND state='pending'`)
+    .bind(revision.syncJobId,ledger.ledgerId,connectionBinding(ledger).id,connectionBinding(ledger).generation,revision.providerAccountId,revision.revision);
+  await db.batch([accountError, finish]);
 }
 
 function snapshotPayload(transactions: readonly MappedLunchFlowTransaction[]) {
@@ -582,6 +590,24 @@ function isCurrentSnapshotMapping(mapping: LunchFlowMapping | null, revision: Lu
   return Boolean(mapping?.enabled && mapping.revision === revision.revision && mapping.accountId);
 }
 
+async function snapshotWasPublished(db: D1Database, ledger: FinancialContext, revision: LunchFlowRevision, changes: unknown): Promise<boolean> {
+  if (!revision.syncJobId) return true;
+  if (changes === 1) return true;
+  const binding = connectionBinding(ledger);
+  const pending = await db.prepare(`SELECT 1 FROM recurring_lunchflow_sync_jobs WHERE job_id=? AND ledger_id=? AND connection_id=? AND connection_generation=? AND provider_account_id=? AND account_revision=? AND state='pending'`)
+    .bind(revision.syncJobId,ledger.ledgerId,binding.id,binding.generation,revision.providerAccountId,revision.revision).first();
+  if (pending) throw new LunchFlowError('sync_fenced', 'Lunch Flow sync was interrupted; retrying.', 503, true);
+  return false;
+}
+
+function boundedSnapshotPayload(transactions: readonly MappedLunchFlowTransaction[]): string {
+  const payload = snapshotPayload(transactions);
+  if (new TextEncoder().encode(payload).byteLength > MAX_D1_SNAPSHOT_BYTES) {
+    throw new LunchFlowError('snapshot_too_large', 'Lunch Flow returned an oversized snapshot.', 502, true);
+  }
+  return payload;
+}
+
 export async function publishLunchFlowSnapshot(
   db: D1Database, ledger: FinancialContext,
   publication: {revision:LunchFlowRevision;transactions:readonly MappedLunchFlowTransaction[];syncedAt:string},
@@ -597,15 +623,14 @@ export async function publishLunchFlowSnapshot(
     sourceIdentity:lunchFlowIdentity(ledger,transaction.sourceIdentity),
     fingerprint:lunchFlowIdentity(ledger,transaction.fingerprint),
   })));
-  const payload = snapshotPayload(scopedTransactions);
-  if (new TextEncoder().encode(payload).byteLength > MAX_D1_SNAPSHOT_BYTES) {
-    throw new LunchFlowError('snapshot_too_large', 'Lunch Flow returned an oversized snapshot.', 502, true);
-  }
+  const payload = boundedSnapshotPayload(scopedTransactions);
+  const jobFence = revision.syncJobId ? "AND EXISTS (SELECT 1 FROM recurring_lunchflow_sync_jobs j WHERE j.job_id=? AND j.ledger_id=fence.ledger_id AND j.connection_id=fence.connection_id AND j.provider_account_id=fence.provider_account_id AND j.account_revision=fence.revision AND j.state='pending')" : '';
+  const jobBindings = revision.syncJobId ? [revision.syncJobId] : [];
   const statements = snapshotStatements({
     db,
     ledgerId: ledger.ledgerId,
     connectionId:binding.id,
-    fenceBindings:[ledger.ledgerId,binding.id,revision.providerAccountId,mapping.accountId,revision.revision,...fence.bindings],
+    fenceBindings:[ledger.ledgerId,binding.id,revision.providerAccountId,mapping.accountId,revision.revision,...jobBindings,...fence.bindings],
     accountId: mapping.accountId,
     providerAccountId: revision.providerAccountId,
     revision: revision.revision,
@@ -613,9 +638,14 @@ export async function publishLunchFlowSnapshot(
     syncedAt,
     revisionFence: `EXISTS (SELECT 1 FROM lunchflow_accounts fence
       WHERE fence.ledger_id = ? AND fence.connection_id = ? AND fence.provider_account_id = ? AND fence.account_id = ?
-        AND fence.enabled = 1 AND fence.revision = ?) AND ${fence.sql}`,
+        AND fence.enabled = 1 AND fence.revision = ? ${jobFence}) AND ${fence.sql}`,
   });
-  await db.batch([activeLunchFlowGuard(db, ledger), ...statements]);
+  if (revision.syncJobId) statements.push(db.prepare(`UPDATE recurring_lunchflow_sync_jobs SET state='completed'
+    WHERE job_id=? AND ledger_id=? AND connection_id=? AND connection_generation=? AND provider_account_id=? AND account_revision=? AND state='pending'
+      AND ${fence.sql} AND EXISTS (SELECT 1 FROM lunchflow_accounts a WHERE a.ledger_id=? AND a.connection_id=? AND a.provider_account_id=? AND a.account_id=? AND a.enabled=1 AND a.revision=?)`)
+    .bind(revision.syncJobId,ledger.ledgerId,binding.id,binding.generation,revision.providerAccountId,revision.revision,...fence.bindings,ledger.ledgerId,binding.id,revision.providerAccountId,mapping.accountId,revision.revision));
+  const results = await db.batch([activeLunchFlowGuard(db, ledger), ...statements]);
+  if (!await snapshotWasPublished(db, ledger, revision, results.at(-1)?.meta?.changes)) return { stale: true, written: 0 };
   return { stale: false, written: transactions.length };
 }
 

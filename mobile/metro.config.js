@@ -18,9 +18,11 @@ module.exports = withUniwindConfig(mergeConfig(getDefaultConfig(__dirname), {
   watchFolders: [
     ...(nodeModulesOutsideProject ? [resolvedNodeModulesPath] : []),
     path.resolve(mobileRoot, '..', 'shared'),
+    path.resolve(mobileRoot, '..', 'src', 'domain'),
     path.resolve(mobileRoot, '..', 'contracts'),
   ],
   resolver: {
+    nodeModulesPaths: [nodeModulesPath],
     // Resolve aliases at the graph boundary as well as in Babel. This also
     // covers modules returned from Uniwind's persistent transform cache.
     resolveRequest(context, moduleName, platform) {

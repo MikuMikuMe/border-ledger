@@ -1,3 +1,4 @@
+import { handlePlanApi } from './recurring-plans-http';
 import { NATIVE_PROTOCOL } from './client-identity';
 import { bindWebResponse, matchesExpectedWebSession, webIdentityHeaders } from './client-identity';
 import { runLunchFlowJob, scheduleLunchFlow } from './lunchflow-jobs';
@@ -1030,6 +1031,7 @@ async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, 
       () => handleLunchFlowRequest(request, env, context),
       () => handleAccountRoutes(request, env, url, context),
       () => handleReportRoutes(request, env, url, context),
+      () => handlePlanApi(request, env.DB, context, '/api/recurring-plans'),
       () => handleRecurringRoutes(request, env, url, context),
       () => handleImportAndPlaidRoutes(request, env, url, context),
     ]);

@@ -112,7 +112,7 @@ describe('hosted users migration', () => {
         '0022-unbound-auth.sql',
         '0023-plaid-tenant-connections.sql',
         '0024-alert-raw-identities.sql',
-        '0025-lunchflow-platform.sql', '0026-lunchflow-connection-mappings.sql', '0027-hosted-users-activation.sql',
+        '0025-lunchflow-platform.sql', '0026-lunchflow-connection-mappings.sql', '0027-hosted-users-activation.sql', '0028-recurring-plans.sql',
       ]);
       const tables = (await fresh.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all<{name:string}>()).results;
       for (const {name} of tables) {

@@ -2,7 +2,7 @@ import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMobileRequest } from '../worker/mobile';
 import { createOpaqueCredential, hashSecret, type OwnerScope } from '../worker/mobile-auth';
-import { createD1Fixture, task22MigrationNames } from './helpers/d1';
+import { createD1Fixture, task22MigrationNames, task24MigrationNames } from './helpers/d1';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 const ORIGIN = 'https://pf.example.com';
@@ -166,4 +166,21 @@ describe('Task 13 mobile recurring routes', () => {
     expect(missing?.status).toBe(401);
     expect((await handleMobileRequest(request('/api/mobile/v1/recurring/summary/extra', credential), runtime))?.status).toBe(404);
   }, 30_000);
+  it('authorizes plan reads and writes separately', async () => {
+    const fixture = await createD1Fixture([...task24MigrationNames, '0025-lunchflow-platform.sql', '0026-lunchflow-connection-mappings.sql', '0027-hosted-users-activation.sql', '0028-recurring-plans.sql']);
+    fixtures.push(fixture);
+    await seed(fixture.db);
+    const reader = await ownerCredential(fixture.db, ['ledger:read'], 'plans-reader');
+    const writer = await ownerCredential(fixture.db, ['ledger:read', 'recurring:manage'], 'plans-writer');
+    const classifier = await ownerCredential(fixture.db, ['ledger:read', 'recurring:classify'], 'plans-classifier');
+    const path = '/api/mobile/v1/recurring-plans';
+    const data = { operationId: 'op-1', plan: { accountId: 'account-cad', currency: 'CAD', merchant: 'Transit', direction: 'expense', amountMinor: 1250, frequency: 'monthly', startDate: '2026-01-31', endDate: null } };
+    const mutation = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) };
+    expect((await handleMobileRequest(request(path, reader, mutation), env(fixture.db)))?.status).toBe(403);
+    expect((await handleMobileRequest(request(path, classifier, mutation), env(fixture.db)))?.status).toBe(403);
+    expect((await handleMobileRequest(request(path, writer, mutation), env(fixture.db)))?.status).toBe(201);
+    const response = await handleMobileRequest(request(path, reader), env(fixture.db));
+    expect(await response?.json()).toMatchObject({ plans: [{ merchant: 'Transit' }] });
+  }, 30_000);
+
 });

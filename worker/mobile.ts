@@ -1,3 +1,4 @@
+import { handlePlanApi } from './recurring-plans-http';
 import { nativeCompatibilityResponse } from './client-identity';
 import { handleLunchFlowHttp } from './lunchflow-http';
 import { PlaidOwnershipConflictError } from './plaid-connection-store';
@@ -462,6 +463,15 @@ function isAccessApprovalPath(pathname: string) {
   return /^\/api\/mobile-auth\/requests\/[^/]+\/approval$/.test(pathname) || /^\/api\/device-pairings\/[^/]+\/approval$/.test(pathname);
 }
 
+async function handleMobilePlanRequest(request: Request, env: MobileRouteEnv, config: MobileAuthConfig, url: URL) {
+  const root = '/api/mobile/v1/recurring-plans';
+  if (url.pathname !== root && !url.pathname.startsWith(`${root}/`)) return null;
+  const scope = request.method === 'GET' ? 'ledger:read' : 'recurring:manage';
+  const owner = await authenticateOwner(bearer(request), env.DB, config, scope);
+  authorizeMobileRoute(owner, url.pathname, scope);
+  return handlePlanApi(request, env.DB, owner, root);
+}
+
 export async function handleMobileRequest(request: Request, env: MobileRouteEnv, accessIdentity: AccessIdentity | null = null): Promise<Response | null> {
   const url = new URL(request.url);
   if (!isMobileAuthPath(url.pathname)) return null;
@@ -708,7 +718,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
     }
     const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
     if (lunchFlowResponse) return lunchFlowResponse;
-    const connectionResponse = await handleConnectionMobileRequest(request, env, config, url);
+    const connectionResponse = await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
     if (connectionResponse) return connectionResponse;
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/transactions') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
