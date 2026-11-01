@@ -8,6 +8,8 @@ Each envelope category can carry everything (existing default), carry only posit
 
 ## Compatibility and rollout
 
+Migration `0032-ai-official-providers.sql` from main is compatible with this change. Tests cover both `0031` then `0032`, and `0032` then the pending `0031`, preserving funded envelopes, targets, cash, encrypted credentials and working tracking/DeepSeek writes. Keep applied migration history intact.
+
 Apply `0031-budget-tracking.sql` with the corresponding Worker release. The migration preserves envelope allocations, targets, funding balances and currency, and initializes Envelope/carry-everything defaults. No production deployment is performed by this PR.
 
 New settings, plan, copy and rollover writes use ledger-wide revisions and operation identifiers. HTTP 409 asks the client to refresh and review again. New clients explicitly request their mode; requests omitting mode retain the legacy envelope view. Legacy settings writes preserve new preferences. Android retains legacy `readView` alongside its mode-aware bridge.

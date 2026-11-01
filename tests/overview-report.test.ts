@@ -20,6 +20,7 @@ describe('full-window Overview report', () => {
     container?.remove();
     container = null;
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   function jsonResponse(value: unknown) {
@@ -33,6 +34,7 @@ describe('full-window Overview report', () => {
   }
 
   it('uses full-window totals and daily data instead of the bounded transaction list', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true }).setSystemTime(new Date('2026-10-14T16:00:00Z'));
     const reportCalls: URL[] = [];
     privateFetchSpy().mockImplementation(async (input) => {
       const url = new URL(String(input), 'https://ledger.example.test');
@@ -100,6 +102,7 @@ describe('full-window Overview report', () => {
   });
 
   it('makes a partial converted total primary while keeping source lanes and the eligible bank estimate visible', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true }).setSystemTime(new Date('2026-10-14T16:00:00Z'));
     const reportCalls: URL[] = [];
     privateFetchSpy().mockImplementation(async (input) => {
       const url = new URL(String(input), 'https://ledger.example.test');
@@ -132,8 +135,7 @@ describe('full-window Overview report', () => {
           convertedTotals: target ? { confirmedMinorUnits: 3456, provisionalMinorUnits: 0, confirmedCount: 1, provisionalCount: 0 } : null,
           convertedDailyTotals: target ? [{ date: '2026-10-10', confirmedMinorUnits: 3456, provisionalMinorUnits: 0 }] : [],
           fx: {
-            provider: 'frankfurter',
-            complete: false,
+            provider: 'frankfurter', complete: false,
             unavailableSourceCurrencies: ['JPY'],
             lockedDateCount: 2,
             observedDateRange: { earliest: '2026-10-10', latest: '2026-10-10' },
@@ -172,6 +174,7 @@ describe('full-window Overview report', () => {
   });
 
   it('keeps refund direction in the chart and exposes a signed accessible data table', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true }).setSystemTime(new Date('2026-10-14T16:00:00Z'));
     privateFetchSpy().mockImplementation(async (input) => {
       const url = new URL(String(input), 'https://ledger.example.test');
       if (url.pathname === '/api/accounts') {

@@ -1,11 +1,11 @@
 import {useEffect,useRef,useState} from 'react';
 import type {LedgerApi} from '../domain/api';
 import {AnalysisReview,AnalysisError,AnalysisResult,type AnalysisPreview} from './AnalysisReview';
-type Provider='openai'|'anthropic';
+type Provider='openai'|'anthropic'|'deepseek';
 type Config={provider:Provider;endpoint:string;model:string;revision:string};
 type Settings={configurations:Config[];detailedTransactions:boolean};
 type Preview=AnalysisPreview;
-const endpoints:Record<Provider,string>={openai:'https://api.openai.com/v1/chat/completions',anthropic:'https://api.anthropic.com/v1/messages'};
+const endpoints:Record<Provider,string>={openai:'https://api.openai.com/v1/chat/completions',anthropic:'https://api.anthropic.com/v1/messages',deepseek:'https://api.deepseek.com/chat/completions'};
 const send=(api:LedgerApi,path:string,method:string,body?:unknown)=>api<unknown>(`/api/analysis${path}`,{method,...(body===undefined?{}:{body:JSON.stringify(body)})});
 export function AnalysisPanel({api,month}:{api:LedgerApi;month:string}) {
   const requestVersion=useRef(0);
@@ -26,8 +26,8 @@ export function AnalysisPanel({api,month}:{api:LedgerApi;month:string}) {
   return <section className="budget-section"><h2>AI analysis</h2><p>Use your own provider key for optional, read-only observations. Your provider may charge for requests.</p>
     <AnalysisError message={error}/>
     <details><summary>Provider and privacy settings</summary><div className="budget-form">
-      <label>Provider<select value={provider} onChange={e=>{const next=e.target.value as Provider;setProvider(next);setEndpoint(endpoints[next]);setModel('');setCredential('');invalidate();}}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic-compatible</option></select></label>
-      <p>Custom endpoint hosts must be approved in the server configuration.</p><label>Endpoint<input type="url" value={endpoint} onChange={e=>setEndpoint(e.target.value)} autoComplete="off"/></label><label>Model<input value={model} onChange={e=>setModel(e.target.value)}/></label><label>API key<input type="password" value={credential} onChange={e=>setCredential(e.target.value)} autoComplete="off"/></label><button type="button" disabled={busy||!credential||!model} onClick={save}>Save or replace key</button>
+      <label>Provider<select value={provider} onChange={e=>{const next=e.target.value as Provider;setProvider(next);setEndpoint(endpoints[next]);setModel('');setCredential('');invalidate();}}><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="deepseek">DeepSeek</option></select></label>
+      <p>Requests use the selected provider’s official endpoint.</p><p>Endpoint: {endpoint}</p><label>Model<input value={model} onChange={e=>setModel(e.target.value)}/></label><label>API key<input type="password" value={credential} onChange={e=>setCredential(e.target.value)} autoComplete="off"/></label><button type="button" disabled={busy||!credential||!model} onClick={save}>Save or replace key</button>
       {settings?.configurations?.map(item=><div className="budget-balance" key={item.provider}><span>{item.provider} · {item.model}</span><button type="button" disabled={busy} onClick={()=>void action(async()=>{await send(api,`/configuration/${item.provider}`,'DELETE');invalidate();await refresh();})}>Remove key</button></div>)}
       <label className="analysis-check"><input type="checkbox" checked={settings?.detailedTransactions??false} disabled={busy||!settings} onChange={e=>sharing(e.target.checked)}/> Allow transaction details to be sent when selected</label><p>Details include dates, merchants, amounts, categories, accounts, notes, and sources. This is off by default.</p>
     </div></details>

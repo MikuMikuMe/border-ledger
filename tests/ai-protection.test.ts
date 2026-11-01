@@ -13,8 +13,8 @@ describe('BYOK protections',()=>{
   it('rejects unsafe endpoint destinations',()=>{
     for(const url of ['http://example.com','https://localhost/v1','https://127.0.0.1','https://[::1]','https://foo.internal','https://user:pass@example.com','https://example.com:444','https://example.com/?token=secret']) expect(()=>validateAiEndpoint(url,'https://ledger.example')).toThrow();
     expect(()=>validateAiEndpoint('https://ledger.example/api','https://ledger.example')).toThrow();
-    expect(validateAiEndpoint('https://api.example.com/v1/chat/completions','https://ledger.example','api.example.com')).toBe('https://api.example.com/v1/chat/completions');
-    expect(validateAiEndpoint('https://123.api.example.com/v1','https://ledger.example','123.api.example.com')).toBe('https://123.api.example.com/v1');
+    expect(()=>validateAiEndpoint('https://api.example.com/v1/chat/completions','https://ledger.example','api.example.com')).toThrow();
+    expect(()=>validateAiEndpoint('https://123.api.example.com/v1','https://ledger.example','123.api.example.com')).toThrow();
     expect(()=>validateAiEndpoint('https://0x7f000001','https://ledger.example')).toThrow();
     for(const endpoint of ['https://x.169.254.169.254.nip.io/v1','https://x.10.0.0.1.nip.io/v1','https://unapproved.example.com/v1']) expect(()=>validateAiEndpoint(endpoint,'https://ledger.example')).toThrow();
     expect(()=>validateAiEndpoint('https://x.10.0.0.1.nip.io/v1','https://ledger.example','x.10.0.0.1.nip.io')).toThrow();
@@ -28,9 +28,9 @@ describe('BYOK protections',()=>{
       expect(JSON.parse(String(init?.body)).max_tokens).toBe(2048);
       return Response.json({content:[{type:'text',text:'A useful observation'}]});
     });
-    const result=await requestAiAnalysis({provider:'anthropic',endpoint:'https://api.example.com/v1/messages',model:'test',credential:'test-key',prompt:'summary',appOrigin:'https://ledger.example',allowedHosts:'api.example.com'},fetcher);
+    const result=await requestAiAnalysis({provider:'anthropic',endpoint:'https://api.anthropic.com/v1/messages',model:'test',credential:'test-key',prompt:'summary',appOrigin:'https://ledger.example',allowedHosts:'api.example.com'},fetcher);
     expect(result).toBe('A useful observation');
-    await expect(requestAiAnalysis({provider:'openai',endpoint:'https://api.example.com/v1/chat/completions',model:'test',credential:'test-key',prompt:'summary',appOrigin:'https://ledger.example',allowedHosts:'api.example.com'},async()=>new Response('secret provider error',{status:401}))).rejects.toThrow('Provider authentication failed');
+    await expect(requestAiAnalysis({provider:'openai',endpoint:'https://api.openai.com/v1/chat/completions',model:'test',credential:'test-key',prompt:'summary',appOrigin:'https://ledger.example',allowedHosts:'api.example.com'},async()=>new Response('secret provider error',{status:401}))).rejects.toThrow('Provider authentication failed');
   });
   it('sends OpenAI chat format and redacts a key echoed in the response',async()=>{
     const fetcher:typeof fetch=async(_input,init)=>{
