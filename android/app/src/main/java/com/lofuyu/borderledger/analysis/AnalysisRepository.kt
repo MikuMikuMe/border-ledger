@@ -17,7 +17,7 @@ internal fun analysisRoute(action:String, body:String):Pair<String,String> {
         "preview", "run" -> "POST" to "$ROOT/$action"
         "remove" -> {
             val provider=JSONObject(body).getString("provider")
-            require(provider in setOf("openai","anthropic"))
+            require(provider in setOf("openai","anthropic","deepseek"))
             "DELETE" to "$ROOT/configuration/$provider"
         }
         else -> throw IllegalArgumentException("Invalid analysis action")

@@ -17,7 +17,12 @@ export function validateAiEndpoint(input:string,appOrigin:string,allowedHosts=''
   const host=url.hostname.toLowerCase().replace(/\.$/,'');
   validateHost(host);
   if(host===applicationHost(appOrigin)) throw new RangeError('Invalid provider endpoint');
-  const trusted=new Set(['api.openai.com','api.anthropic.com',...allowedHosts.split(',').map(value=>value.trim().toLowerCase()).filter(Boolean)]);
+  const trusted=new Set(['api.openai.com','api.anthropic.com','api.deepseek.com']);
   if(!trusted.has(host)) throw new RangeError('Provider endpoint is not approved by the server');
   return url.toString();
+}
+
+export function validateProviderEndpoint(provider: string, endpoint: string): void {
+  const official: Record<string,string> = {openai:'https://api.openai.com/v1/chat/completions',anthropic:'https://api.anthropic.com/v1/messages',deepseek:'https://api.deepseek.com/chat/completions'};
+  if (!official[provider] || endpoint !== official[provider]) throw new RangeError('Provider endpoint is not approved by the server');
 }
