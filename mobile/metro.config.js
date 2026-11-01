@@ -23,8 +23,7 @@ module.exports = withUniwindConfig(mergeConfig(getDefaultConfig(__dirname), {
   ],
   resolver: {
     nodeModulesPaths: [nodeModulesPath],
-    // Resolve aliases at the graph boundary as well as in Babel. This also
-    // covers modules returned from Uniwind's persistent transform cache.
+    // Resolve source aliases at the module graph boundary.
     resolveRequest(context, moduleName, platform) {
       const request = moduleName.startsWith('@/')
         ? path.resolve(__dirname, 'src', moduleName.slice(2))

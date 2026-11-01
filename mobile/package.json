@@ -38,7 +38,6 @@
     "@react-native/typescript-config": "0.88.0",
     "@types/react": "19.3.0",
     "@types/react-test-renderer": "19.3.0",
-    "babel-plugin-module-resolver": "5.0.3",
     "react-test-renderer": "19.3.1",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2"
