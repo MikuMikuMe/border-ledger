@@ -22,9 +22,12 @@ describe('button interactions', () => {
     container?.remove();
     container = null;
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-10-14T16:00:00Z'));
     reportCalls = [];
     privateFetchSpy().mockImplementation(async (input, init) => {
       const url = new URL(String(input), 'https://ledger.example.test');
