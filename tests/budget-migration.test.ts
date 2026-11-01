@@ -5,7 +5,7 @@ import {saveBudgetTarget,saveManualCash,listManualCash} from '../worker/budget-i
 
 describe('budget migration',()=>{
   it('installs budget tables after the current production migrations',async()=>{
-    const f=await createD1Fixture([...task24MigrationNames,'0025-lunchflow-platform.sql','0026-lunchflow-connection-mappings.sql','0027-hosted-users-activation.sql','0028-recurring-plans.sql','0029-budget.sql']);
+    const f=await createD1Fixture([...task24MigrationNames,'0025-lunchflow-platform.sql','0026-lunchflow-connection-mappings.sql','0027-hosted-users-activation.sql','0028-recurring-plans.sql','0029-budget.sql','0031-budget-tracking.sql']);
     try {
       const owner={userId:'owner',ledgerId:'personal'};
       await configureBudget(f.db,owner,'CAD','2026-10');

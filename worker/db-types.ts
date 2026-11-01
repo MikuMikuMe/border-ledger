@@ -66,7 +66,7 @@ export async function insertFxSnapshotIfAbsent(db: D1Database, snapshot: FxRateS
     snapshot.content_digest,
     snapshot.fetched_at,
   ).run();
-  return (result.meta?.changes ?? 0) === 1;
+  return (result.meta?.changes ?? 0) >= 1;
 }
 
 export interface SourceProfileRow {

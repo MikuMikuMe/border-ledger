@@ -26,7 +26,7 @@ export async function saveBudgetTarget(db:D1Database, context:FinancialContext, 
   const a=financialAuthorityPredicate(context,'preferences:write');
   const result=await db.prepare(`INSERT INTO budget_targets(ledger_id,category,target_minor) SELECT ?,?,? WHERE ${a.sql}
     ON CONFLICT(ledger_id,category) DO UPDATE SET target_minor=excluded.target_minor WHERE ${a.sql}`).bind(context.ledgerId,target.category,target.targetMinor,...a.bindings,...a.bindings).run();
-  if(result.meta?.changes!==1) throw new Error('Budget authority invalid');
+  if((result.meta?.changes??0)<1) throw new Error('Budget authority invalid');
 }
 export async function saveManualCash(db:D1Database, context:FinancialContext, cash:ManualCash) {
   validateText(cash.id,128); validateText(cash.name,120); validateAmount(cash.amountMinor);
@@ -36,7 +36,7 @@ export async function saveManualCash(db:D1Database, context:FinancialContext, ca
   const result=await db.prepare(`INSERT INTO budget_manual_cash(ledger_id,id,name,currency,amount_minor,account_id) SELECT ?,?,?,?,?,? WHERE ${a.sql}
     ON CONFLICT(ledger_id,id) DO UPDATE SET name=excluded.name,currency=excluded.currency,amount_minor=excluded.amount_minor,account_id=excluded.account_id WHERE ${a.sql}`)
     .bind(context.ledgerId,cash.id,cash.name,cash.currency,cash.amountMinor,cash.accountId??null,...a.bindings,...a.bindings).run();
-  if(result.meta?.changes!==1) throw new Error('Budget authority invalid');
+  if((result.meta?.changes??0)<1) throw new Error('Budget authority invalid');
 }
 
 

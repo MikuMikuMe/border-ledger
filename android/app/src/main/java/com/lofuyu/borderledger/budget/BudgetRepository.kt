@@ -7,9 +7,12 @@ import com.lofuyu.borderledger.auth.OwnerAuthInterceptor
 import com.lofuyu.borderledger.auth.OwnerCredentialProvider
 import com.lofuyu.borderledger.recurring.RecurringHttpTransport
 import org.json.JSONObject
+import java.net.URLEncoder
 
 private const val ROOT = "/api/mobile/v1/budget"
-private val allowedWrites = setOf("settings", "allocations", "targets", "cash", "transfers")
+private val allowedWrites = setOf("settings", "allocations", "targets", "cash", "transfers", "mode", "tracking-plans", "tracking-copy", "rollover")
+class BudgetRevisionConflict : Exception()
+class BudgetRequestRejected : Exception()
 internal fun budgetWritePath(action: String, body: String): String {
     require(body.toByteArray(Charsets.UTF_8).size <= 16384)
     if (action in allowedWrites) return "$ROOT/$action"
@@ -27,10 +30,21 @@ class HttpWorkerBudgetApi(
     private val auth = OwnerAuthInterceptor(credentials, ApiEnvironment(origin, environment))
     suspend fun readSettings(): String = execute("GET", ROOT, null)
     suspend fun readView(month: String): String {
-        require(month.matches(Regex("[0-9]{4}-(0[1-9]|1[0-2])")))
+        BudgetMonth(month)
         return execute("GET", "$ROOT/view?month=$month", null)
     }
-    suspend fun write(action: String, body: String): String {
+    suspend fun readModeView(request: BudgetModeViewRequest): String {
+        return execute("GET", "$ROOT/view?month=${request.month.value}&mode=${request.mode}", null)
+    }
+    suspend fun readCopyPreview(month: BudgetMonth): String {
+        return execute("GET", "$ROOT/tracking-copy?month=${month.value}", null)
+    }
+    suspend fun readRolloverPreview(request: BudgetRolloverRequest): String {
+        val encoded = URLEncoder.encode(request.category, "UTF-8")
+        return execute("GET", "$ROOT/rollover-preview?category=$encoded&effectiveMonth=${request.effectiveMonth.value}&policy=${request.policy}", null)
+    }
+    suspend fun write(command: BudgetWriteCommand): String {
+        val (action, body) = command
         val path = budgetWritePath(action, body)
         JSONObject(body)
         val method = if (action == "cash-delete") "DELETE" else "PUT"
@@ -42,7 +56,8 @@ class HttpWorkerBudgetApi(
         if (response.status in 200..299) return response.body.toString(Charsets.UTF_8)
         throw when (response.status) {
             401, 403 -> TransportFailure.Unauthorized
-            400, 404, 409 -> TransportFailure.Unavailable
+            409 -> BudgetRevisionConflict()
+            400, 404 -> BudgetRequestRejected()
             else -> TransportFailure.Retryable
         }
     }

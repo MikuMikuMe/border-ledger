@@ -6,7 +6,7 @@ const fixtures:Array<{dispose():Promise<void>}>=[];
 afterEach(async()=>{while(fixtures.length) await fixtures.pop()!.dispose();});
 describe('analysis web access',()=>{
   it('requires a ledger session and never returns a stored key',async()=>{
-    const f=await createD1Fixture([...task24MigrationNames,'0025-lunchflow-platform.sql','0026-lunchflow-connection-mappings.sql','0027-hosted-users-activation.sql','0028-recurring-plans.sql','0029-budget.sql','0030-ai-settings.sql']);fixtures.push(f);await provisionWebOwner(f.db);
+    const f=await createD1Fixture([...task24MigrationNames,'0025-lunchflow-platform.sql','0026-lunchflow-connection-mappings.sql','0027-hosted-users-activation.sql','0028-recurring-plans.sql','0029-budget.sql','0030-ai-settings.sql','0031-budget-tracking.sql']);fixtures.push(f);await provisionWebOwner(f.db);
     const env={DB:f.db,...VERIFIED_WEB_ENV,AI_CREDENTIAL_ENCRYPTION_KEY:'ab'.repeat(32),LEDGER_APP_ORIGIN:'https://pf.example.com',ASSETS:{fetch:async()=>new Response('missing',{status:404})}};
     const root='https://pf.example.com/api/analysis';
     expect((await worker.fetch(new Request(root),env as never)).status).toBe(401);

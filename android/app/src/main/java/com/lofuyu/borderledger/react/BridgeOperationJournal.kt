@@ -293,8 +293,10 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
         is BridgeLocalFailure -> JournalStatuses.FailedLocal
         is com.lofuyu.borderledger.accounts.LunchFlowRequestFailure -> JournalStatuses.Rejected
         is com.lofuyu.borderledger.accounts.AccountRequestRejected,
+        is com.lofuyu.borderledger.budget.BudgetRequestRejected,
         is com.lofuyu.borderledger.recurring.RecurringPlanRejected -> JournalStatuses.Rejected
         is com.lofuyu.borderledger.recurring.RecurringRevisionConflict,
+        is com.lofuyu.borderledger.budget.BudgetRevisionConflict,
         is com.lofuyu.borderledger.review.ReviewRevisionConflict,
         is com.lofuyu.borderledger.ui.accounts.devices.DeviceRevisionConflict,
         is com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.RevisionConflict -> JournalStatuses.RevisionConflict

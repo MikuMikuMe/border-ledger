@@ -1,3 +1,4 @@
+import {saveBudgetMode,saveTrackingPlan,copyTrackingPlans,saveRolloverPolicy,BudgetConflictError} from './budget-planning-store';
 import {transferBudgetAllocation,type BudgetTransfer} from './budget-transfer-store';
 import {readBudget} from './budget-http-read';
 import {budgetJson as json} from './budget-http-common';
@@ -13,8 +14,17 @@ function object(value:unknown):Record<string,unknown> {
   if (Array.isArray(value)) throw new RangeError('Invalid request body');
   return value as Record<string,unknown>;
 }
+async function writePlanning(db:D1Database,context:FinancialContext,path:string,data:Record<string,unknown>) {
+  if(path==='mode') return json(await saveBudgetMode(db,context,data as unknown as Parameters<typeof saveBudgetMode>[2]));
+  if(path==='tracking-plans') return json(await saveTrackingPlan(db,context,data as unknown as Parameters<typeof saveTrackingPlan>[2]));
+  if(path==='tracking-copy') return json(await copyTrackingPlans(db,context,data as unknown as Parameters<typeof copyTrackingPlans>[2]));
+  if(path==='rollover') return json(await saveRolloverPolicy(db,context,data as unknown as Parameters<typeof saveRolloverPolicy>[2]));
+ return null;
+}
 async function writeBudget(request:Request,db:D1Database,context:FinancialContext,path:string) {
   const data=object(await readJsonBody(request,16384));
+  const planning=await writePlanning(db,context,path,data);
+  if(planning)return planning;
   if(path==='settings') await configureBudget(db,context,data.currency as string,data.startMonth as string | undefined);
   else if(path==='allocations') await setBudgetAllocation(db,context,data as unknown as BudgetAllocation);
   else if(path==='targets') await saveBudgetTarget(db,context,data as unknown as BudgetTarget);
@@ -35,6 +45,7 @@ export async function handleBudgetApi(request:Request,db:D1Database,context:Fina
   if (path!==root && !path.startsWith(`${root}/`)) return null;
   try { return await dispatchBudget(request,db,context,root); }
   catch(error) {
+    if(error instanceof BudgetConflictError) return json({code:'budget_conflict',message:error.message},409);
     if(error instanceof RangeError) return json({code:'invalid_request',message:error.message},400);
     throw error;
   }

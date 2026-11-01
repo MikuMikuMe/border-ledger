@@ -1,11 +1,11 @@
 import {describeFxRate} from './budget-fx';
 import {convertMinorUnits,type ValidatedFxRates} from './fx-rates';
 export interface BudgetActivity {id:string;date:string;category:string;sourceCurrency:string;sourceMinor:number;activityMinor:number|null;rateDate:string|null;rate:string|null}
-export interface TransactionRow {id:string;date:string;category:string;currency:string;amount_minor:number;kind:'expense'|'refund'|'fee';lock_date:string}
+export interface TransactionRow {id:string;date:string;category:string;currency:string;amount_minor:number;kind:'income'|'expense'|'refund'|'fee';lock_date:string}
 function signedActivity(row:TransactionRow) {
   const amount=Math.abs(row.amount_minor);
   if (!Number.isSafeInteger(amount)) throw new RangeError('Invalid transaction amount');
-  return row.kind==='refund' ? amount : -amount;
+  return row.kind==='refund'||row.kind==='income' ? amount : -amount;
 }
 export function describeActivity(row:TransactionRow,currency:string,rates:Map<string,ValidatedFxRates|null>):BudgetActivity {
   const snapshot=rates.get(row.lock_date)??null;

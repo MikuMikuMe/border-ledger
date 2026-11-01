@@ -32,13 +32,21 @@ async function activityRates(db:D1Database,rows:TransactionRow[],currency:string
   for(const row of rows) if(row.currency!==currency && !rates.has(row.lock_date)) rates.set(row.lock_date,await getRate(db,row.lock_date,dependencies));
   return rates;
 }
-export async function readBudgetActivity(db:D1Database,context:LedgerContext,query:ActivityQuery,dependencies:ActivityDependencies={}):Promise<BudgetActivity[]> {
+async function readActivityRows(db:D1Database,context:LedgerContext,query:ActivityQuery,dependencies:ActivityDependencies={},includeIncome=false) {
   validateQuery(query);
   const result=await db.prepare(`SELECT t.id,t.date,t.category,t.currency,t.amount_minor,t.kind,COALESCE(t.fx_lock_date,t.date) AS lock_date
     FROM transactions t WHERE t.ledger_id=? AND t.date>=? AND t.date<=? AND t.status='confirmed'
-    AND t.kind IN ('expense','refund','fee') AND ${notSupersededAlertTransactionPredicate('t')} ORDER BY t.date,t.id LIMIT 10001`)
+    AND t.kind IN ('expense','refund','fee'${includeIncome?",'income'":""}) AND ${notSupersededAlertTransactionPredicate('t')} ORDER BY t.date,t.id LIMIT 10001`)
     .bind(context.ledgerId,query.from,query.to).all<TransactionRow>();
   if (result.results.length>10000) throw new RangeError('Too many budget transactions');
   const rates=await activityRates(db,result.results,query.currency,dependencies);
-  return result.results.map(row=>describeActivity(row,query.currency,rates));
+  return result.results.map(row=>({...describeActivity(row,query.currency,rates),kind:row.kind}));
+}
+
+export async function readBudgetActivity(db:D1Database,context:LedgerContext,query:ActivityQuery,dependencies:ActivityDependencies={}):Promise<BudgetActivity[]> {
+ const rows=await readActivityRows(db,context,query,dependencies);
+ return rows.map(({kind,...row})=>row);
+}
+export async function readTrackingActivity(db:D1Database,context:LedgerContext,query:ActivityQuery,dependencies:ActivityDependencies={}) {
+ return readActivityRows(db,context,query,dependencies,true);
 }

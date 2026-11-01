@@ -16,6 +16,15 @@ import org.junit.Test
 import java.security.MessageDigest
 
 class BridgeOperationJournalTest {
+    @Test fun budgetRevisionConflictIsTerminalAndPermitsAReviewedRetry()=runTest {
+        val journal=BridgeOperationJournal(MemoryRecords())
+        val conflict=journal.start(BridgeOperationRequest("budget-conflict","budget_rollover","payload","owner")) { throw com.lofuyu.borderledger.budget.BudgetRevisionConflict() }
+        assertEquals("revision_conflict",conflict.status)
+        var writes=0
+        val retried=journal.start(BridgeOperationRequest("budget-reviewed","budget_rollover","new-revision","owner")) { writes++; null }
+        assertEquals("completed",retried.status)
+        assertEquals(1,writes)
+    }
     @Test fun recreatedRuntimeCanDiscoverLostOperationIdsWithoutJsStorage()=runTest {
         val disk=MemoryRecords()
         BridgeOperationJournal(disk).start(BridgeOperationRequest("discover-1","review","p","owner")) { error("lost response") }
