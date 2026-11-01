@@ -1,3 +1,4 @@
+import {readBudgetState,readRolloverPolicies} from './budget-planning-store';
 import {addBudgetSuggestions,budgetHistoryStart} from './budget-history';
 import {fundingInputs,fundingRates,convertFunding,type ViewDependencies,type Account} from './budget-funding';
 import type {D1Database} from './db-types';
@@ -47,9 +48,10 @@ export async function readBudgetView(db:D1Database,context:FinancialContext,mont
   const raw=fundingInputs(accountRows.results,cash,synced,now);
   const rates=await fundingRates(db,raw,settings.currency,{now,deps});
   const balances=raw.map(item=>convertFunding(item,settings.currency,rates));
-  const rawSummary=summarizeBudget({month,allocations,targets,activity,balances});
+  const rolloverPolicies=await readRolloverPolicies(db,context);
+  const rawSummary=summarizeBudget({month,allocations,targets,activity,balances,rolloverPolicies});
   const summary={...rawSummary,categories:addBudgetSuggestions(rawSummary.categories,allActivity,month)};
   const currentMonth=await ledgerMonth(db,context,now);
   summary.unassignedMinor=reserveFutureAllocations(summary.unassignedMinor,allocations,month,currentMonth);
-  return {settings,summary,balances,activity,asOf:now.toISOString(),startMonth:start,currentMonth};
+  return {settings:{...settings,...await readBudgetState(db,context)},summary,balances,activity,asOf:now.toISOString(),startMonth:start,currentMonth,rolloverPolicies};
 }

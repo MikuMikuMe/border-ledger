@@ -26,7 +26,7 @@ export async function configureBudget(db:D1Database, context:FinancialContext, c
   const result = await db.prepare(`INSERT INTO budget_settings(ledger_id,currency,start_month) SELECT ?,?,? WHERE ${authority.sql}
     ON CONFLICT(ledger_id) DO UPDATE SET currency=excluded.currency,start_month=excluded.start_month,revision=budget_settings.revision+1 WHERE ${authority.sql}`)
     .bind(context.ledgerId,currency,startMonth,...authority.bindings,...authority.bindings).run();
-  if (result.meta?.changes !== 1) throw new Error('Budget authority invalid');
+  if ((result.meta?.changes ?? 0) < 1) throw new Error('Budget authority invalid');
 }
 function validCategory(value:unknown): value is string {
   if (typeof value !== 'string') return false;
@@ -46,5 +46,5 @@ export async function setBudgetAllocation(db:D1Database, context:FinancialContex
   const result = await db.prepare(`INSERT INTO budget_allocations(ledger_id,month,category,assigned_minor) SELECT ?,?,?,? WHERE ${authority.sql}
     ON CONFLICT(ledger_id,month,category) DO UPDATE SET assigned_minor=excluded.assigned_minor WHERE ${authority.sql}`)
     .bind(context.ledgerId,input.month,input.category,input.assignedMinor,...authority.bindings,...authority.bindings).run();
-  if (result.meta?.changes !== 1) throw new Error('Budget authority invalid');
+  if ((result.meta?.changes ?? 0) < 1) throw new Error('Budget authority invalid');
 }

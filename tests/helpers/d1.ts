@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import {findSafeLoopbackPort,isRetryableBindError} from './loopback-port';
 import { convertV4MiniflareOptions, Miniflare } from 'miniflare';
 import type { D1Database } from '../../worker/db-types';
 
@@ -41,13 +41,29 @@ export async function applyMigrations(db: D1Database, migrationNames: readonly s
   }
 }
 
-export async function createD1Fixture(migrationNames: readonly string[] = legacyMigrationNames): Promise<{ db: D1Database; dispose(): Promise<void> }> {
-  const miniflare = new Miniflare(convertV4MiniflareOptions({
-    modules: true,
-    script: 'export default {}',
-    d1Databases: { DB: 'border-ledger-recurring-test' },
+async function startMiniflare():Promise<Miniflare> {
+ for(let attempt=0;attempt<5;attempt++){
+  const port=await findSafeLoopbackPort();
+  const miniflare=new Miniflare(convertV4MiniflareOptions({
+   host:'127.0.0.1',port,modules:true,script:'export default {}',
+   d1Databases:{DB:'border-ledger-recurring-test'},
   }));
-  const db = await miniflare.getD1Database('DB') as unknown as D1Database;
-  await applyMigrations(db, migrationNames);
-  return { db, dispose: () => miniflare.dispose() };
+  try {await miniflare.ready;return miniflare;}
+  catch(error){
+   await miniflare.dispose().catch(()=>{});
+   if(attempt===4||!isRetryableBindError(error))throw error;
+  }
+ }
+ throw new Error('Unable to start the D1 test transport');
+}
+export async function createD1Fixture(migrationNames:readonly string[]=legacyMigrationNames):Promise<{db:D1Database;url:URL;dispose():Promise<void>}> {
+ const miniflare=await startMiniflare();
+ try {
+  const db=await miniflare.getD1Database('DB') as unknown as D1Database;
+  await applyMigrations(db,migrationNames);
+  return {db,url:await miniflare.ready,dispose:()=>miniflare.dispose()};
+ }catch(error){
+  await miniflare.dispose().catch(()=>{});
+  throw error;
+ }
 }

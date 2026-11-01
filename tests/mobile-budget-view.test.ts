@@ -9,5 +9,6 @@ describe('Android budget content',()=>{
  it('shows category balances and clearly labels unavailable accounts',()=>{
   let tree:any;act(()=>{tree=create(React.createElement(BudgetContent,{dark:false,currency:'CAD',view:{settings:{currency:'CAD'},summary:{month:'2026-10',cashMinor:null,unassignedMinor:null,categories:[{category:'Food',availableMinor:3500,assignedMinor:3000,activityMinor:-500,openingMinor:1000,targetMinor:5000,suggestedMinor:1500,suggestionBasis:'target',missingTransactionIds:[]}]},balances:[{id:'bank',accountId:'bank',name:'Bank',source:'unavailable',sourceCurrency:'CAD',sourceMinor:null,amountMinor:null,rateDate:null,observedAt:null}],activity:[],currentMonth:'2026-10',asOf:'2026-10-31T12:00:00Z',startMonth:'2026-10'},busy:false,onWrite:()=>{}}));});
   const output=JSON.stringify(tree.toJSON());expect(output).toContain('Food');expect(output).toContain('Unavailable');expect(output).toContain('Bank');expect(output).toContain('Suggested');
+  expect(tree.root.findByProps({accessibilityLabel:'Edit envelope Food'}).props.accessibilityValue?.text).toBe('Assigned CAD 30.00. Activity CAD -5.00. Available CAD 35.00. Carried CAD 10.00.');
  });
 });

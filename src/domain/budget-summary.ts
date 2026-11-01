@@ -1,6 +1,8 @@
+import {categoryProjection,type BudgetRolloverPolicy} from './budget-rollover';
 import {suggestFunding} from './budget';
 export interface BudgetViewInput {
   month:string;
+  rolloverPolicies?:readonly BudgetRolloverPolicy[];
   allocations:readonly {month:string;category:string;assignedMinor:number}[];
   targets:readonly {category:string;targetMinor:number}[];
   activity:readonly {id:string;date:string;category:string;activityMinor:number|null}[];
@@ -20,17 +22,9 @@ function targetSuggestion(target:number|null,available:number|null):number|null 
   return suggestFunding(target,available);
 }
 function categorySummary(input:BudgetViewInput,category:string):BudgetCategorySummary {
-  const allocations=input.allocations.filter(row=>row.category===category && row.month<=input.month);
-  const activity=input.activity.filter(row=>row.category===category && row.date.slice(0,7)<=input.month);
-  const previous=activity.filter(row=>row.date.slice(0,7)<input.month);
-  const current=activity.filter(row=>row.date.slice(0,7)===input.month);
-  const missing=activity.filter(row=>row.activityMinor===null).map(row=>row.id);
-  const opening=previous.some(row=>row.activityMinor===null)?null:checkedSum([...allocations.filter(row=>row.month<input.month).map(row=>row.assignedMinor),...previous.map(row=>row.activityMinor!)]);
-  const assigned=checkedSum(allocations.filter(row=>row.month===input.month).map(row=>row.assignedMinor));
-  const currentActivity=current.some(row=>row.activityMinor===null)?null:checkedSum(current.map(row=>row.activityMinor!));
-  const available=opening===null || currentActivity===null?null:checkedSum([opening,assigned,currentActivity]);
+  const projection=categoryProjection({...input,category});
   const target=input.targets.find(row=>row.category===category)?.targetMinor??null;
-  return {category,openingMinor:opening,assignedMinor:assigned,activityMinor:currentActivity,availableMinor:available,targetMinor:target,suggestedMinor:targetSuggestion(target,available),missingTransactionIds:missing};
+  return {category,...projection,targetMinor:target,suggestedMinor:targetSuggestion(target,projection.availableMinor)};
 }
 export function summarizeBudget(input:BudgetViewInput) {
   if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.month)) throw new RangeError('Invalid budget month');

@@ -80,6 +80,6 @@ export async function updatePreferences(db: D1Database, context: FinancialContex
     ...authority.bindings,
   ).run();
   const current = await readPreferences(db, context, 'preferences:write');
-  if (result.meta?.changes !== 1) throw new PreferenceRevisionConflictError(current.revision);
+  if (!(Number(result.meta?.changes) >= 1)) throw new PreferenceRevisionConflictError(current.revision);
   return current;
 }

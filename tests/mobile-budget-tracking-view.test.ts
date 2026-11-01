@@ -1,0 +1,26 @@
+import {createRequire} from 'node:module';
+import {expect,it,vi} from 'vitest';
+const require=createRequire(new URL('../mobile/package.json',import.meta.url));
+const React=require('react'),{create,act}=require('react-test-renderer');
+vi.mock('../mobile/node_modules/react-native/index.js',()=>({Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',BackHandler:{addEventListener:()=>({remove(){}})},AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
+const {TrackingContent}=await import('../mobile/src/features/budget/TrackingContent');
+(globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;
+it('edits a tracking forecast without writing an envelope allocation',()=>{
+ const writes:any[]=[];let tree:any;act(()=>{tree=create(React.createElement(TrackingContent,{dark:false,busy:false,onWrite:(action:string,build:any)=>writes.push([action,build('op')]),onCopy:()=>{},view:{mode:'tracking',settings:{currency:'CAD',revision:4},summary:{month:'2026-10',plannedIncomeMinor:300000,plannedExpenseMinor:10000,plannedSavingsMinor:290000,actualIncomeMinor:200000,actualExpenseMinor:null,actualSavingsMinor:null,categories:[{direction:'expense',category:'Food',plannedMinor:10000,actualMinor:null,varianceMinor:null,missingTransactionIds:['fx']}]},plans:[],activity:[],asOf:'now',currentMonth:'2026-10'}}));});
+ expect(tree.root.findAllByType('TextInput')).toHaveLength(0);
+ expect(tree.root.findByProps({accessibilityLabel:'Edit expense Food'}).props.accessibilityValue?.text).toBe('Planned CAD 100.00. Actual unavailable. Remaining unavailable.');
+ act(()=>tree.root.findByProps({accessibilityLabel:'Edit expense Food'}).props.onPress());
+ act(()=>tree.root.findByProps({accessibilityLabel:'Planned expense for Food'}).props.onChangeText('125.50'));
+ act(()=>tree.root.findByProps({accessibilityLabel:'Save expense plan for Food'}).props.onPress());
+ expect(writes).toEqual([['tracking-plans',{month:'2026-10',direction:'expense',category:'Food',plannedMinor:12550,expectedRevision:4,operationId:'op'}]]);
+ expect(JSON.stringify(tree.toJSON())).toContain('Unavailable');act(()=>tree.unmount());
+});
+it('updates a pristine amount when refreshed or copied server plans change',()=>{
+ const view={mode:'tracking',settings:{currency:'CAD',revision:4},summary:{month:'2026-10',plannedIncomeMinor:0,plannedExpenseMinor:10000,plannedSavingsMinor:-10000,actualIncomeMinor:0,actualExpenseMinor:0,actualSavingsMinor:0,categories:[{direction:'expense',category:'Food',plannedMinor:10000,actualMinor:0,varianceMinor:10000,missingTransactionIds:[]}]},plans:[],activity:[],asOf:'now',currentMonth:'2026-10'};
+ const props={dark:false,busy:false,onWrite:()=>{},onCopy:()=>{},view};let tree:any;
+ act(()=>{tree=create(React.createElement(TrackingContent,props));});
+ act(()=>tree.root.findByProps({accessibilityLabel:'Edit expense Food'}).props.onPress());
+ expect(tree.root.findByProps({accessibilityLabel:'Planned expense for Food'}).props.value).toBe('100.00');
+ act(()=>tree.update(React.createElement(TrackingContent,{...props,view:{...view,summary:{...view.summary,categories:[{...view.summary.categories[0],plannedMinor:25000}]}}})));
+ expect(tree.root.findByProps({accessibilityLabel:'Planned expense for Food'}).props.value).toBe('250.00');act(()=>tree.unmount());
+});

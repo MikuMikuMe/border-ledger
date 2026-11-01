@@ -29,7 +29,7 @@ export async function publishLunchFlowBalance(db:D1Database,context:LunchFlowBin
     ON CONFLICT(ledger_id,account_id) DO UPDATE SET connection_id=excluded.connection_id,connection_generation=excluded.connection_generation,provider_account_id=excluded.provider_account_id,account_revision=excluded.account_revision,currency=excluded.currency,amount_minor=excluded.amount_minor,observed_at=excluded.observed_at,refresh_failed=0
     WHERE excluded.observed_at>=lunchflow_account_balances.observed_at`)
     .bind(context.ledgerId,input.accountId,binding.id,binding.generation,input.providerAccountId,input.revision,input.currency,input.amountMinor,input.observedAt,...fence.bindings,context.ledgerId,binding.id,input.providerAccountId,input.accountId,input.revision,input.currency).run();
-  return result.meta?.changes===1;
+  return (result.meta?.changes??0)>=1;
 }
 
 
