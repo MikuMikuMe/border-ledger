@@ -5,6 +5,17 @@ import {previewAiAnalysis,runAiAnalysis} from '../worker/ai-analysis';
 import {configureBudget,setBudgetAllocation} from '../worker/budget-store';
 const context={userId:'owner',ledgerId:'personal'}, secret='ab'.repeat(32),origin='https://ledger.example';
 describe('analysis consent',()=>{
+  it('sends an explicitly confirmed request directly to the official provider',async()=>{
+    const f=createSqliteD1Fixture();const fetcher=vi.fn(async()=>Response.json({choices:[{message:{content:'advice'}}]}));vi.stubGlobal('fetch',fetcher);
+    try {
+      await saveAiConfiguration(f.db,context,{provider:'deepseek',endpoint:'https://api.deepseek.com/chat/completions',model:'deepseek-chat',credential:'test-key'},{secret,appOrigin:origin});
+      const selection={provider:'deepseek' as const,from:'2026-10-01',to:'2026-10-31',detail:false,mode:'ledger' as const};
+      const preview=await previewAiAnalysis(f.db,context,selection);
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(await runAiAnalysis(f.db,context,{...selection,configurationRevision:preview.configurationRevision,confirmed:true},{secret,origin})).toBe('advice');
+      expect(fetcher).toHaveBeenCalledOnce();
+    } finally {vi.unstubAllGlobals();f.close();}
+  });
   it('requires matching preview, honors the sharing switch and sends only on request',async()=>{
     const f=createSqliteD1Fixture();try {
       await saveAiConfiguration(f.db,context,{provider:'openai',endpoint:'https://api.openai.com/v1/chat/completions',model:'test',credential:'test-key'},{secret,appOrigin:origin});
@@ -37,7 +48,7 @@ describe('analysis consent',()=>{
       const selection={provider:'openai' as const,from:'2026-10-01',to:'2026-10-31',detail:false,mode:'ledger' as const};
       const preview=await previewAiAnalysis(f.db,context,selection);
       await removeAiConfiguration(f.db,context,'openai');
-      await saveAiConfiguration(f.db,context,{...original,endpoint:'https://other.example.com/v1/chat/completions'},{secret,appOrigin:origin,allowedHosts:'other.example.com'});
+      await saveAiConfiguration(f.db,context,{...original,model:'new-model'},{secret,appOrigin:origin,allowedHosts:'other.example.com'});
       const fetcher=vi.fn(async()=>Response.json({choices:[{message:{content:'advice'}}]}));
       await expect(runAiAnalysis(f.db,context,{...selection,configurationRevision:preview.configurationRevision,confirmed:true},{secret,origin,fetcher})).rejects.toThrow('settings changed');
       expect(fetcher).not.toHaveBeenCalled();
@@ -59,15 +70,9 @@ describe('analysis consent',()=>{
       expect(sent[1]).toContain('Private Merchant');expect(sent[1]).toContain('Private Note');
     }finally{f.close();}
   });
-  it('rechecks an approved custom host at send time',async()=>{
+  it('rejects custom hosts even if previously approved',async()=>{
     const f=createSqliteD1Fixture();try {
-      await saveAiConfiguration(f.db,context,{provider:'openai',endpoint:'https://custom.example.com/v1/chat/completions',model:'test',credential:'test-key'},{secret,appOrigin:origin,allowedHosts:'custom.example.com'});
-      const selection={provider:'openai' as const,from:'2026-10-01',to:'2026-10-31',detail:false,mode:'ledger' as const};
-      const preview=await previewAiAnalysis(f.db,context,selection);
-      const fetcher=vi.fn(async()=>Response.json({choices:[{message:{content:'advice'}}]}));
-      await expect(runAiAnalysis(f.db,context,{...selection,configurationRevision:preview.configurationRevision,confirmed:true},{secret,origin,fetcher})).rejects.toThrow('not approved');
-      expect(fetcher).not.toHaveBeenCalled();
-      expect(await runAiAnalysis(f.db,context,{...selection,configurationRevision:preview.configurationRevision,confirmed:true},{secret,origin,allowedHosts:'custom.example.com',fetcher})).toBe('advice');
+      await expect(saveAiConfiguration(f.db,context,{provider:'openai',endpoint:'https://custom.example.com/v1/chat/completions',model:'test',credential:'test-key'},{secret,appOrigin:origin,allowedHosts:'custom.example.com'})).rejects.toThrow('not approved');
     }finally{f.close();}
   });
 });

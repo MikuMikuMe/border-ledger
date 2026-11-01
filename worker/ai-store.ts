@@ -3,9 +3,10 @@ import type {D1Database} from './db-types';
 import {financialAuthorityPredicate,type FinancialContext} from './financial-authority';
 import {sealAiCredential,type AiProvider} from './ai-crypto';
 import {validateAiEndpoint} from './ai-provider';
+import {validateProviderEndpoint} from './ai-endpoint';
 export interface AiConfiguration {provider:AiProvider;endpoint:string;model:string;credential:string}
 function validateProvider(provider:unknown):asserts provider is AiProvider {
-  if(provider!=='openai' && provider!=='anthropic') throw new RangeError('Invalid provider');
+  if(!['openai','anthropic','deepseek'].includes(provider as string)) throw new RangeError('Invalid provider');
 }
 export async function listAiConfigurations(db:D1Database,context:FinancialContext) {
   const authority=financialAuthorityPredicate(context,'ledger:read');
@@ -24,6 +25,7 @@ function validateConfiguration(input:AiConfiguration,options:ConfigurationOption
   validateModel(input.model);
   validateCredential(input.credential);
   const endpoint=validateAiEndpoint(input.endpoint,options.appOrigin,options.allowedHosts);
+  validateProviderEndpoint(input.provider,endpoint);
   if(containsCredential(endpoint,input.credential) || containsCredential(input.model,input.credential)) throw new RangeError('Keep the provider key out of the endpoint');
   return endpoint;
 }

@@ -1,4 +1,4 @@
-export type AiProvider = 'openai' | 'anthropic';
+export type AiProvider = 'openai' | 'anthropic' | 'deepseek';
 export interface AiCredentialBinding { userId:string; ledgerId:string; provider:AiProvider }
 export interface SealedAiCredential { ciphertext:string; iv:string }
 const encoder=new TextEncoder();

@@ -17,3 +17,14 @@ it('discards a preview when the user changes the period while it is loading',asy
   expect(node.textContent).not.toContain('Send for analysis');
   act(()=>root.unmount());node.remove();
 });
+it('selects the official DeepSeek endpoint without permitting an editable destination',async()=>{
+  const api=vi.fn(async()=>({configurations:[],detailedTransactions:false}));
+  const node=document.createElement('div');document.body.append(node);const root=createRoot(node);
+  try {
+    await act(async()=>{root.render(createElement(AnalysisPanel,{api:api as never,month:'2026-10'}));});
+    const provider=node.querySelector('select')!;
+    act(()=>{provider.value='deepseek';provider.dispatchEvent(new Event('change',{bubbles:true}));});
+    expect(node.textContent).toContain('https://api.deepseek.com/chat/completions');
+    expect(node.querySelector('input[type="url"]')).toBeNull();
+  } finally {act(()=>root.unmount());node.remove();}
+});
