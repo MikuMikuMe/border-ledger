@@ -32,7 +32,8 @@ async function activityRates(db:D1Database,rows:TransactionRow[],currency:string
   for(const row of rows) if(row.currency!==currency && !rates.has(row.lock_date)) rates.set(row.lock_date,await getRate(db,row.lock_date,dependencies));
   return rates;
 }
-async function readActivityRows(db:D1Database,context:LedgerContext,query:ActivityQuery,dependencies:ActivityDependencies={},includeIncome=false) {
+async function readActivityRows(db:D1Database,context:LedgerContext,query:ActivityQuery,options:{dependencies:ActivityDependencies;includeIncome:boolean}) {
+  const {dependencies,includeIncome}=options;
   validateQuery(query);
   const result=await db.prepare(`SELECT t.id,t.date,t.category,t.currency,t.amount_minor,t.kind,COALESCE(t.fx_lock_date,t.date) AS lock_date
     FROM transactions t WHERE t.ledger_id=? AND t.date>=? AND t.date<=? AND t.status='confirmed'
@@ -44,9 +45,9 @@ async function readActivityRows(db:D1Database,context:LedgerContext,query:Activi
 }
 
 export async function readBudgetActivity(db:D1Database,context:LedgerContext,query:ActivityQuery,dependencies:ActivityDependencies={}):Promise<BudgetActivity[]> {
- const rows=await readActivityRows(db,context,query,dependencies);
+ const rows=await readActivityRows(db,context,query,{dependencies,includeIncome:false});
  return rows.map(({kind,...row})=>row);
 }
 export async function readTrackingActivity(db:D1Database,context:LedgerContext,query:ActivityQuery,dependencies:ActivityDependencies={}) {
- return readActivityRows(db,context,query,dependencies,true);
+ return readActivityRows(db,context,query,{dependencies,includeIncome:true});
 }

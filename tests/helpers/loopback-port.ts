@@ -14,13 +14,18 @@ async function probePort(port:number):Promise<void> {
   server.listen({host:HOST,port,exclusive:true},()=>server.close(error=>error?reject(error):resolve()));
  });
 }
+function checkedPort(port:number):number {
+ if(!Number.isInteger(port))throw new RangeError('Test transport port is outside the safe range');
+ if(port<MIN_PORT)throw new RangeError('Test transport port is outside the safe range');
+ if(port>MAX_PORT)throw new RangeError('Test transport port is outside the safe range');
+ return port;
+}
 export async function findSafeLoopbackPort(options:{candidate?:()=>number;probe?:(port:number)=>Promise<void>}={}):Promise<number> {
  const candidate=options.candidate??(()=>randomInt(MIN_PORT,MAX_PORT+1));
  const probe=options.probe??probePort;
  let lastError:unknown;
  for(let attempt=0;attempt<MAX_ATTEMPTS;attempt++){
-  const port=candidate();
-  if(!Number.isInteger(port)||port<MIN_PORT||port>MAX_PORT)throw new RangeError('Test transport port is outside the safe range');
+  const port=checkedPort(candidate());
   try {await probe(port);return port;}
   catch(error){if(!isRetryableBindError(error))throw error;lastError=error;}
  }

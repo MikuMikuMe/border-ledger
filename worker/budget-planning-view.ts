@@ -1,6 +1,6 @@
 import type {D1Database} from './db-types';
 import type {FinancialContext} from './financial-authority';
-import {readBudgetSettings,readBudgetAllocations} from './budget-store';
+import {readBudgetSettings,readBudgetAllocations,validateAllocation} from './budget-store';
 import {readBudgetState,readTrackingPlans,readRolloverPolicies,BudgetConflictError,validateBudgetMonth,validatePolicy} from './budget-planning-store';
 import {readTrackingActivity,readBudgetActivity} from './budget-activity';
 import {summarizeTracking} from '../src/domain/budget-tracking';
@@ -36,20 +36,31 @@ function rolloverChanges(input:Parameters<typeof categoryHistory>[0],policy:Budg
   return [{month:before.month,category:policy.category,beforeOpeningMinor:before.openingMinor,afterOpeningMinor:after.openingMinor,beforeClosingMinor:before.availableMinor,afterClosingMinor:after.availableMinor}];
  });
 }
+function validateRolloverInput(policy:BudgetRolloverPolicy):void {
+ validateBudgetMonth(policy.effectiveMonth);
+ validatePolicy(policy.policy);
+ validateAllocation({month:policy.effectiveMonth,category:policy.category,assignedMinor:0});
+}
+async function rolloverSettings(db:D1Database,context:FinancialContext,effectiveMonth:string) {
+ const settings=await readBudgetSettings(db,context);
+ if(!settings)throw new RangeError('Rollover precedes budget start');
+ if(effectiveMonth<settings.startMonth)throw new RangeError('Rollover precedes budget start');
+ return settings;
+}
 async function readRolloverPreviewOnce(db:D1Database,context:FinancialContext,policy:BudgetRolloverPolicy,deps:ViewDependencies={}) {
- validateBudgetMonth(policy.effectiveMonth);validatePolicy(policy.policy);
- if(typeof policy.category!=='string'||policy.category.trim()!==policy.category||!policy.category.length||policy.category.length>120)throw new RangeError('Invalid category');
- const before=await readBudgetState(db,context),settings=await readBudgetSettings(db,context);if(!settings||policy.effectiveMonth<settings.startMonth)throw new RangeError('Rollover precedes budget start');
- const allocations=await readBudgetAllocations(db,context),policies=await readRolloverPolicies(db,context),currentMonth=await currentBudgetMonth(db,context,deps.now?.()??new Date());
+ validateRolloverInput(policy);
+ const before=await readBudgetState(db,context);
+ const settings=await rolloverSettings(db,context,policy.effectiveMonth);
+ const allocations=await readBudgetAllocations(db,context);
+ const policies=await readRolloverPolicies(db,context);
+ const currentMonth=await currentBudgetMonth(db,context,deps.now?.()??new Date());
  const horizon=[currentMonth,policy.effectiveMonth,...allocations.map(row=>row.month)].sort().at(-1)!;
  const activity=await readBudgetActivity(db,context,{from:settings.startMonth+'-01',to:budgetMonthEnd(horizon),currency:settings.currency},deps);
- const state=await readBudgetState(db,context);if(before.revision!==state.revision)throw new BudgetConflictError();
+ const state=await readBudgetState(db,context);
+ if(before.revision!==state.revision)throw new BudgetConflictError();
  const changes=rolloverChanges({month:horizon,category:policy.category,allocations,activity},policy,policies);
  return {...policy,revision:state.revision,changes};
 }
-
-
-
 export async function readRolloverPreview(db:D1Database,context:FinancialContext,policy:BudgetRolloverPolicy,deps:ViewDependencies={}) {
  try {return await readRolloverPreviewOnce(db,context,policy,deps);}
  catch(error) {if(error instanceof BudgetConflictError)return readRolloverPreviewOnce(db,context,policy,deps);throw error;}
