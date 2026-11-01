@@ -195,12 +195,13 @@ function MobileRoot() {
 
 export default function App() {
   if(__DEV__){
+    const {BudgetFixtureHost}=require('./dev/BudgetFixtureHost') as typeof import('./dev/BudgetFixtureHost');
     const {ShellFixtureHost}=require('./dev/ShellFixtureHost') as typeof import('./dev/ShellFixtureHost');
     const {LoginFixtureHost}=require('./dev/LoginFixtureHost') as typeof import('./dev/LoginFixtureHost');
     const {FinanceFixtureHost}=require('./dev/FinanceFixtureHost') as typeof import('./dev/FinanceFixtureHost');
     const {DetailsFixtureHost}=require('./dev/DetailsFixtureHost') as typeof import('./dev/DetailsFixtureHost');
     const {ToolsFixtureHost}=require('./dev/ToolsFixtureHost') as typeof import('./dev/ToolsFixtureHost');
-    return <SafeAreaProvider><ShellFixtureHost><LoginFixtureHost><ToolsFixtureHost><DetailsFixtureHost><FinanceFixtureHost><MobileRoot /></FinanceFixtureHost></DetailsFixtureHost></ToolsFixtureHost></LoginFixtureHost></ShellFixtureHost></SafeAreaProvider>;
+    return <SafeAreaProvider><BudgetFixtureHost><ShellFixtureHost><LoginFixtureHost><ToolsFixtureHost><DetailsFixtureHost><FinanceFixtureHost><MobileRoot /></FinanceFixtureHost></DetailsFixtureHost></ToolsFixtureHost></LoginFixtureHost></ShellFixtureHost></BudgetFixtureHost></SafeAreaProvider>;
   }
   return <SafeAreaProvider><MobileRoot /></SafeAreaProvider>;
 }

@@ -15,6 +15,7 @@ vi.mock('../mobile/node_modules/react-native/index.js', () => ({
 }));
 vi.mock('../mobile/node_modules/react-native-safe-area-context/lib/commonjs/index.js', () => ({SafeAreaView: 'SafeAreaView'}));
 vi.mock('../mobile/node_modules/@react-navigation/native/lib/module/index.js', () => require('@react-navigation/core'));
+vi.mock('../mobile/src/screens/BudgetScreen', () => ({BudgetScreen: () => null}));
 vi.mock('../mobile/src/screens/FinanceScreen', () => ({FinanceScreen: () => null}));
 vi.mock('../mobile/src/screens/DetailsScreen', () => ({DetailsScreen: () => null}));
 vi.mock('../mobile/src/screens/ToolsScreen', () => ({ToolsScreen: () => null}));

@@ -1,3 +1,4 @@
+import {BudgetView} from './components/BudgetView';
 import { PrivateSession, useLedgerApi } from './components/PrivateSession';
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import {
@@ -47,7 +48,7 @@ import RecurringView from './components/RecurringView';
 import MobileAuthorizationPage from './MobileAuthorizationPage';
 import { LunchFlowSection } from './lunchflow';
 
-type View = 'overview' | 'recurring' | 'transactions' | 'imports' | 'accounts';
+type View = 'overview' | 'budget' | 'recurring' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
 type ChartRange = 'daily' | 'weekly' | 'monthly';
 type AppRoute = 'landing' | 'workspace' | 'mobile-authorization';
@@ -145,6 +146,7 @@ const landingWindows: ReportWindow[] = [
 
 const navItems: Array<{ id: View; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'budget', label: 'Budget', icon: WalletCards },
   { id: 'recurring', label: 'Recurring payments', icon: Repeat2 },
   { id: 'transactions', label: 'Transactions', icon: ListFilter },
   { id: 'imports', label: 'Import & review', icon: FileUp },
@@ -978,6 +980,7 @@ function WorkspaceApp() {
               onNavigate={setActiveView}
             />
           ) : null}
+          {activeView === 'budget' ? <BudgetView api={ledgerApi} initialMonth={monthWindow.end.slice(0,7)} accounts={accounts.filter(account=>account.kind==='chequing'||account.kind==='savings').map(account=>({id:account.id,name:account.name,currency:account.currency}))} /> : null}
           {activeView === 'recurring' ? <RecurringView today={monthWindow.end} startDate={monthWindow.start} endDate={monthWindow.end} accounts={accounts} /> : null}
           {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} /> : null}
           {activeView === 'imports' ? (
@@ -1576,4 +1579,3 @@ function AccountOptions({ account, connectionBusy, isConnected, isLunchFlow, isP
 }
 
 export default App;
-

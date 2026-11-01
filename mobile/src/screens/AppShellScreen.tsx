@@ -1,3 +1,4 @@
+import {BudgetScreen} from './BudgetScreen';
 import React, {useEffect, useState} from 'react';
 import {useIsFocused} from '@react-navigation/native';
 import type {ShellDestination} from '@/features/auth/authModel';
@@ -10,6 +11,7 @@ type Props = {dark: boolean; initialDestination: ShellDestination; onAbout(): vo
 function DestinationPanel({dark, selected, onOpen}: {dark: boolean; selected: Page; onOpen(page: Page): void}) {
   const [recurringId, setRecurringId] = useState<string | null>(null);
   useEffect(() => setRecurringId(null), [selected]);
+  if (selected === 'budget') return <BudgetScreen dark={dark}/>;
   if (selected === 'overview' || selected === 'activity') return <FinanceScreen dark={dark} destination={selected}/>;
   if (selected === 'recurring') return <>
     <FinanceScreen dark={dark} destination="recurring" onOpenRecurring={setRecurringId}/>

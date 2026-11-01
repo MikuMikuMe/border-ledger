@@ -1,4 +1,4 @@
-import { LunchFlowError, boundedJson, parseTransactions, type LunchFlowAccount } from './lunchflow';
+import { LunchFlowError, boundedJson, parseTransactions, parseLunchFlowBalance, type LunchFlowAccount } from './lunchflow';
 import { getCurrencyMeta } from '../src/domain/currencies';
 
 export interface LunchFlowPlatformEnv {
@@ -118,6 +118,7 @@ export function createLunchFlowPlatform(env: LunchFlowPlatformEnv, fetcher: type
     authorize(state: string) { const url=new URL(`${OAUTH_BASE}/authorize`); url.search=new URLSearchParams({client_id:config.clientId,redirect_uri:config.redirectUri,state}).toString(); return url.href; },
     exchange: (code: string)=>token({grant_type:'authorization_code',code,redirect_uri:config.redirectUri}),
     refresh: (refreshToken: string)=>token({grant_type:'refresh_token',refresh_token:refreshToken}),
+    getBalance: async(accessToken: string,accountId: string)=>parseLunchFlowBalance(await data(accessToken,`/accounts/${encodeURIComponent(accountId)}/balance`)),
     listAccounts: async(accessToken: string)=>parseAccounts(await data(accessToken,'/accounts')),
     listTransactions: async(accessToken: string,accountId: string)=>parseTransactions(await data(accessToken,`/accounts/${encodeURIComponent(accountId)}/transactions?include_pending=true`),accountId),
     async revoke(userId: string) { await request(fetcher,`${RESOURCE_BASE}/users/${encodeURIComponent(userId)}`,{method:'DELETE',headers:{authorization:`Basic ${btoa(`${config.clientId}:${config.clientSecret}`)}`}},true); },
