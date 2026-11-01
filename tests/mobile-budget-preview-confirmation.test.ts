@@ -24,3 +24,15 @@ it('invalidates an existing preview before changing its outgoing month or policy
  act(()=>tree.root.findByProps({accessibilityLabel:'Outgoing month for Food'}).props.onChangeText('2026-09'));
  expect(changes).toHaveBeenCalledTimes(2);act(()=>tree.unmount());
 });
+
+it.each([{edited:false,label:'Reset next month to zero',policy:'reset'},{edited:true,label:'Carry positive balances only',policy:'carry_positive'}])('refreshes untouched rollover rules and preserves edited drafts: $edited',({edited,label,policy})=>{
+ const preview=vi.fn();
+ const props={dark:false,category:'Food',month:'2026-10',rules:[],busy:false,onPreview:preview};
+ let tree:any;act(()=>{tree=create(React.createElement(RolloverEditor,props));});
+ if(edited)act(()=>tree.root.findByProps({accessibilityLabel:'Carry positive balances only'}).props.onPress());
+ act(()=>tree.update(React.createElement(RolloverEditor,{...props,rules:[{category:'Food',effectiveMonth:'2026-09',policy:'reset'}]})));
+ expect(tree.root.findByProps({accessibilityLabel:label}).props.accessibilityState.checked).toBe(true);
+ act(()=>tree.root.findByProps({accessibilityLabel:'Preview rollover for Food'}).props.onPress());
+ expect(preview).toHaveBeenCalledWith('Food','2026-10',policy);
+ act(()=>tree.unmount());
+});

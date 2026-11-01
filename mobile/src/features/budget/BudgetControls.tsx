@@ -18,7 +18,7 @@ export function useBudgetDisclosure() {
  useEffect(()=>{if(!expanded)return;const subscription=BackHandler?.addEventListener('hardwareBackPress',()=>{setExpanded(false);return true;});return()=>subscription?.remove();},[expanded]);
  return {expanded,setExpanded};
 }
-export function useBudgetDraft(initial:string) {
+export function useBudgetDraft<T extends string>(initial:T) {
  const [value,setValue]=useState(initial),previous=useRef(initial);
  useEffect(()=>{const baseline=previous.current;setValue(current=>current===baseline?initial:current);previous.current=initial;},[initial]);
  return [value,setValue] as const;
