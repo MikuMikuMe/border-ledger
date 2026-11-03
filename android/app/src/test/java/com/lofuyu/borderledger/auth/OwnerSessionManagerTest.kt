@@ -355,8 +355,10 @@ class OwnerSessionManagerTest {
         )
 
         val ownerRequest = MobileRequest("GET", "https://pf.example.com/api/mobile/v1/accounts")
+        val wealthRequest = MobileRequest("GET", "https://pf.example.com/api/mobile/owner/wealth/report")
         val captureRequest = MobileRequest("POST", "https://pf.example.com/api/mobile/v1/alerts")
         assertEquals("Bearer synthetic-owner-access", owner.intercept(ownerRequest).headers["Authorization"])
+        assertEquals("Bearer synthetic-owner-access", owner.intercept(wealthRequest).headers["Authorization"])
         assertEquals("Bearer synthetic-capture", kotlinx.coroutines.withContext(CaptureWork(TestCaptureCredentialProvider(CaptureCredentialRecord("synthetic-capture", "synthetic-device", 1, "2099-01-01T00:00:00Z", "synthetic-revocation", LedgerIdentity("owner", "personal"), "test-session")).current()!!)) { capture.intercept(captureRequest) }.headers["Authorization"])
         assertThrows<CredentialBoundaryException> { owner.intercept(captureRequest) }
         assertThrows<CredentialBoundaryException> { capture.intercept(ownerRequest) }

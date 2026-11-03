@@ -2,6 +2,7 @@ package com.lofuyu.borderledger
 
 import com.lofuyu.borderledger.budget.HttpWorkerBudgetApi
 import com.lofuyu.borderledger.analysis.HttpWorkerAnalysisApi
+import com.lofuyu.borderledger.wealth.HttpWorkerWealthApi
 
 import android.content.Context
 import com.lofuyu.borderledger.api.CaptureApi
@@ -152,6 +153,7 @@ class AppContainer(
     )
     val analysisRepository = HttpWorkerAnalysisApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
     val budgetRepository = HttpWorkerBudgetApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
+    val wealthRepository = HttpWorkerWealthApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
     val recurringRepository = RecurringRepository(
         HttpWorkerRecurringApi(
             origin = BuildConfig.MOBILE_API_ORIGIN,

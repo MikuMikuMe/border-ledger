@@ -1,0 +1,363 @@
+{
+  "results": [
+    {
+      "name": "worker/index.ts",
+      "verdict": "stable",
+      "findings": [
+        {
+          "category": "Overall Code Complexity",
+          "change-details": [
+            {
+              "change-type": "improved",
+              "description": "The mean cyclomatic complexity decreases from 4.69 to 4.64, threshold = 4",
+              "value": 4.63855421686747,
+              "value-before": 4.691358024691358
+            }
+          ],
+          "change-type": "unchanged",
+          "new-pp": 2,
+          "old-pp": 2,
+          "threshold": 4
+        }
+      ]
+    },
+    {
+      "name": "worker/mobile.ts",
+      "verdict": "stable",
+      "findings": [
+        {
+          "category": "Complex Method",
+          "change-details": [
+            {
+              "change-type": "improved",
+              "description": "handleMobileRequest decreases in cyclomatic complexity from 110 to 109, threshold = 9",
+              "locations": [
+                {
+                  "end-line": 893,
+                  "end-line-before": 844,
+                  "function": "handleMobileRequest",
+                  "start-line": 549,
+                  "start-line-before": 498
+                }
+              ],
+              "value": 109,
+              "value-before": 110
+            }
+          ],
+          "change-type": "improved",
+          "new-pp": 6.812,
+          "old-pp": 6.848,
+          "threshold": 9
+        },
+        {
+          "category": "Large Method",
+          "change-details": [
+            {
+              "change-type": "improved",
+              "description": "handleMobileRequest decreases from 346 to 344 lines of code, threshold = 70",
+              "locations": [
+                {
+                  "end-line": 893,
+                  "end-line-before": 844,
+                  "function": "handleMobileRequest",
+                  "start-line": 549,
+                  "start-line-before": 498
+                }
+              ],
+              "value": 344,
+              "value-before": 346
+            }
+          ],
+          "change-type": "unchanged",
+          "new-pp": 0,
+          "old-pp": 0,
+          "threshold": 70
+        },
+        {
+          "category": "Overall Code Complexity",
+          "change-details": [
+            {
+              "change-type": "improved",
+              "description": "The mean cyclomatic complexity decreases from 7.58 to 6.95, threshold = 4",
+              "value": 6.951219512195122,
+              "value-before": 7.583333333333333
+            }
+          ],
+          "change-type": "unchanged",
+          "new-pp": 2,
+          "old-pp": 2,
+          "threshold": 4
+        }
+      ]
+    },
+    {
+      "name": "worker/mobile-auth.ts",
+      "verdict": "improved",
+      "findings": [
+        {
+          "category": "Complex Method",
+          "change-details": [
+            {
+              "change-type": "improved",
+              "description": "authorizeMobileRoute decreases in cyclomatic complexity from 23 to 20, threshold = 9",
+              "locations": [
+                {
+                  "end-line": 523,
+                  "end-line-before": 515,
+                  "function": "authorizeMobileRoute",
+                  "start-line": 505,
+                  "start-line-before": 497
+                }
+              ],
+              "value": 20,
+              "value-before": 23
+            }
+          ],
+          "change-type": "degraded",
+          "new-pp": 2.88,
+          "old-pp": 2.15,
+          "threshold": 9
+        },
+        {
+          "category": "Complex Conditional",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "authorizeMobileRoute no longer has a complex conditional",
+              "locations": [
+                {
+                  "end-line-before": 500,
+                  "function": "authorizeMobileRoute",
+                  "start-line-before": 500
+                }
+              ],
+              "value-before": 2
+            }
+          ],
+          "change-type": "improved",
+          "new-pp": 19.5,
+          "old-pp": 20.5,
+          "threshold": 2
+        },
+        {
+          "category": "Overall Code Complexity",
+          "change-details": [
+            {
+              "change-type": "improved",
+              "description": "The mean cyclomatic complexity decreases from 4.45 to 4.43, threshold = 4",
+              "value": 4.425531914893617,
+              "value-before": 4.446808510638298
+            }
+          ],
+          "change-type": "unchanged",
+          "new-pp": 2,
+          "old-pp": 2,
+          "threshold": 4
+        }
+      ]
+    },
+    {
+      "name": "mobile/src/screens/WealthScreen.tsx",
+      "verdict": "degraded",
+      "findings": [
+        {
+          "category": "Primitive Obsession",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 48.7% of all function arguments are primitive types, threshold = 30.0%",
+              "value": 0.4871794871794872,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.3
+        },
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 43.6% of all arguments to its 38 functions are strings. The threshold for string arguments is 39.0%",
+              "value": 0.4358974358974359,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "tests/mobile-wealth-flow.test.ts",
+      "verdict": "degraded",
+      "findings": [
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 66.7% of all arguments to its 21 functions are strings. The threshold for string arguments is 39.0%",
+              "value": 0.6666666666666667,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "android/app/src/main/java/com/lofuyu/borderledger/wealth/WealthRepository.kt",
+      "verdict": "degraded",
+      "findings": [
+        {
+          "category": "Primitive Obsession",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 57.9% of all function arguments are primitive types, threshold = 30.0%",
+              "value": 0.5789473684210527,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.3
+        },
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 57.9% of all arguments to its 19 functions are strings. The threshold for string arguments is 39.0%",
+              "value": 0.5789473684210527,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "android/app/src/main/java/com/lofuyu/borderledger/react/WealthExternalDocumentOperations.kt",
+      "verdict": "degraded",
+      "findings": [
+        {
+          "category": "Primitive Obsession",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 64.0% of all function arguments are primitive types, threshold = 30.0%",
+              "value": 0.64,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.3
+        },
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 64.0% of all arguments to its 14 functions are strings. The threshold for string arguments is 39.0%",
+              "value": 0.64,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "android/app/src/main/java/com/lofuyu/borderledger/react/WealthModule.kt",
+      "verdict": "degraded",
+      "findings": [
+        {
+          "category": "Primitive Obsession",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 48.0% of all function arguments are primitive types, threshold = 30.0%",
+              "value": 0.48,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.3
+        },
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 48.0% of all arguments to its 14 functions are strings. The threshold for string arguments is 39.0%",
+              "value": 0.48,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "mobile/src/features/wealth/WealthController.ts",
+      "verdict": "degraded",
+      "findings": [
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 66.7% of all arguments to its 13 functions are strings. The threshold for string arguments is 39.0%",
+              "value": 0.6666666666666667,
+              "value-before": 0
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "android/app/src/main/java/com/lofuyu/borderledger/auth/CredentialInterceptors.kt",
+      "verdict": "degraded",
+      "findings": [
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "introduced",
+              "description": "In this module, 58.3% of all arguments to its 12 functions are strings. The threshold for string arguments is 39.0%",
+              "value": 0.5833333333333333,
+              "value-before": 0.4444444444444444
+            }
+          ],
+          "change-type": "introduced",
+          "new-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    }
+  ],
+  "quality_gates": "failed",
+  "metadata": {
+    "checked-file-count": 87,
+    "code-health-eligible-file-count": 87,
+    "status": "issues-found",
+    "total-modified-file-count": 109
+  }
+}

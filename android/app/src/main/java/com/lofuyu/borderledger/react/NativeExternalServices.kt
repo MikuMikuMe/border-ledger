@@ -58,7 +58,7 @@ data class ExternalStartRequest(
     val arguments: JSONObject,
 )
 
-private data class HandoffContext(
+internal data class HandoffContext(
     val value: JSONObject,
     val key: BridgeOperationKey,
 ) {
@@ -74,6 +74,7 @@ private data class ImportPreviewRequest(
 
 /** Native-only persisted handoff arguments. SAF URIs, file bytes and provider tokens never enter JS. */
 class NativeExternalServices(private val r: NativeServiceRuntime) {
+    private val wealthDocuments = WealthExternalDocumentOperations(r)
     private val mutex=Mutex()
     private val plaidCallbackMutex=Mutex()
     private val plaidPreProviderLaunchGate=PlaidPreProviderLaunchGate()
@@ -112,30 +113,27 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
     }
 
     private suspend fun startLocked(request: OwnedExternalStartRequest): Map<String, Any?> {
-        val existing = r.container.bridgeOperations.query(BridgeOperationKey(request.id, request.owner))
-        if (existing != null) {
-            return BridgePayloads.operation(
-                r.container.bridgeOperations.awaitExternal(
-                    BridgeOperationRequest(
-                        request.id,
-                        request.kind,
-                        request.arguments.toString(),
-                        request.owner,
-                    ),
-                ),
-            )
+        val key = BridgeOperationKey(request.id, request.owner)
+        if (r.container.bridgeOperations.query(key) != null) return resumeExisting(request)
+        return beginNew(request)
+    }
+
+    private suspend fun resumeExisting(request: OwnedExternalStartRequest): Map<String, Any?> {
+        val operation = awaitExternal(request)
+        val handoff = pendingFor(request)
+        val resumed = if (DocumentPickerRecovery.shouldRetryExternal(operation.status) && handoff != null) {
+            launchExternal(handoff, request.host, request.owner, operation)
+        } else {
+            operation
         }
-        require(request.kind in EXTERNAL_KINDS)
+        return BridgePayloads.operation(resumed)
+    }
+
+    private suspend fun beginNew(request: OwnedExternalStartRequest): Map<String, Any?> {
+        require(DocumentPickerRecovery.isExternalKind(request.kind))
         val value = persistPendingRequest(request)
         val operation = try {
-            r.container.bridgeOperations.awaitExternal(
-                BridgeOperationRequest(
-                    request.id,
-                    request.kind,
-                    request.arguments.toString(),
-                    request.owner,
-                ),
-            )
+            awaitExternal(request)
         } catch (error: Exception) {
             clearPendingIf(BridgeOperationKey(request.id, request.owner))
             throw error
@@ -149,6 +147,24 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         }
         return BridgePayloads.operation(launchExternal(value, request.host, request.owner, operation))
     }
+
+    private suspend fun awaitExternal(request: OwnedExternalStartRequest): BridgeOperation =
+        r.container.bridgeOperations.awaitExternal(
+            BridgeOperationRequest(
+                request.id,
+                request.kind,
+                request.arguments.toString(),
+                request.owner,
+            ),
+        )
+
+    private suspend fun pendingFor(request: OwnedExternalStartRequest): JSONObject? =
+        pending()?.takeIf {
+            it.optString("operationId") == request.id &&
+                it.optString("owner") == request.owner &&
+                it.optString("kind") == request.kind &&
+                DocumentPickerRecovery.isPickerKind(request.kind)
+        }
 
     private suspend fun persistPendingRequest(request: OwnedExternalStartRequest): JSONObject {
         pending()?.let { previous ->
@@ -193,13 +209,14 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         host: NativeServiceHost,
         owner: String,
         operation: BridgeOperation,
-    ): BridgeOperation = when (value.getString("kind")) {
-        "import_picker", "export_picker" -> launchDocumentPicker(value, host) ?: operation
-        "plaid" -> {
+    ): BridgeOperation {
+        val kind = value.getString("kind")
+        if (DocumentPickerRecovery.isPickerKind(kind)) return launchDocumentPicker(value, host) ?: operation
+        if (kind == "plaid") {
             launchPlaid(value, BridgeOperationKey(value.getString("operationId"), owner))
-            operation
+            return operation
         }
-        else -> error("Unknown external handoff")
+        error("Unknown external handoff")
     }
 
     private suspend fun launchPlaid(value: JSONObject, key: BridgeOperationKey) {
@@ -252,12 +269,11 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
     private suspend fun resumePending(original: JSONObject, owner: String, resultDelivered: Boolean): Boolean {
         val value = pending()?.takeIf { isSamePending(it, original, owner) } ?: return false
         return when (value.getString("kind")) {
-            "import_picker", "export_picker" -> {
+            "plaid" -> markPlaidReturned(BridgeOperationKey(value.getString("operationId"), owner))
+            else -> if (DocumentPickerRecovery.isPickerKind(value.getString("kind"))) {
                 resumeDocumentPicker(value, resultDelivered)
                 false
-            }
-            "plaid" -> markPlaidReturned(BridgeOperationKey(value.getString("operationId"), owner))
-            else -> false
+            } else false
         }
     }
 
@@ -295,10 +311,9 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         val kind=value.getString("kind")
         if(!activeDocumentPickerOperations.add(key.id)) return r.container.bridgeOperations.query(key)
         try {
-            when(kind) {
-                "import_picker" -> host.launchImport(key.id)
-                "export_picker" -> host.launchExport(key.id)
-                else -> error("Unknown document picker")
+            when (DocumentPickerRecovery.destinationFor(kind)) {
+                DocumentPickerRecovery.Destination.IMPORT -> host.launchImport(key.id)
+                DocumentPickerRecovery.Destination.EXPORT -> host.launchExport(key.id)
             }
             return null
         } catch(error: CancellationException) {
@@ -311,7 +326,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                 r.container.bridgeOperations.cancel(key)
                 markDrained(key)
                 clearPendingIf(key)
-                r.changes.emit("files")
+                r.changes.emit(wealthDocuments.changeTopic(value.getString("kind")))
             }
             return r.container.bridgeOperations.query(key)
         }
@@ -327,7 +342,7 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
                 if (!accepted || uri == null) cancelDocument(key)
                 else completeDocument(HandoffContext(value, key), uri)
             }
-            r.changes.emit("files")
+            r.changes.emit(wealthDocuments.changeTopic(value.getString("kind")))
         } finally {
             activeDocumentPickerOperations.remove(key.id)
             documentResultDelivered.set(false)
@@ -338,16 +353,26 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         r.container.bridgeOperations.cancel(key)
         markDrained(key)
         clearPendingIf(key)
-        r.changes.emit("files")
+        r.changes.emit("all")
     }
 
     private suspend fun completeDocument(handoff: HandoffContext, uri: Uri) {
-        r.container.bridgeOperations.completeExternal(handoff.key) {
+        val existing = r.container.bridgeOperations.query(handoff.key)
+        suspend fun writeDocument(): String? {
             check(ownerMatches(handoff.value))
-            r.withFiles(handoff.owner) { processDocument(handoff, uri) }
+            return r.withFiles(handoff.owner) { processDocument(handoff, uri) }
         }
-        markDrained(handoff.key)
-        clearPendingIf(handoff.key)
+        val result = if (DocumentPickerRecovery.shouldRetryExternal(existing?.status)) {
+            r.container.bridgeOperations.retryExternalWithSameIdempotency(handoff.key) { writeDocument() }
+        } else {
+            r.container.bridgeOperations.completeExternal(handoff.key) { writeDocument() }
+        }
+        // Keep an ambiguous export handoff so the same draft identity can
+        // reopen SAF and reconcile it after a transient destination failure.
+        if (!DocumentPickerRecovery.shouldRetainSubmittedHandoff(result.status)) {
+            markDrained(handoff.key)
+            clearPendingIf(handoff.key)
+        }
     }
 
     private suspend fun processDocument(handoff: HandoffContext, uri: Uri): String {
@@ -355,9 +380,14 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         return when (handoff.value.getString("kind")) {
             "import_picker" -> previewImport(ImportPreviewRequest(args.getString("accountId"), handoff.key, uri))
             "export_picker" -> exportLedger(handoff, args, uri)
-            else -> error("Unknown handoff")
+            else -> wealthDocuments.process(handoff, uri)
         }
     }
+
+    suspend fun readWealthImportPreview(operationId: String): String? = wealthDocuments.readCompletedPreview(operationId)
+
+    suspend fun remapWealthImport(sourceOperationId: String, operationId: String, mappingJson: String): String =
+        wealthDocuments.remapCompleted(sourceOperationId, operationId, mappingJson)
 
     private suspend fun previewImport(request: ImportPreviewRequest): String =
         BridgeImportOperations.preview(
@@ -746,7 +776,6 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
     }
     private fun digest(value: String)=MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
     companion object {
-        private val EXTERNAL_KINDS = setOf("import_picker", "export_picker", "plaid")
         private val SUBMITTED_STATUSES = setOf("running", "reconciliation_required", "completed")
         private const val PENDING="rn_external_pending_v1"
         private const val LINK="rn_link_snapshot_v1"

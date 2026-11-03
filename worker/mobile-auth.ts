@@ -12,12 +12,20 @@ export const OWNER_SCOPES = [
   'connections:manage',
   'preferences:write',
   'devices:manage',
+  'wealth:read',
+  'wealth:write',
 ] as const;
 
 export type OwnerScope = typeof OWNER_SCOPES[number];
 export const CAPTURE_SCOPE = 'alerts:write' as const;
 export type CaptureScope = typeof CAPTURE_SCOPE;
 export type LedgerScope = LedgerId;
+
+const MOBILE_OWNER_ROUTE_RE = /^\/api\/mobile\/(?:v1\/|owner\/wealth(?:\/|$))/;
+const OWNER_RESTRICTED_ROUTE_RE = /^\/api\/mobile\/v1\/(?:auth\/|pairings|status$)/;
+const CAPTURE_ROUTE_RE = /^\/api\/mobile\/v1\/(?:status|alerts)$/;
+const REVOCATION_ROUTE_RE = /^\/api\/mobile\/v1\/auth\/revocations$/;
+const PAIRING_VERIFIER_ROUTE_RE = /^\/api\/mobile\/v1\/pairings\/[^/]+\/claim$/;
 
 export type MobileCredentialType = 'owner' | 'capture' | 'revocation' | 'pair-verifier';
 export type RevocationGrantType = 'owner-family' | 'capture-credential';
@@ -495,22 +503,22 @@ export async function assertCaptureEventScope(db:D1Database,context:CaptureConte
 }
 
 export function authorizeMobileRoute(context: MobileContext, pathname: string, requiredScope?: OwnerScope | CaptureScope) {
-  if (!pathname.startsWith('/api/mobile/v1/')) throw new MobileAuthError('forbidden', 'The credential cannot access this route.', 403);
+  if (!MOBILE_OWNER_ROUTE_RE.test(pathname)) throw new MobileAuthError('forbidden', 'The credential cannot access this route.', 403);
   if (context.credentialType === 'owner') {
-    if (pathname.startsWith('/api/mobile/v1/auth/') || pathname.startsWith('/api/mobile/v1/pairings') || pathname === '/api/mobile/v1/status') throw new MobileAuthError('forbidden', 'The owner credential cannot access this route.', 403);
+    if (OWNER_RESTRICTED_ROUTE_RE.test(pathname)) throw new MobileAuthError('forbidden', 'The owner credential cannot access this route.', 403);
     if (requiredScope && !context.scopes.includes(requiredScope as OwnerScope)) throw new MobileAuthError('forbidden', 'The owner session lacks the required scope.', 403);
     return context;
   }
   if (context.credentialType === 'capture') {
-    if (pathname !== '/api/mobile/v1/status' && pathname !== '/api/mobile/v1/alerts') throw new MobileAuthError('forbidden', 'The capture credential cannot access this route.', 403);
+    if (!CAPTURE_ROUTE_RE.test(pathname)) throw new MobileAuthError('forbidden', 'The capture credential cannot access this route.', 403);
     if (requiredScope !== undefined && requiredScope !== CAPTURE_SCOPE) throw new MobileAuthError('forbidden', 'The capture credential cannot access this scope.', 403);
     return context;
   }
   if (context.credentialType === 'revocation') {
-    if (pathname !== '/api/mobile/v1/auth/revocations') throw new MobileAuthError('forbidden', 'The revocation capability cannot access this route.', 403);
+    if (!REVOCATION_ROUTE_RE.test(pathname)) throw new MobileAuthError('forbidden', 'The revocation capability cannot access this route.', 403);
     return context;
   }
-  if (!/^\/api\/mobile\/v1\/pairings\/[^/]+\/claim$/.test(pathname)) throw new MobileAuthError('forbidden', 'The pairing verifier cannot access this route.', 403);
+  if (!PAIRING_VERIFIER_ROUTE_RE.test(pathname)) throw new MobileAuthError('forbidden', 'The pairing verifier cannot access this route.', 403);
   return context;
 }
 
@@ -530,7 +538,7 @@ export function isAllowedMobileOrigin(request: Request, config: Pick<MobileAuthC
 }
 
 export function isMobileAuthPath(pathname: string) {
-  return pathname === '/api/mobile/v1' || pathname.startsWith('/api/mobile/v1/') || pathname.startsWith('/api/mobile-auth/') || pathname.startsWith('/api/device-pairings/');
+  return pathname === '/api/mobile/v1' || pathname.startsWith('/api/mobile/v1/') || pathname === '/api/mobile/owner/wealth' || pathname.startsWith('/api/mobile/owner/wealth/') || pathname.startsWith('/api/mobile-auth/') || pathname.startsWith('/api/device-pairings/');
 }
 
 export { constantTimeEqual };

@@ -106,9 +106,10 @@ export function recurringMessage(state:string):string {
   return ({waiting:'Recurring history is still being prepared.',incomplete:'Recurring history is incomplete; estimates are limited to observed coverage.',stale:'Showing the last good recurring result; the source is stale.',unavailable:'The recurring product is unavailable for this connection.',error:'The recurring source reported an error.'} as Record<string,string>)[state]??'No recurring streams match these filters.';
 }
 export type LoadState<T>={phase:'loading'|'ready'|'offline'|'error'|'locked';data:T|null;message:string|null};
+const OWNER_SESSION_CODES = new Set(['unauthorized', 'not_signed_in', 'wealth_scope_required']);
 export function errorState(error:unknown):{phase:'offline'|'error'|'locked';message:string} {
   const code=(error as {code?:string})?.code;
-  if(code==='unauthorized'||code==='not_signed_in')return {phase:'locked',message:'Renew your owner session to continue.'};
+  if(OWNER_SESSION_CODES.has(code ?? ''))return {phase:'locked',message:'Renew your owner session to continue.'};
   if(code==='offline')return {phase:'offline',message:'Unavailable offline. Showing cached results where available; refresh when online.'};
   return {phase:'error',message:'The native service could not load this view. Try again.'};
 }

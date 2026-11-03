@@ -2,6 +2,7 @@ import type {AiEgressBinding} from './ai-egress';
 import { handleAiApi } from './ai-http';
 import { handleBudgetApi } from './budget-http';
 import { handlePlanApi } from './recurring-plans-http';
+import { handleWealthApi } from './wealth-http';
 import { NATIVE_PROTOCOL } from './client-identity';
 import { bindWebResponse, matchesExpectedWebSession, webIdentityHeaders } from './client-identity';
 import { runLunchFlowJob, scheduleLunchFlow } from './lunchflow-jobs';
@@ -79,10 +80,12 @@ interface Env {
   ACCESS_AUDIENCE?: string;
   ACCESS_TEAM_DOMAIN?: string;
   LEDGER_API_KEY?: string;
+  fetcher?: typeof fetch;
   PLAID_CLIENT_ID?: string;
   PLAID_SECRET?: string;
   PLAID_ENV?: string;
   AI_CREDENTIAL_ENCRYPTION_KEY?: string;
+  WEALTH_CREDENTIAL_ENCRYPTION_KEY?: string;
   AI_ALLOWED_ENDPOINT_HOSTS?: string;
   AI_EGRESS?: AiEgressBinding;
   AI_EGRESS_AUTH_KEY?: string;
@@ -106,6 +109,10 @@ interface Env {
   LUNCHFLOW_REDIRECT_URI?:string;
   LUNCHFLOW_TOKEN_ENCRYPTION_KEY?:string;
   LUNCHFLOW_API_BASE_URL?: string;
+}
+
+function wealthHttpEnvironment({ WEALTH_CREDENTIAL_ENCRYPTION_KEY, fetcher = fetch }: Pick<Env, 'WEALTH_CREDENTIAL_ENCRYPTION_KEY' | 'fetcher'>) {
+  return { WEALTH_CREDENTIAL_ENCRYPTION_KEY, fetcher };
 }
 
 type Currency = CurrencyCode;
@@ -1044,7 +1051,9 @@ async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, 
       () => handleRecurringRoutes(request, env, url, context),
       () => handleImportAndPlaidRoutes(request, env, url, context),
     ]);
-    return response ?? json({ error: 'Not found' }, { status: 404 });
+    if (response) return response;
+    const wealthResponse = await handleWealthApi(request, env.DB, context, { root: '/api/wealth', env: wealthHttpEnvironment(env) });
+    return wealthResponse ?? json({ error: 'Not found' }, { status: 404 });
   } catch (error) {
     return errorResponse(error);
   }
@@ -1117,6 +1126,10 @@ async function handleSessionApi(request: Request, env: Env, url: URL, context: L
     return bindWebResponse(response, identity);
 }
 
+function isMobileApiPath(pathname: string): boolean {
+  return pathname.startsWith('/api/mobile/v1/') || pathname === '/api/mobile/owner/wealth' || pathname.startsWith('/api/mobile/owner/wealth/');
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -1165,7 +1178,7 @@ export default {
         return errorResponse(error);
       }
     }
-    if (url.pathname.startsWith('/api/mobile/v1/')) {
+    if (isMobileApiPath(url.pathname)) {
       return (await handleMobileRequest(request, env)) ?? json({ error: 'Not found' }, { status: 404 });
     }
     if (url.pathname.startsWith('/api/mobile-auth/') || url.pathname.startsWith('/api/device-pairings/')) {

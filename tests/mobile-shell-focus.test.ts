@@ -17,6 +17,7 @@ vi.mock('../mobile/node_modules/react-native-safe-area-context/lib/commonjs/inde
 vi.mock('../mobile/node_modules/@react-navigation/native/lib/module/index.js', () => require('@react-navigation/core'));
 vi.mock('../mobile/src/screens/BudgetScreen', () => ({BudgetScreen: () => null}));
 vi.mock('../mobile/src/screens/FinanceScreen', () => ({FinanceScreen: () => null}));
+vi.mock('../mobile/src/screens/WealthScreen', () => ({WealthScreen: (props: {isFocused?: boolean}) => React.createElement('WealthFocus', {isFocused: props.isFocused})}));
 vi.mock('../mobile/src/screens/DetailsScreen', () => ({DetailsScreen: () => null}));
 vi.mock('../mobile/src/screens/ToolsScreen', () => ({ToolsScreen: () => null}));
 const screenModule = '../mobile/src/screens/AppShellScreen';
@@ -61,4 +62,22 @@ it('system Back dismisses About in one press and preserves the mounted More page
   // The shell must resume handling Back after regaining focus.
   systemBack();
   expect(tree.root.findAllByType('Pressable').find((node: any) => label(node) === 'Overview').props.accessibilityState.selected).toBe(true);
+});
+
+it('forwards native-stack focus to Wealth so its detail Back handler cannot consume blurred Back', async () => {
+  const navigation = core.createNavigationContainerRef();
+  await act(async () => {tree = create(React.createElement(core.BaseNavigationContainer, {ref: navigation},
+    React.createElement(Stack.Navigator, null,
+      React.createElement(Stack.Screen, {name: 'Shell'}, () => React.createElement(AppShellScreen, {
+        dark: false, initialDestination: 'overview', onAbout: () => navigation.navigate('About'), onSignOut: async () => {},
+      })),
+      React.createElement(Stack.Screen, {name: 'About'}, () => React.createElement('About')),
+    )));});
+  press('More');
+  act(() => {tree.root.findAllByType('Pressable').find((node: any) => label(node).startsWith('Wealth ')).props.onPress();});
+  expect(tree.root.findByType('WealthFocus').props.isFocused).toBe(true);
+  act(() => { navigation.navigate('About'); });
+  expect(tree.root.findByType('WealthFocus').props.isFocused).toBe(false);
+  act(() => { navigation.goBack(); });
+  expect(tree.root.findByType('WealthFocus').props.isFocused).toBe(true);
 });

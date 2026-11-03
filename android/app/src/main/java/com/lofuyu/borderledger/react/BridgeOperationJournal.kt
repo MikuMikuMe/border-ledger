@@ -136,7 +136,7 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
             mutex.withLock { active.remove(request.id) }
             throw error
         } catch (error: Exception) {
-            finish(request.id, JournalCompletion(failureStatus(error), (error as? com.lofuyu.borderledger.accounts.LunchFlowRequestFailure)?.let { "lunchflow_error:${it.code}" }))
+            finish(request.id, JournalCompletion(failureStatus(error), failureReceipt(error)))
         }
     }
 
@@ -256,7 +256,7 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
             mutex.withLock { active.remove(operationKey.id) }
             throw error
         } catch (error: Exception) {
-            finish(operationKey.id, JournalCompletion(failureStatus(error), (error as? com.lofuyu.borderledger.accounts.LunchFlowRequestFailure)?.let { "lunchflow_error:${it.code}" }))
+            finish(operationKey.id, JournalCompletion(failureStatus(error), failureReceipt(error)))
         }
     }
 
@@ -297,11 +297,27 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
         is com.lofuyu.borderledger.recurring.RecurringPlanRejected -> JournalStatuses.Rejected
         is com.lofuyu.borderledger.recurring.RecurringRevisionConflict,
         is com.lofuyu.borderledger.budget.BudgetRevisionConflict,
+        is com.lofuyu.borderledger.wealth.WealthRevisionConflict,
         is com.lofuyu.borderledger.review.ReviewRevisionConflict,
         is com.lofuyu.borderledger.ui.accounts.devices.DeviceRevisionConflict,
         is com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.RevisionConflict -> JournalStatuses.RevisionConflict
+        is com.lofuyu.borderledger.wealth.WealthRequestRejected,
+        is com.lofuyu.borderledger.wealth.WealthAuthorizationRequired -> JournalStatuses.Rejected
         else -> JournalStatuses.ReconciliationRequired
     }
+
+    private fun failureReceipt(error: Exception): String? = when (error) {
+        is com.lofuyu.borderledger.accounts.LunchFlowRequestFailure -> "lunchflow_error:${error.code}"
+        is com.lofuyu.borderledger.wealth.WealthRequestRejected -> wealthReceipt("request_rejected", error.reason)
+        is com.lofuyu.borderledger.wealth.WealthRevisionConflict -> wealthReceipt("revision_conflict", error.reason)
+        is com.lofuyu.borderledger.wealth.WealthAuthorizationRequired -> wealthReceipt("wealth_scope_required", "Wealth access changed. Sign in again to continue.")
+        else -> null
+    }
+
+    private fun wealthReceipt(code: String, reason: String?): String = JSONObject()
+        .put("code", code)
+        .put("reason", reason ?: "The server rejected this Wealth request. Review the current report and try again.")
+        .toString()
     private suspend fun unresolved(request: JournalRequest): BridgeOperation? {
         val index=records.read(indexKey(request.owner))?.let { JSONObject(it.decodeToString()) } ?: return null
         val id=index.optString(operationFingerprint(request)).takeIf { it.isNotBlank() }?.let(::JournalOperationId) ?: return null

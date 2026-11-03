@@ -72,6 +72,7 @@ import {
   readMobileRecurringSummary,
   RecurringServiceError,
 } from './recurring-service';
+import { handleWealthApi } from './wealth-http';
 
 export interface MobileRouteEnv {
   DB: D1Database;
@@ -84,10 +85,12 @@ export interface MobileRouteEnv {
   MOBILE_APPROVED_ACCESS_AUDIENCES?: string;
   MOBILE_APPROVED_ACCESS_SUBJECTS?: string;
   now?: () => Date;
+  fetcher?: typeof fetch;
   PLAID_CLIENT_ID?: string;
   PLAID_SECRET?: string;
   PLAID_ENV?: string;
   AI_CREDENTIAL_ENCRYPTION_KEY?: string;
+  WEALTH_CREDENTIAL_ENCRYPTION_KEY?: string;
   AI_ALLOWED_ENDPOINT_HOSTS?: string;
   AI_EGRESS?: AiEgressBinding;
   AI_EGRESS_AUTH_KEY?: string;
@@ -108,6 +111,32 @@ export interface MobileRouteEnv {
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 const MOBILE_AUTHORIZATION_PATH = '/mobile/authorize';
 const MOBILE_CALLBACK_PATH = '/android/auth/callback';
+const OWNER_WEALTH_ROOT = '/api/mobile/owner/wealth';
+const VERSIONED_WEALTH_ROOT = '/api/mobile/v1/wealth';
+const OWNER_WEALTH_ROUTE_RE = /^\/api\/mobile\/owner\/wealth(?:\/|$)/;
+const VERSIONED_WEALTH_ROUTE_RE = /^\/api\/mobile\/v1\/wealth(?:\/|$)/;
+
+function wealthHttpEnvironment({ WEALTH_CREDENTIAL_ENCRYPTION_KEY, fetcher = fetch }: Pick<MobileRouteEnv, 'WEALTH_CREDENTIAL_ENCRYPTION_KEY' | 'fetcher'>) {
+  return { WEALTH_CREDENTIAL_ENCRYPTION_KEY, fetcher };
+}
+
+function wealthRoot(pathname: string): string | null {
+  if (OWNER_WEALTH_ROUTE_RE.test(pathname)) return OWNER_WEALTH_ROOT;
+  if (VERSIONED_WEALTH_ROUTE_RE.test(pathname)) return VERSIONED_WEALTH_ROOT;
+  return null;
+}
+
+function wealthScope(request: Request, pathname: string): 'wealth:read' | 'wealth:write' {
+  if (request.method === 'GET') return 'wealth:read';
+  if (pathname.endsWith('/quotes/search')) return 'wealth:read';
+  return 'wealth:write';
+}
+
+function isWealthPeriodRequest(request: Request, url: URL, root: string): boolean {
+  if (request.method !== 'GET') return false;
+  if (url.pathname !== root) return false;
+  return ['periodStart', 'periodEnd'].some((key) => url.searchParams.has(key));
+}
 
 function json(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), { ...init, headers: { ...apiSecurityHeaders(), ...JSON_HEADERS, ...init.headers } });
@@ -495,6 +524,28 @@ async function handleMobilePlanRequest(request: Request, env: MobileRouteEnv, co
   return handlePlanApi(request, env.DB, owner, root);
 }
 
+async function handleMobileWealthRequest(request: Request, env: MobileRouteEnv, config: MobileAuthConfig, url: URL) {
+  const root = wealthRoot(url.pathname);
+  if (!root) return null;
+  const scope = wealthScope(request, url.pathname);
+  const owner = await authenticateOwner(bearer(request), env.DB, config, scope);
+  authorizeMobileRoute(owner, url.pathname, scope);
+  if (isWealthPeriodRequest(request, url, root)) {
+    const reportUrl = new URL(request.url); reportUrl.pathname = `${root}/report`;
+    return handleWealthApi(new Request(reportUrl, request), env.DB, owner, { root, env: wealthHttpEnvironment(env) });
+  }
+  return handleWealthApi(request, env.DB, owner, { root, env: wealthHttpEnvironment(env) });
+}
+
+async function handleMobileFeatureRoutes(request: Request, env: MobileRouteEnv, config: MobileAuthConfig, url: URL): Promise<Response | null> {
+  const wealthResponse = await handleMobileWealthRequest(request, env, config, url);
+  if (wealthResponse) return wealthResponse;
+  const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
+  if (lunchFlowResponse) return lunchFlowResponse;
+  const connectionResponse = await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
+  return connectionResponse;
+}
+
 export async function handleMobileRequest(request: Request, env: MobileRouteEnv, accessIdentity: AccessIdentity | null = null): Promise<Response | null> {
   const url = new URL(request.url);
   if (!isMobileAuthPath(url.pathname)) return null;
@@ -739,10 +790,8 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');
       return json(await readOwnerLedgerSnapshot(env.DB, owner), { status: 200, headers: { 'cache-control': 'no-store' } });
     }
-    const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
-    if (lunchFlowResponse) return lunchFlowResponse;
-    const connectionResponse = await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
-    if (connectionResponse) return connectionResponse;
+    const featureResponse = await handleMobileFeatureRoutes(request, env, config, url);
+    if (featureResponse) return featureResponse;
     if (request.method === 'GET' && url.pathname === '/api/mobile/v1/transactions') {
       const owner = await authenticateOwner(bearer(request), env.DB, config, 'ledger:read');
       authorizeMobileRoute(owner, url.pathname, 'ledger:read');

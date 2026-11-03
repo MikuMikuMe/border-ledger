@@ -1,0 +1,11 @@
+record_type,id,source_id,date,kind,account_id,name,account_kind,account_mode,currency,amount_minor,active,linked_bank_account_id,exchange,ticker,type,quantity,basis_minor,consideration_minor,proceeds_minor,fee_minor,from_account_id,to_account_id,transfer_kind,transfer_id,target_source_id,linked_bank_source_id,memo,as_of,price_minor,source,provider,sequence,event_json
+account,qa-cad-portfolio,,,,,Synthetic Canadian portfolio,brokerage,holdings,CAD,,1,,,,,,,,,,,,,,,,,,,,,,
+account,qa-us-portfolio,,,,,Synthetic US ETF portfolio,brokerage,holdings,USD,,1,,,,,,,,,,,,,,,,,,,,,,
+instrument,qa-ry,,,,,,,,CAD,,,,TSX,RY,stock,,,,,,,,,,,,,,,,,,
+instrument,qa-vti,,,,,,,,USD,,,,NYSEARCA,VTI,etf,,,,,,,,,,,,,,,,,,
+event,qa-cad-cash,qa-cad-cash,2026-11-01,opening_cash,qa-cad-portfolio,,,,CAD,100000,,,,,,,,,,,,,,,,,,,,,,,
+event,qa-cad-position,qa-cad-position,2026-11-01,opening_position,qa-cad-portfolio,,,,CAD,,,,TSX,RY,stock,4,40000,,,,,,,,,,,,,,,,
+event,qa-us-cash,qa-us-cash,2026-11-01,opening_cash,qa-us-portfolio,,,,USD,50000,,,,,,,,,,,,,,,,,,,,,,,
+event,qa-us-position,qa-us-position,2026-11-01,opening_position,qa-us-portfolio,,,,USD,,,,NYSEARCA,VTI,etf,2,40000,,,,,,,,,,,,,,,,
+valuation,qa-ry-opening-price,,,,qa-cad-portfolio,,,,CAD,,,,TSX,RY,stock,,,,,,,,,,,,,2026-11-01,10000,manual,,,
+valuation,qa-vti-opening-price,,,,qa-us-portfolio,,,,USD,,,,NYSEARCA,VTI,etf,,,,,,,,,,,,,2026-11-01,20000,manual,,,

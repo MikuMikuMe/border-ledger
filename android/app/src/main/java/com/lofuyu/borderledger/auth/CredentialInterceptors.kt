@@ -45,11 +45,19 @@ class OwnerAuthInterceptor(
         ?: throw CredentialBoundaryException("Sign in again to bind this request.")
 
     private fun isOwnerPath(path: String, method: String): Boolean {
+        if (isWealthPath(path)) return true
         if (!path.startsWith("/api/mobile/v1/")) return false
-        if (path.startsWith("/api/mobile/v1/auth/") || path.startsWith("/api/mobile/v1/pairings")) return false
+        return isVersionedOwnerPath(path, method)
+    }
+
+    private fun isWealthPath(path: String): Boolean = path == "/api/mobile/owner/wealth" || path.startsWith("/api/mobile/owner/wealth/")
+
+    private fun isVersionedOwnerPath(path: String, method: String): Boolean {
+        if (path.startsWith("/api/mobile/v1/auth/")) return false
+        if (path.startsWith("/api/mobile/v1/pairings")) return false
         if (path == "/api/mobile/v1/status" || path == "/api/mobile/v1/auth/revocations") return false
-        if (path == "/api/mobile/v1/alerts" && method != "GET") return false
-        return true
+        if (path != "/api/mobile/v1/alerts") return true
+        return method == "GET"
     }
 }
 
