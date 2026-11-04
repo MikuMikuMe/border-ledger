@@ -20,6 +20,7 @@ import { assertFinancialAuthority, financialAuthorityPredicate, type FinancialCo
 import type { StoredBalance } from './lunchflow-balance-store';
 import type { TransactionAliasRow } from './wealth-store-cashflows';
 import { readWealthReportProjection, readWealthSnapshotProjection, type WealthReportReadServices } from './wealth-store-reports';
+import { eventsForCurrentModeSegment } from './wealth-segment-projection';
 
 export type WealthOpeningPositionInput = WealthOpeningPositionRequest;
 export type WealthModeTransitionInput = WealthModeTransitionRequest;
@@ -609,22 +610,6 @@ function accountsAtDate(accounts: readonly (WealthAccount & { amountMinor?: numb
   return accounts.map((account) => ({ ...account, mode: modeAtDate(account, transitions, asOf) }));
 }
 
-function eventInModeSegment(event: WealthEvent, accounts: readonly WealthAccount[], transitions: readonly StoredModeTransition[], asOf: string): boolean {
-  const byId = new Map(accounts.map((account) => [account.id, account]));
-  const accountIds = wealthEventAccountIds(event);
-  if (accountIds.length === 0) return false;
-  return accountIds.every((accountId) => {
-    const account = byId.get(accountId);
-    if (!account) return false;
-    const segment = modeSegment(account, transitions, asOf);
-    return segment.mode === 'holdings' && (segment.startDate === null || event.date >= segment.startDate);
-  });
-}
-
-function eventsForCurrentModeSegment(events: readonly WealthEvent[], accounts: readonly WealthAccount[], transitions: readonly StoredModeTransition[], asOf: string): readonly WealthEvent[] {
-  return resolveWealthEvents(events.filter((event) => event.date <= asOf)).filter((event) => eventInModeSegment(event, accounts, transitions, asOf));
-}
-
 async function loadAccounts(db: D1Database, context: FinancialContext) {
   const rows = await db.prepare(`SELECT ledger_id,id,name,kind,mode,currency,linked_bank_account_id,amount_minor,active,revision FROM wealth_accounts WHERE ledger_id=? ORDER BY id`).bind(context.ledgerId).all<StoredAccount>();
   return rows.results.map(accountView);
@@ -976,6 +961,22 @@ export async function assertBankLinkAvailable(db: D1Database, context: Financial
   }
 }
 
+function correctionLineageEvents(events: readonly WealthEvent[], event: WealthEvent): readonly WealthEvent[] {
+  if (event.kind !== 'correction') return [];
+  const bySourceId = new Map(events.map((candidate) => [candidate.sourceId, candidate]));
+  const lineage: WealthEvent[] = [event];
+  const visited = new Set<string>();
+  let targetSourceId: string | null = event.targetSourceId;
+  while (targetSourceId && !visited.has(targetSourceId)) {
+    visited.add(targetSourceId);
+    const target = bySourceId.get(targetSourceId);
+    if (!target) break;
+    lineage.push(target);
+    targetSourceId = target.kind === 'correction' || target.kind === 'reversal' ? target.targetSourceId : null;
+  }
+  return lineage;
+}
+
 export async function appendWealthEvent(db: D1Database, context: FinancialContext, input: unknown, options: { expectedRevision?: number; operationId?: string } = {}): Promise<{ event: WealthEvent; revision: number; replayed?: boolean }> {
   await assertFinancialAuthority(db, context, 'wealth:write');
   const event = normalizeEvent(input); const revision = await currentRevision(db, context);
@@ -985,8 +986,14 @@ export async function appendWealthEvent(db: D1Database, context: FinancialContex
     if (await digest(eventForDigest(prior)) !== await digest(eventForDigest(event))) throw new WealthStoreError('source_conflict', 'The wealth source id was reused with different content.', 409);
     return { event: prior, revision, replayed: true };
   }
-  const expected = options.expectedRevision ?? revision; await validateExpected(db, context, expected); await validateTransferModes(db, context, event); await validateEventAccountModes(db, context, event); await assertBankLinkAvailable(db, context, event); const events = await loadStoredEvents(db, context); const orderedEvent = { ...event, sequence: (await currentEventSequence(db, context)) + 1 } as WealthEvent;
-  try { replayWealthEvents([...events, orderedEvent]); } catch (error) { if (error instanceof WealthDomainError) throw new WealthStoreError(error.code, error.message); throw error; }
+  const expected = options.expectedRevision ?? revision; await validateExpected(db, context, expected); await validateTransferModes(db, context, event); await validateEventAccountModes(db, context, event); await assertBankLinkAvailable(db, context, event);
+  const [events, accounts, transitions] = await Promise.all([loadStoredEvents(db, context), loadAccounts(db, context), loadModeTransitions(db, context)]);
+  const orderedEvent = { ...event, sequence: (await currentEventSequence(db, context)) + 1 } as WealthEvent;
+  const proposedEvents = [...events, orderedEvent];
+  try {
+    resolveWealthEvents(proposedEvents);
+    replayWealthEvents(eventsForCurrentModeSegment(proposedEvents, accounts, transitions, eventModeDate(event), { lineageEvents: correctionLineageEvents(proposedEvents, orderedEvent) }), { accounts });
+  } catch (error) { if (error instanceof WealthDomainError) throw new WealthStoreError(error.code, error.message); throw error; }
   const fields = eventAccountFields(orderedEvent); const next = expected + 1; const response = { event: orderedEvent, revision: next };
   return runMutation(db, context, { operationId: options.operationId ?? `event-${event.sourceId}`, operationKind: 'event.append', expectedRevision: expected, eventCount: 1, payloadHash: await digest(eventForDigest(event)), response, statements: (guard) => [db.prepare(`INSERT INTO wealth_events(ledger_id,id,source_id,date,sequence,kind,account_id,from_account_id,to_account_id,linked_bank_source_id,payload_json) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE ${guard.sql}`).bind(context.ledgerId, orderedEvent.id, orderedEvent.sourceId, orderedEvent.date, orderedEvent.sequence, orderedEvent.kind, fields.accountId, fields.fromAccountId, fields.toAccountId, orderedEvent.linkedBankSourceId ?? null, JSON.stringify(orderedEvent), ...guard.bindings)] });
 }

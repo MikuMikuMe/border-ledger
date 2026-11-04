@@ -1,5 +1,7 @@
 # Wealth verification record
 
+Latest: [PR 85 review fixes and architecture refresh](pr85-review/README.md), verified 2026-11-04. The older results below are retained as historical evidence.
+
 Local verification: 2026-11-03. Base: `origin/main` at `1ebfabbaf98e57004709f61510c9f82d7e201319`.
 
 ## Environment and scope

@@ -1,0 +1,207 @@
+{
+  "results": [
+    {
+      "name": "tests/mobile-wealth-flow.test.ts",
+      "verdict": "improved",
+      "findings": [
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of strings in function arguments is no longer above the threshold",
+              "value": 0,
+              "value-before": 0.6153846153846154
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "mobile/src/screens/WealthScreen.tsx",
+      "verdict": "improved",
+      "findings": [
+        {
+          "category": "Primitive Obsession",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of primivite types in function arguments is no longer above the threshold",
+              "value": 0.2333333333333333,
+              "value-before": 0.4871794871794872
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.3
+        },
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of strings in function arguments is no longer above the threshold",
+              "value": 0.1666666666666667,
+              "value-before": 0.4358974358974359
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "android/app/src/main/java/com/lofuyu/borderledger/wealth/WealthRepository.kt",
+      "verdict": "improved",
+      "findings": [
+        {
+          "category": "Primitive Obsession",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of primivite types in function arguments is no longer above the threshold",
+              "value": 0.2,
+              "value-before": 0.5789473684210527
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.3
+        },
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of strings in function arguments is no longer above the threshold",
+              "value": 0.2,
+              "value-before": 0.5789473684210527
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "android/app/src/main/java/com/lofuyu/borderledger/react/WealthExternalDocumentOperations.kt",
+      "verdict": "improved",
+      "findings": [
+        {
+          "category": "Primitive Obsession",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of primivite types in function arguments is no longer above the threshold",
+              "value": 0.05555555555555556,
+              "value-before": 0.64
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.3
+        },
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of strings in function arguments is no longer above the threshold",
+              "value": 0.05555555555555556,
+              "value-before": 0.64
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "android/app/src/main/java/com/lofuyu/borderledger/react/WealthModule.kt",
+      "verdict": "improved",
+      "findings": [
+        {
+          "category": "Primitive Obsession",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of primivite types in function arguments is no longer above the threshold",
+              "value": 0.2903225806451613,
+              "value-before": 0.48
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.3
+        },
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of strings in function arguments is no longer above the threshold",
+              "value": 0.2903225806451613,
+              "value-before": 0.48
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "mobile/src/features/wealth/WealthController.ts",
+      "verdict": "improved",
+      "findings": [
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of strings in function arguments is no longer above the threshold",
+              "value": 0,
+              "value-before": 0.6666666666666667
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    },
+    {
+      "name": "android/app/src/main/java/com/lofuyu/borderledger/auth/CredentialInterceptors.kt",
+      "verdict": "improved",
+      "findings": [
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "fixed",
+              "description": "The ratio of strings in function arguments is no longer above the threshold",
+              "value": 0.1666666666666667,
+              "value-before": 0.5833333333333333
+            }
+          ],
+          "change-type": "fixed",
+          "old-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    }
+  ],
+  "quality_gates": "passed",
+  "metadata": {
+    "checked-file-count": 21,
+    "code-health-eligible-file-count": 21,
+    "status": "issues-found",
+    "total-modified-file-count": 40
+  }
+}

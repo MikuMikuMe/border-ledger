@@ -1,0 +1,125 @@
+{
+  "checkedAt": "2026-11-04",
+  "scope": "PR85 review follow-up",
+  "files": [
+    {
+      "file": "android/app/src/main/java/com/lofuyu/borderledger/auth/CredentialInterceptors.kt",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "android/app/src/main/java/com/lofuyu/borderledger/react/NativeExternalServices.kt",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "android/app/src/main/java/com/lofuyu/borderledger/react/WealthExternalDocumentOperations.kt",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "android/app/src/main/java/com/lofuyu/borderledger/react/WealthModule.kt",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "android/app/src/main/java/com/lofuyu/borderledger/wealth/WealthRepository.kt",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "android/app/src/main/java/com/lofuyu/borderledger/react/WealthBridgeTypes.kt",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "mobile/src/features/wealth/WealthController.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "mobile/src/screens/WealthScreen.tsx",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "src/components/wealth/WealthAccountForm.tsx",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "src/components/wealth/wealth-form-shared.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "tests/mobile-wealth-controller.test.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "tests/mobile-wealth-flow.test.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "tests/wealth-api.test.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "tests/wealth-store.test.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "worker/wealth-import-export.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "worker/wealth-import-validation.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "worker/wealth-store-reports.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "worker/wealth-store.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    },
+    {
+      "file": "worker/wealth-segment-projection.ts",
+      "score": 10,
+      "review": [],
+      "verifiedScore": 10
+    }
+  ],
+  "notes": [
+    "Type-only declarations and documentation artifacts are not executable Code Health score targets.",
+    "No thresholds or rules were suppressed.",
+    "Final correction-date and historical-price follow-up files were re-reviewed and scored 10.0 after their last edits."
+  ]
+}

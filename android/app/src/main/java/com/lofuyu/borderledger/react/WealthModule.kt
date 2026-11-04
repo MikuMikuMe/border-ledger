@@ -4,6 +4,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactApplicationContext
 import com.lofuyu.borderledger.react.codegen.NativeWealthSpec
+import com.lofuyu.borderledger.wealth.WealthAction
 import com.lofuyu.borderledger.wealth.WealthIdentifier
 import com.lofuyu.borderledger.wealth.WealthReadQuery
 import com.lofuyu.borderledger.wealth.WealthWriteCommand
@@ -46,46 +47,58 @@ class WealthModule(context: ReactApplicationContext, private val runtime: Native
     override fun readTemplate(promise: Promise) = bridge.call(promise) { runtime.container.wealthRepository.readTemplate() }
 
     override fun startCsvImport(operationId: String, promise: Promise) = bridge.call(promise) {
-        require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
-        runtime.external.start(ExternalStartRequest(operationId, "wealth_import_picker", JSONObject()))
+        startDocument(WealthOperationId(operationId), WealthDocumentKind.IMPORT_PICKER)
     }
 
     override fun startCsvTemplate(operationId: String, promise: Promise) = bridge.call(promise) {
-        require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
-        runtime.external.start(ExternalStartRequest(operationId, "wealth_template_picker", JSONObject()))
+        startDocument(WealthOperationId(operationId), WealthDocumentKind.TEMPLATE_PICKER)
     }
 
     override fun startCsvRemap(sourceOperationId: String, operationId: String, mapping: String, promise: Promise) = bridge.call(promise) {
-        require(sourceOperationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
-        require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
-        val fingerprint = "csv-remap:${sourceOperationId}:${digest(mapping)}"
-        runtime.write(WriteRequest(operationId, "wealth_csv-preview", fingerprint) {
-            runtime.external.remapWealthImport(sourceOperationId, operationId, mapping)
+        val request = WealthCsvRemapRequest(
+            sourceOperation = WealthOperationId(sourceOperationId),
+            operation = WealthOperationId(operationId),
+            mapping = WealthJsonBody(mapping),
+        )
+        val fingerprint = "csv-remap:${request.sourceOperation.value}:${digest(request.mapping)}"
+        runtime.write(WriteRequest(request.operation.value, "wealth_${WealthAction.CSV_PREVIEW.wireValue}", fingerprint) {
+            runtime.external.remapWealthImport(request.sourceOperation.value, request.operation.value, request.mapping.value)
         })
     }
 
     override fun readCsvPreview(operationId: String, promise: Promise) = bridge.call(promise) {
-        require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
         runtime.external.readWealthImportPreview(operationId)
     }
 
     override fun startWrite(operationId: String, action: String, body: String, promise: Promise) = bridge.call(promise) {
-        require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
-        val payload = JSONObject(body)
-        if (action == "csv-export") {
-            runtime.external.start(ExternalStartRequest(operationId, "wealth_export_picker", payload))
-        } else {
-            val fingerprint = "$action:${digest(body)}"
-            runtime.write(WriteRequest(operationId, "wealth_$action", fingerprint) {
-                val response = runtime.container.wealthRepository.write(WealthWriteCommand(operationId, action, payload.toString()))
-                if (action.startsWith("quote-")) quoteReceipt(action, response) else null
-            })
-        }
+        startWrite(WealthOperationId(operationId), WealthAction.from(action), WealthJsonBody(body))
     }
 
-    private fun quoteReceipt(action: String, response: String): String {
-        val value = runCatching { JSONObject(response) }.getOrNull() ?: return "quote:$action"
-        val receipt = JSONObject().put("action", action)
+    private suspend fun startDocument(
+        operation: WealthOperationId,
+        kind: WealthDocumentKind,
+        arguments: JSONObject = JSONObject(),
+    ): Map<String, Any?> = runtime.external.start(ExternalStartRequest(operation.value, kind.wireValue, arguments))
+
+    private suspend fun startWrite(
+        operation: WealthOperationId,
+        action: WealthAction,
+        body: WealthJsonBody,
+    ): Map<String, Any?> {
+        val payload = JSONObject(body.value)
+        if (action == WealthAction.CSV_EXPORT) {
+            return startDocument(operation, WealthDocumentKind.EXPORT_PICKER, payload)
+        }
+        val fingerprint = "${action.wireValue}:${digest(body)}"
+        return runtime.write(WriteRequest(operation.value, "wealth_${action.wireValue}", fingerprint) {
+            val response = runtime.container.wealthRepository.write(WealthWriteCommand(operation.value, action.wireValue, payload.toString()))
+            if (action.isQuoteAction) quoteReceipt(action, WealthJsonBody(response)) else null
+        })
+    }
+
+    private fun quoteReceipt(action: WealthAction, response: WealthJsonBody): String {
+        val value = runCatching { JSONObject(response.value) }.getOrNull() ?: return "quote:${action.wireValue}"
+        val receipt = JSONObject().put("action", action.wireValue)
         value.optString("provider").takeIf { it.isNotBlank() }?.let { receipt.put("provider", it) }
         if (value.has("configured")) receipt.put("configured", value.optBoolean("configured"))
         value.optString("status").takeIf { it.isNotBlank() }?.let { receipt.put("status", it) }
@@ -93,6 +106,6 @@ class WealthModule(context: ReactApplicationContext, private val runtime: Native
         return receipt.toString()
     }
 
-    private fun digest(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+    private fun digest(value: WealthJsonBody): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
 }

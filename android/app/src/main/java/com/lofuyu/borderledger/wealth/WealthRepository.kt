@@ -10,6 +10,40 @@ import java.net.URLEncoder
 
 internal const val WEALTH_ROOT = "/api/mobile/owner/wealth"
 
+internal enum class WealthAction(val wireValue: String) {
+    ACCOUNT("account"),
+    INSTRUMENT("instrument"),
+    VALUATION("valuation"),
+    EVENT("event"),
+    CORRECTION("correction"),
+    REVERSAL("reversal"),
+    QUOTE_SAVE("quote-save"),
+    QUOTE_REMOVE("quote-remove"),
+    QUOTE_REFRESH("quote-refresh"),
+    CSV_PREVIEW("csv-preview"),
+    CSV_COMMIT("csv-commit"),
+    CSV_EXPORT("csv-export"),
+    ;
+
+    val isQuoteAction: Boolean get() = this == QUOTE_SAVE || this == QUOTE_REMOVE || this == QUOTE_REFRESH
+
+    companion object {
+        fun from(wireValue: String): WealthAction = entries.firstOrNull { it.wireValue == wireValue }
+            ?: throw WealthRequestRejected()
+    }
+}
+
+private enum class WealthHttpMethod(val wireValue: String) { GET("GET"), POST("POST"), PUT("PUT"), DELETE("DELETE") }
+
+@JvmInline
+private value class WealthRoute(val value: String)
+
+@JvmInline
+private value class WealthRequestBody(val value: String)
+
+@JvmInline
+private value class WealthResponseBody(val value: String)
+
 /** The only owner scopes a Wealth request may require. */
 object WealthScopeRegistry {
     const val READ = "wealth:read"
@@ -52,11 +86,13 @@ data class WealthWriteCommand(val operationId: String, val action: String, val p
         JSONObject(payload)
     }
 
+    internal val actionType: WealthAction get() = WealthAction.from(action)
+
     fun body(): String = JSONObject().put("operationId", operationId).put("action", action).put("payload", JSONObject(payload)).toString()
 
     private companion object {
         const val MAX_PAYLOAD_BYTES = 256 * 1024
-        val ALLOWED_ACTIONS = setOf("account", "instrument", "valuation", "event", "correction", "reversal", "quote-save", "quote-remove", "quote-refresh", "csv-preview", "csv-commit", "csv-export")
+        val ALLOWED_ACTIONS = WealthAction.entries.map { it.wireValue }.toSet()
     }
 }
 
@@ -80,80 +116,81 @@ class HttpWorkerWealthApi(
         // server-authoritative report route instead of inventing returns from
         // a snapshot-only payload.
         val path = "$WEALTH_ROOT/report"
-        return execute("GET", path + suffix, null)
+        return execute(WealthHttpMethod.GET, WealthRoute(path + suffix), null)
     }
 
     suspend fun readEvents(accountId: String? = null): String {
         val suffix = WealthReadQuery(accountId = accountId).queryString().takeIf { it.isNotEmpty() }?.let { "?$it" } ?: ""
-        return execute("GET", "$WEALTH_ROOT/events$suffix", null)
+        return execute(WealthHttpMethod.GET, WealthRoute("$WEALTH_ROOT/events$suffix"), null)
     }
 
     suspend fun readValuations(accountId: String? = null): String {
         val suffix = WealthReadQuery(accountId = accountId).queryString().takeIf { it.isNotEmpty() }?.let { "?$it" } ?: ""
-        return execute("GET", "$WEALTH_ROOT/valuations$suffix", null)
+        return execute(WealthHttpMethod.GET, WealthRoute("$WEALTH_ROOT/valuations$suffix"), null)
     }
 
-    suspend fun readQuoteSettings(): String = execute("GET", "$WEALTH_ROOT/quotes/settings", null)
+    suspend fun readQuoteSettings(): String = execute(WealthHttpMethod.GET, WealthRoute("$WEALTH_ROOT/quotes/settings"), null)
 
-    suspend fun readTemplate(): String = execute("GET", "$WEALTH_ROOT/template", null)
+    suspend fun readTemplate(): String = execute(WealthHttpMethod.GET, WealthRoute("$WEALTH_ROOT/template"), null)
 
-    suspend fun exportCsv(): String = execute("GET", "$WEALTH_ROOT/export", null)
+    suspend fun exportCsv(): String = execute(WealthHttpMethod.GET, WealthRoute("$WEALTH_ROOT/export"), null)
 
     suspend fun write(command: WealthWriteCommand): String {
         val payload = JSONObject(command.payload)
-        val route = routeFor(command.action, payload)
+        val action = command.actionType
+        val route = routeFor(action, payload)
         val body = bodyFor(command, payload)
-        val method = methodFor(command.action)
-        val routeWithQuery = quoteRemoveRoute(command.action, route, payload)
-        return execute(method, routeWithQuery, if (method == "DELETE") null else body)
+        val method = methodFor(action)
+        val routeWithQuery = quoteRemoveRoute(action, route, payload)
+        return execute(method, routeWithQuery, if (method == WealthHttpMethod.DELETE) null else body)
     }
 
-    private fun routeFor(action: String, payload: JSONObject): String = when (action) {
-        "account" -> "$WEALTH_ROOT/accounts"
-        "instrument" -> "$WEALTH_ROOT/instruments"
-        "valuation" -> "$WEALTH_ROOT/valuations"
-        "event", "correction", "reversal" -> "$WEALTH_ROOT/events"
-        "csv-preview" -> "$WEALTH_ROOT/imports/preview"
-        "csv-commit" -> "$WEALTH_ROOT/imports/${requireNotNull(payload.optString("previewId").takeIf { it.isNotBlank() })}/commit"
-        "quote-save", "quote-remove" -> "$WEALTH_ROOT/quotes/settings"
-        "quote-refresh" -> "$WEALTH_ROOT/quotes/refresh"
-        else -> throw WealthRequestRejected()
+    private fun routeFor(action: WealthAction, payload: JSONObject): WealthRoute = when (action) {
+        WealthAction.ACCOUNT -> WealthRoute("$WEALTH_ROOT/accounts")
+        WealthAction.INSTRUMENT -> WealthRoute("$WEALTH_ROOT/instruments")
+        WealthAction.VALUATION -> WealthRoute("$WEALTH_ROOT/valuations")
+        WealthAction.EVENT, WealthAction.CORRECTION, WealthAction.REVERSAL -> WealthRoute("$WEALTH_ROOT/events")
+        WealthAction.CSV_PREVIEW -> WealthRoute("$WEALTH_ROOT/imports/preview")
+        WealthAction.CSV_COMMIT -> WealthRoute("$WEALTH_ROOT/imports/${requireNotNull(payload.optString("previewId").takeIf { it.isNotBlank() })}/commit")
+        WealthAction.QUOTE_SAVE, WealthAction.QUOTE_REMOVE -> WealthRoute("$WEALTH_ROOT/quotes/settings")
+        WealthAction.QUOTE_REFRESH -> WealthRoute("$WEALTH_ROOT/quotes/refresh")
+        WealthAction.CSV_EXPORT -> throw WealthRequestRejected()
     }
 
-    private fun bodyFor(command: WealthWriteCommand, payload: JSONObject): String = when (command.action) {
-        "event", "correction", "reversal" -> eventBody(command, payload)
-        else -> payload.put("operationId", command.operationId).toString()
+    private fun bodyFor(command: WealthWriteCommand, payload: JSONObject): WealthRequestBody = when (command.actionType) {
+        WealthAction.EVENT, WealthAction.CORRECTION, WealthAction.REVERSAL -> eventBody(command, payload)
+        else -> WealthRequestBody(payload.put("operationId", command.operationId).toString())
     }
 
-    private fun eventBody(command: WealthWriteCommand, payload: JSONObject): String {
+    private fun eventBody(command: WealthWriteCommand, payload: JSONObject): WealthRequestBody {
         // Event routes read expectedRevision from the envelope, while the
         // typed mobile editor keeps it beside the event draft. Lift it without
         // allowing a user-entered source identity to cross the native boundary.
         val expectedRevision = payload.opt("expectedRevision")
         payload.remove("expectedRevision")
-        return JSONObject().put("operationId", command.operationId).apply {
+        return WealthRequestBody(JSONObject().put("operationId", command.operationId).apply {
             if (expectedRevision != null && expectedRevision != JSONObject.NULL) put("expectedRevision", expectedRevision)
             put("event", payload)
-        }.toString()
+        }.toString())
     }
 
-    private fun methodFor(action: String): String = when (action) {
-        "account", "instrument", "valuation", "quote-save" -> "PUT"
-        "quote-remove" -> "DELETE"
-        else -> "POST"
+    private fun methodFor(action: WealthAction): WealthHttpMethod = when (action) {
+        WealthAction.ACCOUNT, WealthAction.INSTRUMENT, WealthAction.VALUATION, WealthAction.QUOTE_SAVE -> WealthHttpMethod.PUT
+        WealthAction.QUOTE_REMOVE -> WealthHttpMethod.DELETE
+        else -> WealthHttpMethod.POST
     }
 
-    private fun quoteRemoveRoute(action: String, route: String, payload: JSONObject): String {
-        if (action != "quote-remove") return route
+    private fun quoteRemoveRoute(action: WealthAction, route: WealthRoute, payload: JSONObject): WealthRoute {
+        if (action != WealthAction.QUOTE_REMOVE) return route
         val provider = URLEncoder.encode(payload.optString("provider", "alpha_vantage"), "UTF-8")
-        return "$route?provider=$provider"
+        return WealthRoute("${route.value}?provider=$provider")
     }
 
-    private suspend fun execute(method: String, path: String, body: String?): String {
-        val request = MobileRequest(method, "$origin$path", headers = mapOf("Accept" to "application/json", "Content-Type" to "application/json; charset=utf-8"), body = body?.toByteArray(Charsets.UTF_8))
+    private suspend fun execute(method: WealthHttpMethod, path: WealthRoute, body: WealthRequestBody?): String {
+        val request = MobileRequest(method.wireValue, "$origin${path.value}", headers = mapOf("Accept" to "application/json", "Content-Type" to "application/json; charset=utf-8"), body = body?.value?.toByteArray(Charsets.UTF_8))
         val response = transport.execute(auth.intercept(request))
         if (response.statusCode in 200..299) return response.body
-        val serverReason = responseReason(response.body)
+        val serverReason = responseReason(WealthResponseBody(response.body))
         throw when (response.statusCode) {
             401, 403 -> WealthAuthorizationRequired()
             409 -> WealthRevisionConflict(serverReason ?: CONFLICT_REASON)
@@ -162,8 +199,8 @@ class HttpWorkerWealthApi(
         }
     }
 
-    private fun responseReason(body: String): String? {
-        val value = runCatching { JSONObject(body) }.getOrNull() ?: return null
+    private fun responseReason(body: WealthResponseBody): String? {
+        val value = runCatching { JSONObject(body.value) }.getOrNull() ?: return null
         val message = value.optString("message").trim().takeIf { it.isNotEmpty() }
         val reason = value.optString("reason").trim().takeIf { it.isNotEmpty() }
         val code = value.optString("code").trim().takeIf { it.isNotEmpty() }

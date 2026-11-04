@@ -117,6 +117,21 @@ export interface WealthModeTransitionRequest {
   readonly openingPositions?: readonly WealthOpeningPositionRequest[];
 }
 
+/** Request body for PUT /api/wealth/accounts. */
+export interface WealthAccountMutationRequest {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: WealthAccount['kind'];
+  readonly mode: WealthAccount['mode'];
+  readonly currency: string;
+  readonly amountMinor?: number | null;
+  readonly linkedBankAccountId?: string | null;
+  readonly modeTransition?: WealthModeTransitionRequest | null;
+  readonly active?: boolean;
+  readonly asOf?: string | null;
+  readonly expectedRevision?: number;
+}
+
 export interface WealthAccountMutationResponse {
   readonly account: WealthAccountView;
   readonly initialValuation?: Readonly<Record<string, unknown>>;

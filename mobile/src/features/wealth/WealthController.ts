@@ -5,6 +5,22 @@ import { MutationGate, Resource, errorState } from '../finance/model';
 
 const TERMINAL = new Set(['completed', 'revision_conflict', 'canceled', 'failed_local', 'rejected']);
 
+export type WealthWriteRequest = {
+  action: string;
+  body: string;
+  operationId: string;
+};
+
+export type WealthCsvOperationRequest = {
+  operationId: string;
+};
+
+export type WealthCsvRemapRequest = {
+  sourceOperationId: string;
+  operationId: string;
+  mapping: WealthCsvMapping;
+};
+
 export class WealthController {
   readonly state: Resource<WealthWireSnapshot>;
   readonly mutation: MutationGate;
@@ -37,7 +53,7 @@ export class WealthController {
     await this.load({ ...this.query, view });
   }
 
-  async write(action: string, body: string, operationId: string): Promise<Operation | null> {
+  async write({ action, body, operationId }: WealthWriteRequest): Promise<Operation | null> {
     if (this.disposed) return null;
     if (this.mutation.current().status === 'revision_conflict') await this.recover();
     if (this.mutation.current().blocked) return null;
@@ -46,7 +62,7 @@ export class WealthController {
     return this.ports.queryOperation(operationId);
   }
 
-  async importCsv(operationId: string): Promise<string | null> {
+  async importCsv({ operationId }: WealthCsvOperationRequest): Promise<string | null> {
     if (this.disposed) return null;
     const startCsvImport = this.ports.startCsvImport;
     if (!startCsvImport) return null;
@@ -60,7 +76,7 @@ export class WealthController {
     return null;
   }
 
-  async remapCsv(sourceOperationId: string, operationId: string, mapping: WealthCsvMapping): Promise<string | null> {
+  async remapCsv({ sourceOperationId, operationId, mapping }: WealthCsvRemapRequest): Promise<string | null> {
     const startCsvRemap = this.ports.startCsvRemap;
     const readCsvPreview = this.ports.readCsvPreview;
     if (this.disposed) return null;
@@ -73,7 +89,7 @@ export class WealthController {
     return preview;
   }
 
-  async resumeCsvImport(operationId: string): Promise<string | null> {
+  async resumeCsvImport({ operationId }: WealthCsvOperationRequest): Promise<string | null> {
     if (this.disposed || !this.ports.readCsvPreview) return null;
     const operation = await this.ports.queryOperation(operationId);
     if (operation?.status !== 'completed') return null;
@@ -82,7 +98,7 @@ export class WealthController {
     return preview;
   }
 
-  async saveCsvTemplate(operationId: string) {
+  async saveCsvTemplate({ operationId }: WealthCsvOperationRequest) {
     if (this.disposed || !this.ports.startCsvTemplate) return;
     await this.mutation.submit(operationId, () => this.ports.startCsvTemplate!(operationId), id => this.ports.queryOperation(id));
   }

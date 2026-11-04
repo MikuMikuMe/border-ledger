@@ -698,6 +698,24 @@ describe('wealth web API', () => {
     expect(await after.json()).toMatchObject({ totalByCurrency: { CAD: 1200 }, accounts: [expect.objectContaining({ id: 'brokerage', mode: 'aggregate', valueMinor: 1200 })], cash: [] });
   }, 30000);
 
+  it('validates a new holdings event against only its effective mode segment', async () => {
+    const f = await fixture();
+    const env = webEnv({ DB: f.db } as never);
+    const headers = { ...VERIFIED_WEB_HEADERS, origin: 'https://pf.example.com', 'content-type': 'application/json' };
+    const put = (body: unknown) => worker.fetch(new Request('https://pf.example.com/api/wealth/accounts', { method: 'PUT', headers, body: JSON.stringify(body) }), env as never);
+    const post = (event: unknown, expectedRevision: number) => worker.fetch(new Request('https://pf.example.com/api/wealth/events', { method: 'POST', headers, body: JSON.stringify({ event, expectedRevision }) }), env as never);
+    expect((await put({ id: 'brokerage', name: 'Brokerage', kind: 'brokerage', mode: 'holdings', currency: 'CAD', expectedRevision: 0 })).status).toBe(200);
+    expect((await post({ id: 'old-opening', sourceId: 'old-opening', date: '2026-11-01', kind: 'opening_cash', accountId: 'brokerage', money: { currency: 'CAD', amountMinor: 10000 } }, 1)).status).toBe(201);
+    expect((await put({ id: 'brokerage', name: 'Brokerage', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-11-02', openingValueMinor: 10000, expectedRevision: 2 })).status).toBe(200);
+    expect((await put({ id: 'brokerage', name: 'Brokerage', kind: 'brokerage', mode: 'holdings', currency: 'CAD', effectiveDate: '2026-11-03', openingCashMinor: 1000, expectedRevision: 3 })).status).toBe(200);
+
+    const snapshot = await worker.fetch(new Request('https://pf.example.com/api/wealth/snapshot?asOf=2026-11-03', { headers: VERIFIED_WEB_HEADERS }), env as never);
+    expect(await snapshot.json()).toMatchObject({ totalByCurrency: { CAD: 1000 }, cash: [{ accountId: 'brokerage', amountMinor: 1000 }] });
+    const oversizedBuy = await post({ id: 'oversized-buy', sourceId: 'oversized-buy', date: '2026-11-04', kind: 'buy', accountId: 'brokerage', instrument: { exchange: 'TSX', ticker: 'SHOP', type: 'stock', currency: 'CAD' }, quantity: '1', consideration: { currency: 'CAD', amountMinor: 5000 }, fee: null }, 4);
+    expect(oversizedBuy.status).toBe(400);
+    expect(await oversizedBuy.json()).toMatchObject({ code: 'negative_cash' });
+  }, 30000);
+
   it('keeps external flows from earlier representation segments in Modified Dietz', async () => {
     const f = await fixture();
     const env = webEnv({ DB: f.db } as never);

@@ -1,6 +1,6 @@
 import type { LedgerApi } from '../../domain/api';
 import type { WealthAccount } from '../../domain/wealth-types';
-import type { WealthModeTransitionRequest } from '../../domain/wealth-api-types';
+import type { WealthAccountMutationRequest } from '../../domain/wealth-api-types';
 import { parseMoneyMinor } from './wealth-utils';
 
 export interface FormProps {
@@ -55,19 +55,15 @@ export function accountFormError(name: string, kind: WealthAccount['kind'], mode
     ?? (mode === 'aggregate' && kind !== 'linked_bank' && amount === null ? 'Enter a valid aggregate value.' : null);
 }
 
-export function accountRequest(name: string, kind: WealthAccount['kind'], mode: WealthAccount['mode'], currency: string, amount: number | null, linkedBankAccountId: string, revision: number, id: string, modeTransition: WealthModeTransitionRequest | null = null, active: boolean | undefined = undefined, asOf: string | undefined = undefined): Record<string, unknown> {
+export function accountRequest(input: WealthAccountMutationRequest): WealthAccountMutationRequest {
+  const { kind, mode, amountMinor } = input;
   return {
-    id,
-    name: name.trim(),
-    kind,
-    mode,
-    currency,
-    amountMinor: mode === 'aggregate' && amount !== null ? amount : undefined,
-    linkedBankAccountId: kind === 'linked_bank' ? linkedBankAccountId : undefined,
-    modeTransition: modeTransition ?? undefined,
-    active,
-    asOf: mode === 'aggregate' && amount !== null ? asOf : undefined,
-    expectedRevision: revision,
+    ...input,
+    name: input.name.trim(),
+    amountMinor: mode === 'aggregate' && amountMinor !== null ? amountMinor : undefined,
+    linkedBankAccountId: kind === 'linked_bank' ? input.linkedBankAccountId : undefined,
+    modeTransition: input.modeTransition ?? undefined,
+    asOf: mode === 'aggregate' && amountMinor !== null ? input.asOf : undefined,
   };
 }
 

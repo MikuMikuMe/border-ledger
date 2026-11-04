@@ -17,6 +17,7 @@ import {
 } from '../worker/wealth-store';
 import type { LedgerContext } from '../worker/tenant-context';
 import type { CanonicalInstrument, WealthAccount } from '../src/domain/wealth-types';
+import { wealthQuoteInstrumentKey, WEALTH_QUOTE_PROVIDER } from '../worker/wealth-quotes';
 
 const owner: LedgerContext = { userId: 'owner', ledgerId: 'personal' };
 const fixtures: Array<ReturnType<typeof createSqliteD1Fixture>> = [];
@@ -48,6 +49,38 @@ async function event(db: D1Database, value: unknown) {
 
 function money(amountMinor: number, currency = 'CAD') {
   return { currency, amountMinor };
+}
+
+interface ProviderQuoteFixture {
+  readonly quoteDate: string;
+  readonly priceMinor: number;
+  readonly revision: string;
+  readonly quoteInstrument?: CanonicalInstrument;
+}
+
+async function providerQuote(db: D1Database, fixtureValue: ProviderQuoteFixture) {
+  const quoteInstrument = fixtureValue.quoteInstrument ?? instrument;
+  await db.prepare(`INSERT INTO wealth_quote_observations(ledger_id,instrument_key,exchange,ticker,instrument_type,currency,provider,provider_symbol,quote_date,price_minor,observed_at,revision)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(owner.ledgerId, wealthQuoteInstrumentKey(quoteInstrument), quoteInstrument.exchange, quoteInstrument.ticker, quoteInstrument.type, quoteInstrument.currency, WEALTH_QUOTE_PROVIDER, `${quoteInstrument.ticker}.TRT`, fixtureValue.quoteDate, fixtureValue.priceMinor, `${fixtureValue.quoteDate}T12:00:00.000Z`, fixtureValue.revision).run();
+}
+
+async function positionTransferFixture(quantity: string = '1') {
+  const f = fixture();
+  await account(f.db, 'from');
+  await account(f.db, 'to');
+  await event(f.db, { id: 'opening', sourceId: 'opening', date: '2026-01-01', kind: 'opening_position', accountId: 'from', instrument, quantity, basis: money(10000) });
+  await event(f.db, { id: 'transfer', sourceId: 'transfer', date: '2026-01-02', kind: 'transfer', transferKind: 'position', fromAccountId: 'from', toAccountId: 'to', instrument, quantity: '1', transferId: 'transfer-1' });
+  return f;
+}
+
+async function cashTransferFixture() {
+  const f = fixture();
+  await account(f.db, 'from');
+  await account(f.db, 'to');
+  await event(f.db, { id: 'from-opening', sourceId: 'from-opening', date: '2026-01-01', kind: 'opening_cash', accountId: 'from', money: money(10000) });
+  await event(f.db, { id: 'to-opening', sourceId: 'to-opening', date: '2026-01-01', kind: 'opening_cash', accountId: 'to', money: money(0) });
+  await event(f.db, { id: 'transfer', sourceId: 'transfer', date: '2026-01-02', kind: 'transfer', transferKind: 'cash', fromAccountId: 'from', toAccountId: 'to', money: money(4000), transferId: 'transfer-1' });
+  return f;
 }
 
 function csvEscape(value: string) {
@@ -263,6 +296,224 @@ describe('wealth store integration', () => {
     expect((await readWealthAccounts(destination.db, owner)).accounts.map((item) => item.id)).toEqual(['brokerage']);
     expect((await readWealthEvents(destination.db, owner)).events.map((item) => item.sourceId)).toEqual(['opening', 'split']);
     expect((await readWealthValuations(destination.db, owner)).valuations).toEqual([expect.objectContaining({ id: 'price', accountId: 'brokerage', priceMinor: 12000 })]);
+  });
+
+  it('roundtrips position transfers through canonical CSV', async () => {
+    const source = fixture();
+    await account(source.db, 'from');
+    await account(source.db, 'to');
+    await event(source.db, { id: 'opening', sourceId: 'opening', date: '2026-01-01', kind: 'opening_position', accountId: 'from', instrument, quantity: '2', basis: money(10000) });
+    await event(source.db, { id: 'transfer', sourceId: 'transfer', date: '2026-01-02', kind: 'transfer', transferKind: 'position', fromAccountId: 'from', toAccountId: 'to', instrument, quantity: '1', transferId: 'transfer-1' });
+
+    const csv = await wealthExportCsv(source.db, owner);
+    expect(csv).toContain('position');
+    expect(csv).toContain('transfer-1');
+    expect(csv).toContain(',1,,,,');
+
+    const destination = fixture();
+    const preview = await createWealthImportPreview(destination.db, owner, { csv, operationId: 'position-transfer-roundtrip-preview' });
+    expect(preview.errors).toEqual([]);
+    await expect(commitWealthImport(destination.db, owner, preview.previewId, { expectedRevision: 0, operationId: 'position-transfer-roundtrip-commit' })).resolves.toMatchObject({ committed: 4 });
+    expect((await readWealthSnapshot(destination.db, owner, { asOf: '2026-01-02' })).positions).toEqual([
+      expect.objectContaining({ accountId: 'from', quantity: '1' }),
+      expect.objectContaining({ accountId: 'to', quantity: '1' }),
+    ]);
+  });
+
+  it('projects a cached provider quote onto a position-transfer destination', async () => {
+    const f = await positionTransferFixture();
+    await providerQuote(f.db, { quoteDate: '2026-01-02', priceMinor: 12000, revision: 'quote-1' });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-02' });
+    expect(snapshot.positions).toEqual(expect.arrayContaining([expect.objectContaining({ accountId: 'to', quantity: '1', marketValueMinor: 12000 })]));
+    expect(snapshot.totalByCurrency).toEqual({ CAD: 12000 });
+    expect(snapshot.missingData).toEqual([]);
+  });
+
+  it('discovers provider quotes from correction replacement instruments', async () => {
+    const f = fixture();
+    await account(f.db, 'from');
+    await account(f.db, 'to');
+    await event(f.db, { id: 'opening', sourceId: 'opening', date: '2026-01-01', kind: 'opening_position', accountId: 'from', instrument, quantity: '1', basis: money(10000) });
+    await event(f.db, { id: 'transfer', sourceId: 'transfer', date: '2026-01-02', kind: 'transfer', transferKind: 'position', fromAccountId: 'from', toAccountId: 'to', instrument, quantity: '1', transferId: 'transfer-1' });
+    await event(f.db, { id: 'correction', sourceId: 'correction', date: '2026-01-03', kind: 'correction', targetSourceId: 'transfer', replacement: { kind: 'transfer', transferKind: 'position', date: '2026-01-02', fromAccountId: 'from', toAccountId: 'to', instrument, quantity: '1', transferId: 'transfer-1' } });
+    await providerQuote(f.db, { quoteDate: '2026-01-03', priceMinor: 12000, revision: 'quote-correction' });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-03' });
+    expect(snapshot.positions).toEqual(expect.arrayContaining([expect.objectContaining({ accountId: 'to', quantity: '1', marketValueMinor: 12000 })]));
+    expect(snapshot.missingData).toEqual([]);
+  });
+
+  it('keeps a cached quote on a historical position after a later correction', async () => {
+    const f = fixture();
+    const correctedInstrument: CanonicalInstrument = { exchange: 'TSX', ticker: 'CSU', type: 'stock', currency: 'CAD' };
+    await account(f.db, 'from');
+    await account(f.db, 'to');
+    await account(f.db, 'corrected-to');
+    await event(f.db, { id: 'opening', sourceId: 'opening', date: '2026-01-01', kind: 'opening_position', accountId: 'from', instrument, quantity: '1', basis: money(10000) });
+    await event(f.db, { id: 'corrected-opening', sourceId: 'corrected-opening', date: '2026-01-01', kind: 'opening_position', accountId: 'from', instrument: correctedInstrument, quantity: '1', basis: money(5000) });
+    await event(f.db, { id: 'transfer', sourceId: 'transfer', date: '2026-01-02', kind: 'transfer', transferKind: 'position', fromAccountId: 'from', toAccountId: 'to', instrument, quantity: '1', transferId: 'transfer-1' });
+    await event(f.db, { id: 'correction', sourceId: 'correction', date: '2026-01-10', kind: 'correction', targetSourceId: 'transfer', replacement: { kind: 'transfer', transferKind: 'position', fromAccountId: 'from', toAccountId: 'corrected-to', instrument: correctedInstrument, quantity: '1', date: '2026-01-02', transferId: 'transfer-1' } });
+    await providerQuote(f.db, { quoteDate: '2026-01-03', priceMinor: 12000, revision: 'quote-history' });
+    await providerQuote(f.db, { quoteDate: '2026-01-03', priceMinor: 5000, revision: 'quote-corrected', quoteInstrument: correctedInstrument });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-10' });
+    expect(snapshot.history.find((point) => point.date === '2026-01-03')).toEqual(expect.objectContaining({ totals: { CAD: 17000 }, missingData: [] }));
+  });
+
+  it('keeps the unaffected cash leg when a transfer destination leaves holdings mode', async () => {
+    const f = await cashTransferFixture();
+    await upsertWealthAccount(f.db, owner, { id: 'to', name: 'to', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-03', openingValueMinor: 4000 });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-03' });
+    expect(snapshot.cash).toEqual([{ accountId: 'from', currency: 'CAD', amountMinor: 6000 }]);
+    expect(snapshot.accounts).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'to', mode: 'aggregate', valueMinor: 4000 })]));
+    expect(snapshot.totalByCurrency).toEqual({ CAD: 10000 });
+  });
+
+  it('keeps the unaffected position leg when a transfer destination leaves holdings mode', async () => {
+    const f = await positionTransferFixture('2');
+    await upsertWealthValuation(f.db, owner, { id: 'from-price', accountId: 'from', instrument, asOf: '2026-01-03', priceMinor: 6000, source: 'manual' });
+    await upsertWealthAccount(f.db, owner, { id: 'to', name: 'to', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-03', openingValueMinor: 6000 });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-03' });
+    expect(snapshot.positions).toEqual(expect.arrayContaining([expect.objectContaining({ accountId: 'from', quantity: '1', marketValueMinor: 6000 })]));
+    expect(snapshot.accounts).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'to', mode: 'aggregate', valueMinor: 6000 })]));
+    expect(snapshot.totalByCurrency).toEqual({ CAD: 12000 });
+  });
+
+  it('projects a position transfer into a destination that remains in holdings mode', async () => {
+    const f = await positionTransferFixture();
+    await upsertWealthAccount(f.db, owner, { id: 'from', name: 'from', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-03', openingValueMinor: 0 });
+    await upsertWealthValuation(f.db, owner, { id: 'to-price', accountId: 'to', instrument, asOf: '2026-01-03', priceMinor: 12000, source: 'manual' });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-03' });
+    expect(snapshot.positions).toEqual(expect.arrayContaining([expect.objectContaining({ accountId: 'to', quantity: '1', marketValueMinor: 12000 })]));
+    expect(snapshot.accounts).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'from', mode: 'aggregate', valueMinor: 0 })]));
+    expect(snapshot.totalByCurrency).toEqual({ CAD: 12000 });
+  });
+
+  it('replays only the source holdings segment for a position transfer after a mode reset', async () => {
+    const f = fixture();
+    await account(f.db, 'from');
+    await account(f.db, 'to');
+    await event(f.db, { id: 'old-opening', sourceId: 'old-opening', date: '2026-01-01', kind: 'opening_position', accountId: 'from', instrument, quantity: '1', basis: money(5000) });
+    await upsertWealthAccount(f.db, owner, { id: 'from', name: 'from', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-02', openingValueMinor: 5000 });
+    await upsertWealthAccount(f.db, owner, {
+      id: 'from', name: 'from', kind: 'brokerage', mode: 'holdings', currency: 'CAD', effectiveDate: '2026-01-03',
+      openingPositions: [{ id: 'new-opening', sourceId: 'new-opening', instrument, quantity: '1', basis: money(10000) }],
+    });
+    await event(f.db, { id: 'transfer', sourceId: 'transfer', date: '2026-01-04', kind: 'transfer', transferKind: 'position', fromAccountId: 'from', toAccountId: 'to', instrument, quantity: '1', transferId: 'transfer-1' });
+    await upsertWealthAccount(f.db, owner, { id: 'from', name: 'from', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-05', openingValueMinor: 0 });
+    await upsertWealthValuation(f.db, owner, { id: 'to-price', accountId: 'to', instrument, asOf: '2026-01-05', priceMinor: 12000, source: 'manual' });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-05' });
+    expect(snapshot.positions).toEqual([expect.objectContaining({ accountId: 'to', quantity: '1', costBasisMinor: 10000, marketValueMinor: 12000 })]);
+    expect(snapshot.totalByCurrency).toEqual({ CAD: 12000 });
+  });
+
+  it('keeps incoming positions and fresh source openings in separate mode segments', async () => {
+    const f = fixture();
+    await account(f.db, 'from');
+    await account(f.db, 'to');
+    await event(f.db, { id: 'old-opening', sourceId: 'old-opening', date: '2026-01-01', kind: 'opening_position', accountId: 'from', instrument, quantity: '1', basis: money(5000) });
+    await event(f.db, { id: 'transfer', sourceId: 'transfer', date: '2026-01-02', kind: 'transfer', transferKind: 'position', fromAccountId: 'from', toAccountId: 'to', instrument, quantity: '1', transferId: 'transfer-1' });
+    await upsertWealthAccount(f.db, owner, { id: 'from', name: 'from', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-03', openingValueMinor: 0 });
+    await upsertWealthAccount(f.db, owner, {
+      id: 'from', name: 'from', kind: 'brokerage', mode: 'holdings', currency: 'CAD', effectiveDate: '2026-01-04',
+      openingPositions: [{ id: 'new-opening', sourceId: 'new-opening', instrument, quantity: '1', basis: money(10000) }],
+    });
+    await upsertWealthValuation(f.db, owner, { id: 'from-price', accountId: 'from', instrument, asOf: '2026-01-04', priceMinor: 12000, source: 'manual' });
+    await upsertWealthValuation(f.db, owner, { id: 'to-price', accountId: 'to', instrument, asOf: '2026-01-04', priceMinor: 6000, source: 'manual' });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-04' });
+    expect(snapshot.positions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 'from', quantity: '1', costBasisMinor: 10000, marketValueMinor: 12000 }),
+      expect.objectContaining({ accountId: 'to', quantity: '1', costBasisMinor: 5000, marketValueMinor: 6000 }),
+    ]));
+    expect(snapshot.totalByCurrency).toEqual({ CAD: 18000 });
+  });
+
+  it('does not double-count a cash transfer while replaying a position source dependency', async () => {
+    const f = fixture();
+    await account(f.db, 'cash-source');
+    await account(f.db, 'position-source');
+    await account(f.db, 'destination');
+    await event(f.db, { id: 'cash-opening', sourceId: 'cash-opening', date: '2026-01-01', kind: 'opening_cash', accountId: 'cash-source', money: money(1000) });
+    await event(f.db, { id: 'position-opening', sourceId: 'position-opening', date: '2026-01-01', kind: 'opening_position', accountId: 'position-source', instrument, quantity: '1', basis: money(10000) });
+    await event(f.db, { id: 'cash-transfer', sourceId: 'cash-transfer', date: '2026-01-02', kind: 'transfer', transferKind: 'cash', fromAccountId: 'cash-source', toAccountId: 'position-source', money: money(600), transferId: 'cash-transfer-1' });
+    await event(f.db, { id: 'position-transfer', sourceId: 'position-transfer', date: '2026-01-03', kind: 'transfer', transferKind: 'position', fromAccountId: 'position-source', toAccountId: 'destination', instrument, quantity: '1', transferId: 'position-transfer-1' });
+    await upsertWealthAccount(f.db, owner, { id: 'position-source', name: 'position-source', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-04', openingValueMinor: 0 });
+    await upsertWealthValuation(f.db, owner, { id: 'destination-price', accountId: 'destination', instrument, asOf: '2026-01-04', priceMinor: 12000, source: 'manual' });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-04' });
+    expect(snapshot.cash).toEqual([{ accountId: 'cash-source', currency: 'CAD', amountMinor: 400 }]);
+    expect(snapshot.positions).toEqual([expect.objectContaining({ accountId: 'destination', quantity: '1', marketValueMinor: 12000 })]);
+    expect(snapshot.totalByCurrency).toEqual({ CAD: 12400 });
+  });
+
+  it('projects a cash transfer into a destination that remains in holdings mode', async () => {
+    const f = await cashTransferFixture();
+    await upsertWealthAccount(f.db, owner, { id: 'from', name: 'from', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-03', openingValueMinor: 6000 });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-03' });
+    expect(snapshot.cash).toEqual([{ accountId: 'to', currency: 'CAD', amountMinor: 4000 }]);
+    expect(snapshot.accounts).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'from', mode: 'aggregate', valueMinor: 6000 })]));
+    expect(snapshot.totalByCurrency).toEqual({ CAD: 10000 });
+  });
+
+  it('keeps corrected and reversed transfers segment-scoped after a destination transition', async () => {
+    const f = await cashTransferFixture();
+    await upsertWealthAccount(f.db, owner, { id: 'to', name: 'to', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-03', openingValueMinor: 4000 });
+    await event(f.db, { id: 'correction', sourceId: 'correction', date: '2026-01-04', kind: 'correction', targetSourceId: 'transfer', replacement: { kind: 'transfer', transferKind: 'cash', date: '2026-01-02', fromAccountId: 'from', toAccountId: 'to', money: money(3000), transferId: 'transfer-1' } });
+
+    const corrected = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-04' });
+    expect(corrected.cash).toEqual([{ accountId: 'from', currency: 'CAD', amountMinor: 7000 }]);
+    expect(corrected.totalByCurrency).toEqual({ CAD: 11000 });
+
+    await event(f.db, { id: 'reverse-correction', sourceId: 'reverse-correction', date: '2026-01-05', kind: 'reversal', targetSourceId: 'correction' });
+    const reversed = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-05' });
+    expect(reversed.cash).toEqual([{ accountId: 'from', currency: 'CAD', amountMinor: 6000 }]);
+    expect(reversed.totalByCurrency).toEqual({ CAD: 10000 });
+  });
+
+  it('replays a late correction replacement during write validation', async () => {
+    const f = fixture();
+    await account(f.db, 'brokerage');
+    await event(f.db, { id: 'opening', sourceId: 'opening', date: '2026-01-01', kind: 'opening_position', accountId: 'brokerage', instrument, quantity: '1', basis: money(10000) });
+    await event(f.db, { id: 'sale', sourceId: 'sale', date: '2026-01-02', kind: 'sell', accountId: 'brokerage', instrument, quantity: '1', proceeds: money(10000), fee: null });
+
+    await expect(event(f.db, {
+      id: 'late-correction', sourceId: 'late-correction', date: '2026-01-03', kind: 'correction', targetSourceId: 'sale',
+      replacement: { kind: 'sell', date: '2026-01-02', accountId: 'brokerage', instrument, quantity: '2', proceeds: money(20000), fee: null },
+    })).rejects.toMatchObject({ code: 'short_sale' });
+
+    await expect(event(f.db, {
+      id: 'unknown-correction', sourceId: 'unknown-correction', date: '2026-01-03', kind: 'correction', targetSourceId: 'missing-sale',
+      replacement: { kind: 'sell', date: '2026-01-02', accountId: 'brokerage', instrument, quantity: '1', proceeds: money(10000), fee: null },
+    })).rejects.toMatchObject({ code: 'invalid_reference' });
+  });
+
+  it('accepts a correction replacement dated before its target event', async () => {
+    const f = fixture();
+    await account(f.db, 'brokerage');
+    await event(f.db, { id: 'opening-cash', sourceId: 'opening-cash', date: '2026-01-01', kind: 'opening_cash', accountId: 'brokerage', money: money(1000) });
+    await event(f.db, { id: 'buy', sourceId: 'buy', date: '2026-01-05', kind: 'buy', accountId: 'brokerage', instrument, quantity: '1', consideration: money(100), fee: null });
+
+    await expect(event(f.db, {
+      id: 'backdated-correction', sourceId: 'backdated-correction', date: '2026-01-10', kind: 'correction', targetSourceId: 'buy',
+      replacement: { kind: 'buy', date: '2026-01-01', accountId: 'brokerage', instrument, quantity: '1', consideration: money(100), fee: null },
+    })).resolves.toMatchObject({ event: { sourceId: 'backdated-correction' } });
+  });
+
+  it('does not reuse pre-transition cash when validating a new holdings event', async () => {
+    const f = fixture();
+    await account(f.db, 'brokerage');
+    await event(f.db, { id: 'old-opening', sourceId: 'old-opening', date: '2026-01-01', kind: 'opening_cash', accountId: 'brokerage', money: money(10000) });
+    await upsertWealthAccount(f.db, owner, { id: 'brokerage', name: 'brokerage', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-02', openingValueMinor: 10000 });
+    await upsertWealthAccount(f.db, owner, { id: 'brokerage', name: 'brokerage', kind: 'brokerage', mode: 'holdings', currency: 'CAD', effectiveDate: '2026-01-03', openingCashMinor: 1000 });
+
+    await expect(event(f.db, { id: 'oversized-buy', sourceId: 'oversized-buy', date: '2026-01-04', kind: 'buy', accountId: 'brokerage', instrument, quantity: '1', consideration: money(5000), fee: null })).rejects.toMatchObject({ code: 'negative_cash' });
   });
 
   it('treats LF and CRLF record endings equivalently and preserves quoted embedded CRLF', async () => {
@@ -481,6 +732,22 @@ describe('wealth store integration', () => {
     const after = before.replace('2026-01-31', '2026-02-02').replace('too-early', 'after-transition');
     const accepted = await createWealthImportPreview(f.db, owner, { csv: after, operationId: 'transition-after-preview' });
     expect(accepted.errors).toEqual([]);
+  });
+
+  it('validates imported replay against only the current holdings segment', async () => {
+    const f = fixture();
+    await account(f.db, 'brokerage');
+    await event(f.db, { id: 'old-opening', sourceId: 'old-opening', date: '2026-01-01', kind: 'opening_cash', accountId: 'brokerage', money: money(10000) });
+    await upsertWealthAccount(f.db, owner, { id: 'brokerage', name: 'brokerage', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-02', openingValueMinor: 10000 });
+    const headers = ['record_type', 'id', 'source_id', 'date', 'kind', 'account_id', 'name', 'account_kind', 'account_mode', 'currency', 'active', 'exchange', 'ticker', 'type', 'quantity', 'consideration_minor', 'fee_minor', 'from_mode', 'to_mode', 'effective_date', 'opening_cash_minor', 'transition_json'];
+    const transition = JSON.stringify({ fromMode: 'aggregate', toMode: 'holdings', effectiveDate: '2026-01-03', openingCashMinor: 1000, openingValueMinor: null, openingPositions: [] });
+    const csv = csvRows(headers, [
+      { record_type: 'mode_transition', id: 'mode-transition:brokerage:2026-01-03', source_id: '', date: '2026-01-03', kind: '', account_id: 'brokerage', name: '', account_kind: '', account_mode: '', currency: 'CAD', active: '', exchange: '', ticker: '', type: '', quantity: '', consideration_minor: '', fee_minor: '', from_mode: 'aggregate', to_mode: 'holdings', effective_date: '2026-01-03', opening_cash_minor: '1000', transition_json: transition },
+      { record_type: 'event', id: 'buy', source_id: 'buy', date: '2026-01-04', kind: 'buy', account_id: 'brokerage', name: '', account_kind: '', account_mode: '', currency: 'CAD', active: '', exchange: 'TSX', ticker: 'SHOP', type: 'stock', quantity: '1', consideration_minor: '5000', fee_minor: '', from_mode: '', to_mode: '', effective_date: '', opening_cash_minor: '', transition_json: '' },
+    ]);
+
+    const preview = await createWealthImportPreview(f.db, owner, { csv, operationId: 'segment-replay-preview' });
+    expect(preview.validationErrors).toEqual(expect.arrayContaining([expect.stringContaining('Cash balance cannot become negative')]));
   });
 
   it('commits selected preview rows incrementally without stranding the remainder', async () => {

@@ -10,6 +10,11 @@ import { WealthCashFlow, WealthError, WealthInvestments, WealthLoading, WealthOv
 
 type Props = { dark: boolean; service?: WealthService; isFocused?: boolean };
 
+type WealthActionCommand = { action: string; body?: string; draftId?: string };
+type DraftIdentityRequest = Pick<WealthActionCommand, 'action' | 'draftId'>;
+type WealthEventPayloadRequest = Pick<WealthActionCommand, 'action' | 'body'> & { body: string; identity?: string };
+type WealthRuntimeAction = WealthActionCommand & { runtime: WealthWriteRuntime };
+
 let operationSequence = 0;
 function operationId() {
   operationSequence += 1;
@@ -32,7 +37,7 @@ function portsFor(service?: WealthService): WealthPorts {
 }
 
 let eventIdentitySequence = 0;
-function newEventIdentity(action: string): string {
+function newEventIdentity({ action }: DraftIdentityRequest): string {
   eventIdentitySequence += 1;
   return `mobile-${action}-${eventIdentitySequence.toString(36)}-${createSecureIdentifier()}`;
 }
@@ -41,23 +46,24 @@ export class DraftOperationIdentityRegistry {
   private readonly identities = new Map<string, string>();
   private readonly completed = new Set<string>();
 
-  resolve(action: string, draftId?: string): string {
-    if (!draftId) return newEventIdentity(action);
+  resolve(request: DraftIdentityRequest): string {
+    const { action, draftId } = request;
+    if (!draftId) return newEventIdentity(request);
     const key = `${action}:${draftId}`;
     const existing = this.identities.get(key);
     if (existing && !this.completed.has(key)) return existing;
-    const identity = newEventIdentity(action);
+    const identity = newEventIdentity(request);
     this.identities.set(key, identity);
     this.completed.delete(key);
     return identity;
   }
 
-  markCompleted(action: string, draftId?: string): void {
+  markCompleted({ action, draftId }: DraftIdentityRequest): void {
     if (draftId) this.completed.add(`${action}:${draftId}`);
   }
 }
 
-export function safeEventPayload(action: string, body: string, identity = newEventIdentity(action)): string {
+export function safeEventPayload({ action, body, identity = newEventIdentity({ action }) }: WealthEventPayloadRequest): string {
   if (!['event', 'correction', 'reversal'].includes(action)) return body;
   const value = JSON.parse(body) as Record<string, unknown>;
   // The typed form never accepts source IDs. The screen supplies a draft-scoped
@@ -72,7 +78,7 @@ export function safeEventPayload(action: string, body: string, identity = newEve
 
 type WealthPeriod = { start: string; end: string };
 
-function isDateOrEmpty(value: string): boolean {
+function isDateOrEmpty({ value }: { value: string }): boolean {
   if (value === '') return true;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -80,15 +86,15 @@ function isDateOrEmpty(value: string): boolean {
 }
 
 function validatePeriod({ start, end }: WealthPeriod): string {
-  if (!isDateOrEmpty(start)) return 'Enter dates as YYYY-MM-DD.';
-  if (!isDateOrEmpty(end)) return 'Enter dates as YYYY-MM-DD.';
+  if (!isDateOrEmpty({ value: start })) return 'Enter dates as YYYY-MM-DD.';
+  if (!isDateOrEmpty({ value: end })) return 'Enter dates as YYYY-MM-DD.';
   if (start === '') return '';
   if (end === '') return '';
   if (start > end) return 'The period start must be on or before the period end.';
   return '';
 }
 
-function detailTarget(body: string): { accountId: string; instrumentKey: string | null } | null {
+function detailTarget({ body }: { body: string }): { accountId: string; instrumentKey: string | null } | null {
   try {
     const target = JSON.parse(body) as { accountId?: unknown; instrumentKey?: unknown };
     if (typeof target.accountId !== 'string') return null;
@@ -103,8 +109,10 @@ const actionsOpeningDetails = new Set(['open-account', 'open-instrument']);
 const QUOTE_SUCCESS_STATUSES = new Set(['matched', 'cached', 'configured', 'removed', 'ok', 'refreshed', 'manual', 'stale', 'skipped']);
 
 type WealthActionRouting = { refresh(): void; clearCsv(): void; openEditor(action: string): void; openDetail(body: string | undefined): void };
+type WealthActionRouteRequest = { command: WealthActionCommand; routing: WealthActionRouting };
 
-function routeWealthAction(action: string, body: string | undefined, routing: WealthActionRouting): boolean {
+function routeWealthAction({ command, routing }: WealthActionRouteRequest): boolean {
+  const { action, body } = command;
   if (action === 'refresh') { routing.refresh(); return true; }
   if (action === 'csv-preview') routing.clearCsv();
   if (body === undefined) {
@@ -125,12 +133,12 @@ type WealthWriteRuntime = {
   setWriteError: (message: string | null) => void;
 };
 
-function isEventWrite(action: string): boolean {
+function isEventWrite({ action }: Pick<WealthActionCommand, 'action'>): boolean {
   return action === 'event' || action === 'correction' || action === 'reversal';
 }
 
-function operationIdentityFor(action: string, draftId: string | undefined, runtime: WealthWriteRuntime): string | undefined {
-  if (isEventWrite(action) || action === 'csv-export') return runtime.operationIdentities.resolve(action, draftId);
+function operationIdentityFor({ action, draftId, runtime }: WealthRuntimeAction): string | undefined {
+  if (isEventWrite({ action }) || action === 'csv-export') return runtime.operationIdentities.resolve({ action, draftId });
   return undefined;
 }
 
@@ -167,7 +175,7 @@ type WealthWriteCompletion = { action: string; draftId?: string; identity?: stri
 
 function completeDraftIdentity(completion: WealthWriteCompletion, completed: boolean): void {
   if (!completed || !completion.identity) return;
-  completion.runtime.operationIdentities.markCompleted(completion.action, completion.draftId);
+  completion.runtime.operationIdentities.markCompleted({ action: completion.action, draftId: completion.draftId });
 }
 
 function completeCsvCommit(completion: WealthWriteCompletion, completed: boolean): void {
@@ -181,7 +189,7 @@ function completeQuoteWrite(completion: WealthWriteCompletion): void {
 }
 
 function completeEventWrite(completion: WealthWriteCompletion): void {
-  if (isEventWrite(completion.action)) completion.runtime.refreshInvestmentEvents();
+  if (isEventWrite({ action: completion.action })) completion.runtime.refreshInvestmentEvents();
 }
 
 function completeWealthWrite({ action, draftId, identity, operation, runtime }: WealthWriteCompletion): void {
@@ -194,11 +202,11 @@ function completeWealthWrite({ action, draftId, identity, operation, runtime }: 
   completeEventWrite(completion);
 }
 
-function writeWealthAction(action: string, body: string | undefined, draftId: string | undefined, runtime: WealthWriteRuntime): void {
+function writeWealthAction({ action, body, draftId, runtime }: WealthRuntimeAction): void {
   runtime.setWriteError(null);
-  const identity = operationIdentityFor(action, draftId, runtime);
-  const payload = safeEventPayload(action, body ?? '{}', isEventWrite(action) ? identity : undefined);
-  void runtime.controller.write(action, payload, identity ?? operationId()).then(operation => completeWealthWrite({ action, draftId, identity, operation, runtime }));
+  const identity = operationIdentityFor({ action, draftId, runtime });
+  const payload = safeEventPayload({ action, body: body ?? '{}', identity: isEventWrite({ action }) ? identity : undefined });
+  void runtime.controller.write({ action, body: payload, operationId: identity ?? operationId() }).then(operation => completeWealthWrite({ action, draftId, identity, operation, runtime }));
 }
 
 export function WealthScreen({ dark, service, isFocused = true }: Props) {
@@ -330,7 +338,7 @@ export function WealthScreen({ dark, service, isFocused = true }: Props) {
     const subscription = onChanged(() => {
       const pending = pendingCsvImport.current;
       if (!pending) return;
-      void controller.resumeCsvImport(pending).then(raw => {
+      void controller.resumeCsvImport({ operationId: pending }).then(raw => {
         if (!raw || pendingCsvImport.current !== pending) return;
         pendingCsvImport.current = null;
         setCsvPreview(decodeWealthCsvPreview(raw));
@@ -356,8 +364,8 @@ export function WealthScreen({ dark, service, isFocused = true }: Props) {
     void controller.load({ view: 'cash-flow', asOf: end || null, periodStart: start || null, periodEnd: end || null });
   };
 
-  const loadInvestmentDetail = (body: string) => {
-    const target = detailTarget(body);
+  const loadInvestmentDetail = ({ body }: { body: string }) => {
+    const target = detailTarget({ body });
     if (!target) return;
     const readEvents = detailService.readEvents;
     if (!readEvents) { setDetailError('Event history is unavailable. Retry after refreshing the Wealth report.'); return; }
@@ -380,7 +388,7 @@ export function WealthScreen({ dark, service, isFocused = true }: Props) {
   const startCsvImport = () => {
     const id = operationId();
     pendingCsvImport.current = id;
-    void controller.importCsv(id).then(raw => {
+    void controller.importCsv({ operationId: id }).then(raw => {
       if (pendingCsvImport.current !== id) return;
       if (raw) {
         pendingCsvImport.current = null;
@@ -397,25 +405,25 @@ export function WealthScreen({ dark, service, isFocused = true }: Props) {
     const operation = operationId();
     if (!source) return;
     pendingCsvImport.current = operation;
-    void controller.remapCsv(source, operation, mapping).then(raw => {
+    void controller.remapCsv({ sourceOperationId: source, operationId: operation, mapping }).then(raw => {
       if (pendingCsvImport.current !== operation) return;
       pendingCsvImport.current = null;
       if (raw) setCsvPreview(decodeWealthCsvPreview(raw));
     });
   };
 
-  const saveCsvTemplate = () => { void controller.saveCsvTemplate(operationId()); };
+  const saveCsvTemplate = () => { void controller.saveCsvTemplate({ operationId: operationId() }); };
 
   const onAction = (action: string, body?: string, draftId?: string) => {
-    const routed = routeWealthAction(action, body, {
+    const routed = routeWealthAction({ command: { action, body, draftId }, routing: {
       refresh: () => { void controller.load(); },
       clearCsv: () => setCsvPreview(null),
       openEditor: operation => { setInvestmentOperation(operation); chooseView('investments'); },
-      openDetail: detail => { setInvestmentOperation(undefined); setInvestmentDetail(null); chooseView('investments'); if (detail) loadInvestmentDetail(detail); },
-    });
+      openDetail: detail => { setInvestmentOperation(undefined); setInvestmentDetail(null); chooseView('investments'); if (detail) loadInvestmentDetail({ body: detail }); },
+    } });
     if (routed) return;
     setInvestmentOperation(undefined);
-    writeWealthAction(action, body, draftId, { controller, operationIdentities: operationIdentities.current, refreshQuoteSettings, applyQuoteReceipt, refreshInvestmentEvents, clearCsvPreview: () => setCsvPreview(null), setWriteError });
+    writeWealthAction({ action, body, draftId, runtime: { controller, operationIdentities: operationIdentities.current, refreshQuoteSettings, applyQuoteReceipt, refreshInvestmentEvents, clearCsvPreview: () => setCsvPreview(null), setWriteError } });
   };
 
   const state = controller.state.current();
@@ -432,7 +440,7 @@ export function WealthScreen({ dark, service, isFocused = true }: Props) {
       <WealthTabs dark={dark} selected={selected} onSelect={chooseView}/>
       {selected !== 'overview' ? <Pressable accessibilityRole="button" accessibilityLabel="Open Wealth Overview" onPress={() => chooseView('overview')} style={styles.overviewLink}><Text style={[styles.overviewLinkText, { color: dark ? '#83C9B1' : '#1B6B5B' }]}>Overview</Text></Pressable> : null}
       {selected === 'overview' ? <WealthOverview dark={dark} data={data} onAction={onAction}/> : null}
-      {selected === 'investments' ? <WealthInvestments dark={dark} data={data} revision={data.revision} events={investmentEvents ?? data.events} eventsError={investmentEventsError} bankAccounts={bankAccounts} bankTransactions={bankTransactions} quote={quoteSettings ?? data.quote} csv={csvPreview ?? data.csv} csvSourceOperationId={csvSourceOperationId} detail={investmentDetail} detailError={detailError} detailLoading={detailLoading} operation={investmentOperation} onCsvImport={detailService.startCsvImport ? startCsvImport : undefined} onCsvRemap={detailService.startCsvRemap ? remapCsv : undefined} onCsvTemplate={detailService.startCsvTemplate ? saveCsvTemplate : undefined} onRetryDetail={() => { if (detailBody) loadInvestmentDetail(detailBody); }} onRetryEvents={refreshInvestmentEvents} onCloseDetail={closeInvestmentDetail} onAction={onAction}/> : null}
+      {selected === 'investments' ? <WealthInvestments dark={dark} data={data} revision={data.revision} events={investmentEvents ?? data.events} eventsError={investmentEventsError} bankAccounts={bankAccounts} bankTransactions={bankTransactions} quote={quoteSettings ?? data.quote} csv={csvPreview ?? data.csv} csvSourceOperationId={csvSourceOperationId} detail={investmentDetail} detailError={detailError} detailLoading={detailLoading} operation={investmentOperation} onCsvImport={detailService.startCsvImport ? startCsvImport : undefined} onCsvRemap={detailService.startCsvRemap ? remapCsv : undefined} onCsvTemplate={detailService.startCsvTemplate ? saveCsvTemplate : undefined} onRetryDetail={() => { if (detailBody) loadInvestmentDetail({ body: detailBody }); }} onRetryEvents={refreshInvestmentEvents} onCloseDetail={closeInvestmentDetail} onAction={onAction}/> : null}
       {selected === 'cash-flow' ? <WealthCashFlow dark={dark} data={data} periodStart={periodStart} periodEnd={periodEnd} periodError={periodError} onPeriod={choosePeriod} onAction={onAction}/> : null}
       {writeError ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.mutation, { color: dark ? '#FFB4AB' : '#A83F3F' }]}>Wealth save could not be applied: {writeError}</Text> : null}
       {mutation.status !== 'ready' && mutation.status !== 'checking' ? <Text accessibilityLiveRegion="polite" style={[styles.mutation, { color: mutation.status === 'completed' ? (dark ? '#83C9B1' : '#1B6B5B') : (dark ? '#FFB4AB' : '#A83F3F') }]}>{mutation.status === 'saving' ? 'Saving Wealth change…' : mutation.status === 'completed' ? 'Saved. Refreshing server-calculated Wealth…' : `Wealth action ${mutation.status.replaceAll('_', ' ')}. Review the current report before retrying.`}</Text> : null}

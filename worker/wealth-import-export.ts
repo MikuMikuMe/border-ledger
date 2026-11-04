@@ -34,7 +34,9 @@ function moneyFields(event: Extract<WealthEvent, { kind: 'dividend' | 'withholdi
 }
 
 function transferFields(event: Extract<WealthEvent, { kind: 'transfer' }>): Record<string, unknown> {
-  return event.transferKind === 'cash' ? { amount_minor: event.money.amountMinor, currency: event.money.currency } : {};
+  return event.transferKind === 'cash'
+    ? { amount_minor: event.money.amountMinor, currency: event.money.currency }
+    : { quantity: event.quantity, currency: event.instrument.currency };
 }
 
 function splitFields(event: Extract<WealthEvent, { kind: 'split' }>): Record<string, unknown> {

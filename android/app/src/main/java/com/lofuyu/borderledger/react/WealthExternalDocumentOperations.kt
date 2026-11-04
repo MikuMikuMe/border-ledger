@@ -1,6 +1,7 @@
 package com.lofuyu.borderledger.react
 
 import android.net.Uri
+import com.lofuyu.borderledger.wealth.WealthAction
 import com.lofuyu.borderledger.wealth.WealthWriteCommand
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
@@ -12,11 +13,10 @@ internal class WealthExternalDocumentOperations(private val runtime: NativeServi
 
     fun changeTopic(kind: String): String = if (kind.startsWith("wealth_")) "wealth" else "files"
 
-    suspend fun process(handoff: HandoffContext, uri: Uri): String = when (handoff.value.getString("kind")) {
-        "wealth_export_picker" -> export(handoff, uri)
-        "wealth_template_picker" -> exportTemplate(handoff, uri)
-        "wealth_import_picker" -> preview(handoff, uri)
-        else -> error("Unknown Wealth document handoff")
+    suspend fun process(handoff: HandoffContext, uri: Uri): String = when (WealthDocumentKind.from(handoff.value.getString("kind"))) {
+        WealthDocumentKind.EXPORT_PICKER -> export(handoff, uri)
+        WealthDocumentKind.TEMPLATE_PICKER -> exportTemplate(handoff, uri)
+        WealthDocumentKind.IMPORT_PICKER -> preview(handoff, uri)
     }
 
     suspend fun preview(handoff: HandoffContext, uri: Uri): String {
@@ -33,89 +33,94 @@ internal class WealthExternalDocumentOperations(private val runtime: NativeServi
         } ?: error("Android could not read the selected Wealth CSV.")
         val csv = bytes.toString(Charsets.UTF_8)
         check(!csv.contains('\uFFFD')) { "The Wealth CSV must be UTF-8." }
-        records.write(sourceKey(handoff.owner, handoff.id), csv.encodeToByteArray())
+        val operation = WealthOperationId(handoff.id)
+        val key = WealthDocumentKey(WealthOwnerId(handoff.owner), operation)
+        records.write(sourceKey(key), csv.encodeToByteArray())
         val response = runtime.container.wealthRepository.write(
-            WealthWriteCommand(handoff.id, "csv-preview", JSONObject().put("csv", csv).toString()),
+            WealthWriteCommand(operation.value, WealthAction.CSV_PREVIEW.wireValue, JSONObject().put("csv", csv).toString()),
         )
-        records.write(previewKey(handoff.owner, handoff.id), response.encodeToByteArray())
-        return "wealth-preview:${handoff.id}"
+        records.write(previewKey(key), response.encodeToByteArray())
+        return "wealth-preview:${operation.value}"
     }
 
-    suspend fun remap(sourceOperationId: String, operationId: String, mappingJson: String): String {
-        val owner = runtime.ownerGeneration()
-        require(sourceOperationId.matches(OPERATION_ID) && operationId.matches(OPERATION_ID))
+    suspend fun remap(request: WealthCsvRemapRequest): String {
+        val owner = WealthOwnerId(runtime.ownerGeneration())
+        val mappingJson = request.mapping.value
         require(mappingJson.toByteArray(Charsets.UTF_8).size <= MAX_MAPPING_BYTES)
         val mapping = JSONObject(mappingJson)
         mapping.keys().forEach { key ->
             val value = mapping.get(key)
             require(key.matches(HEADER_NAME) && (value == JSONObject.NULL || (value is String && value.matches(HEADER_NAME))))
         }
-        val csv = records.read(sourceKey(owner, sourceOperationId))?.decodeToString()
+        val sourceDocumentKey = WealthDocumentKey(owner, request.sourceOperation)
+        val destinationKey = WealthDocumentKey(owner, request.operation)
+        val csv = records.read(sourceKey(sourceDocumentKey))?.decodeToString()
             ?: error("The selected Wealth CSV is no longer available; choose it again.")
         val response = runtime.container.wealthRepository.write(
-            WealthWriteCommand(operationId, "csv-preview", JSONObject().put("csv", csv).put("mapping", mapping).toString()),
+            WealthWriteCommand(request.operation.value, WealthAction.CSV_PREVIEW.wireValue, JSONObject().put("csv", csv).put("mapping", mapping).toString()),
         )
-        records.write(previewKey(owner, operationId), response.encodeToByteArray())
-        records.write(sourceKey(owner, operationId), csv.encodeToByteArray())
-        return "wealth-preview:$operationId"
+        records.write(previewKey(destinationKey), response.encodeToByteArray())
+        records.write(sourceKey(destinationKey), csv.encodeToByteArray())
+        return "wealth-preview:${request.operation.value}"
     }
 
-    suspend fun readPreview(operationId: String): String? {
-        val owner = runtime.ownerGeneration()
-        require(operationId.matches(OPERATION_ID))
-        return records.read(previewKey(owner, operationId))?.decodeToString()
+    suspend fun readPreview(operation: WealthOperationId): String? {
+        val key = WealthDocumentKey(WealthOwnerId(runtime.ownerGeneration()), operation)
+        return records.read(previewKey(key))?.decodeToString()
     }
 
-    suspend fun readCompletedPreview(operationId: String): String? {
-        if (completedCsvOperation(operationId) == null) return null
-        return readPreview(operationId)
+    suspend fun readCompletedPreview(operation: WealthOperationId): String? {
+        if (completedCsvOperation(operation) == null) return null
+        return readPreview(operation)
     }
 
-    suspend fun remapCompleted(sourceOperationId: String, operationId: String, mappingJson: String): String {
-        check(completedCsvOperation(sourceOperationId) != null) {
+    suspend fun remapCompleted(request: WealthCsvRemapRequest): String {
+        check(completedCsvOperation(request.sourceOperation) != null) {
             "The selected Wealth CSV is not ready for remapping; choose it again."
         }
-        return remap(sourceOperationId, operationId, mappingJson)
+        return remap(request)
     }
 
     suspend fun export(handoff: HandoffContext, destination: Uri): String {
         val csv = runtime.container.wealthRepository.exportCsv()
-        write(destination, csv)
-        return "wealth-export:${handoff.id}"
+        write(WealthDocumentWrite(destination, csv))
+        return "wealth-export:${WealthOperationId(handoff.id).value}"
     }
 
     suspend fun exportTemplate(handoff: HandoffContext, destination: Uri): String {
         val csv = runtime.container.wealthRepository.readTemplate()
-        write(destination, csv)
-        return "wealth-template:${handoff.id}"
+        write(WealthDocumentWrite(destination, csv))
+        return "wealth-template:${WealthOperationId(handoff.id).value}"
     }
 
-    private fun write(destination: Uri, csv: String) {
-        val output = runtime.applicationContext.contentResolver.openOutputStream(destination)
+    private fun write(document: WealthDocumentWrite) {
+        val output = runtime.applicationContext.contentResolver.openOutputStream(document.destination)
             ?: error("Android could not open the selected Wealth export destination.")
-        output.bufferedWriter(Charsets.UTF_8).use { it.write(csv) }
+        output.bufferedWriter(Charsets.UTF_8).use { it.write(document.csv) }
     }
 
-    private fun previewKey(owner: String, operationId: String): String =
-        "rn_wealth_preview_v1_${digest("$owner:$operationId")}"
+    private fun previewKey(key: WealthDocumentKey): String =
+        "rn_wealth_preview_v1_${digest(key)}"
 
-    private fun sourceKey(owner: String, operationId: String): String =
-        "rn_wealth_csv_source_v1_${digest("$owner:$operationId")}"
+    private fun sourceKey(key: WealthDocumentKey): String =
+        "rn_wealth_csv_source_v1_${digest(key)}"
 
-    private suspend fun completedCsvOperation(operationId: String): BridgeOperation? {
-        val owner = runtime.ownerGeneration()
-        return runtime.container.bridgeOperations.query(BridgeOperationKey(operationId, owner))?.takeIf {
+    private suspend fun completedCsvOperation(operation: WealthOperationId): BridgeOperation? {
+        val owner = WealthOwnerId(runtime.ownerGeneration())
+        return runtime.container.bridgeOperations.query(BridgeOperationKey(operation.value, owner.value))?.takeIf {
             it.status == "completed" && DocumentPickerRecovery.isWealthCsvOperation(it.kind)
         }
     }
 
-    private fun digest(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+    private fun digest(key: WealthDocumentKey): String = MessageDigest.getInstance("SHA-256")
+        .digest("${key.owner.value}:${key.operation.value}".encodeToByteArray()).joinToString("") { "%02x".format(it) }
+
+    private data class WealthDocumentKey(val owner: WealthOwnerId, val operation: WealthOperationId)
+    private data class WealthDocumentWrite(val destination: Uri, val csv: String)
 
     private companion object {
         const val MAX_CSV_BYTES = 2 * 1024 * 1024
         const val MAX_MAPPING_BYTES = 64 * 1024
-        val OPERATION_ID = Regex("[A-Za-z0-9_-]{1,128}")
         val HEADER_NAME = Regex("[A-Za-z0-9_. -]{1,128}")
     }
 }

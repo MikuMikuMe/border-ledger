@@ -57,7 +57,7 @@ describe('mobile Wealth controller', () => {
     const controller = new WealthController(p);
     await controller.start();
     const reload = controller.load();
-    await controller.write('event', JSON.stringify({ kind: 'buy' }), 'wealth-op');
+    await controller.write({ action: 'event', body: JSON.stringify({ kind: 'buy' }), operationId: 'wealth-op' });
     resolve(JSON.stringify({ ...snapshot, asOf: 'stale' }));
     await reload;
 
@@ -74,9 +74,9 @@ describe('mobile Wealth controller', () => {
     const controller = new WealthController(p);
     await controller.start();
 
-    await controller.write('event', JSON.stringify({ kind: 'buy', expectedRevision: 4 }), 'wealth-op');
+    await controller.write({ action: 'event', body: JSON.stringify({ kind: 'buy', expectedRevision: 4 }), operationId: 'wealth-op' });
     expect(controller.mutation.current().status).toBe('revision_conflict');
-    await controller.write('event', JSON.stringify({ kind: 'buy', expectedRevision: 5 }), 'wealth-op-retry');
+    await controller.write({ action: 'event', body: JSON.stringify({ kind: 'buy', expectedRevision: 5 }), operationId: 'wealth-op-retry' });
 
     expect(p.startWrite).toHaveBeenNthCalledWith(2, 'wealth-op-retry', 'event', JSON.stringify({ kind: 'buy', expectedRevision: 5 }));
     expect(controller.mutation.current().status).toBe('completed');
@@ -89,7 +89,7 @@ describe('mobile Wealth controller', () => {
     p.readCsvPreview = vi.fn(async () => '{"previewId":"preview-1"}');
     const controller = new WealthController(p);
 
-    await expect(controller.resumeCsvImport('pick')).resolves.toBe('{"previewId":"preview-1"}');
+    await expect(controller.resumeCsvImport({ operationId: 'pick' })).resolves.toBe('{"previewId":"preview-1"}');
     expect(p.readCsvPreview).toHaveBeenCalledWith('pick');
     controller.dispose();
   });
@@ -102,7 +102,7 @@ describe('mobile Wealth controller', () => {
     const controller = new WealthController(p);
 
     await controller.start();
-    await expect(controller.remapCsv('pick', 'mapped', { date: 'posted' })).resolves.toContain('preview-mapped');
+    await expect(controller.remapCsv({ sourceOperationId: 'pick', operationId: 'mapped', mapping: { date: 'posted' } })).resolves.toContain('preview-mapped');
     expect(p.startCsvRemap).toHaveBeenCalledWith('pick', 'mapped', { date: 'posted' });
     expect(p.readCsvPreview).toHaveBeenCalledWith('mapped');
     controller.dispose();

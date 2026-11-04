@@ -11,6 +11,7 @@ import {
   orderImportRecords,
 } from './wealth-import-records';
 import { transitionModeAtDate, transitionOpeningEvents } from './wealth-import-transitions';
+import { eventsForCurrentModeSegment, type WealthSegmentTransition } from './wealth-segment-projection';
 import type { ImportModeTransition, ImportValidationServices, WealthImportRecord } from './wealth-import-types';
 
 interface BankAliasRow {
@@ -290,11 +291,31 @@ function materializedImportEvents(records: readonly WealthImportRecord[], starti
   return events;
 }
 
-function replayImportErrors(events: readonly WealthEvent[], records: readonly WealthImportRecord[], accounts: readonly WealthAccount[], nextSequence: number): string[] {
+function segmentTransitions(transitions: readonly ImportModeTransition[]): WealthSegmentTransition[] {
+  return transitions.map((transition) => ({ account_id: transition.accountId, effective_date: transition.effectiveDate, from_mode: transition.fromMode, to_mode: transition.toMode }));
+}
+
+function latestEventDate(events: readonly WealthEvent[]): string | null {
+  return events.map((event) => event.date).sort().at(-1) ?? null;
+}
+
+interface ImportReplayQuery {
+  readonly events: readonly WealthEvent[];
+  readonly records: readonly WealthImportRecord[];
+  readonly accounts: readonly WealthAccount[];
+  readonly transitions: readonly ImportModeTransition[];
+  readonly nextSequence: number;
+}
+
+function replayImportErrors(query: ImportReplayQuery): string[] {
   try {
-    const importedEvents = materializedImportEvents(records, nextSequence);
-    const replayAccounts = accounts.map((account) => ({ ...account, mode: 'holdings' as const }));
-    replayWealthEvents([...events, ...importedEvents], { accounts: replayAccounts });
+    const importedEvents = materializedImportEvents(query.records, query.nextSequence);
+    const proposedEvents = [...query.events, ...importedEvents];
+    const asOf = latestEventDate(proposedEvents);
+    if (asOf) {
+      const projectedEvents = eventsForCurrentModeSegment(proposedEvents, query.accounts, segmentTransitions(query.transitions), asOf);
+      replayWealthEvents(projectedEvents, { accounts: query.accounts });
+    }
     return [];
   } catch (error) {
     return [error instanceof Error ? error.message : 'The imported portfolio could not be replayed.'];
@@ -324,7 +345,7 @@ export async function validateImportPortfolio(db: D1Database, context: Financial
   errors.push(...transitionHistoryErrors(importedTransitions, existingTransitions, existingEvents, existingValuations));
   errors.push(...importedModeErrors(orderedRecords, accountState.accounts, allTransitions));
   errors.push(...await importedLinkErrors(db, context, orderedRecords, services));
-  errors.push(...replayImportErrors(existingEvents, orderedRecords, accountState.accounts, nextSequence));
+  errors.push(...replayImportErrors({ events: existingEvents, records: orderedRecords, accounts: accountState.accounts, transitions: allTransitions, nextSequence }));
   for (const valuation of existingValuations) if (valuation.priceMinor < 0) errors.push(`Valuation ${valuation.id} has an invalid price.`);
   return [...new Set(errors)];
 }

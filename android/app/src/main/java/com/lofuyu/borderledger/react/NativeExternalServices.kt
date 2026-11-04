@@ -384,10 +384,11 @@ class NativeExternalServices(private val r: NativeServiceRuntime) {
         }
     }
 
-    suspend fun readWealthImportPreview(operationId: String): String? = wealthDocuments.readCompletedPreview(operationId)
+    suspend fun readWealthImportPreview(operationId: String): String? = wealthDocuments.readCompletedPreview(WealthOperationId(operationId))
 
-    suspend fun remapWealthImport(sourceOperationId: String, operationId: String, mappingJson: String): String =
-        wealthDocuments.remapCompleted(sourceOperationId, operationId, mappingJson)
+    suspend fun remapWealthImport(sourceOperationId: String, operationId: String, mapping: String): String = wealthDocuments.remapCompleted(
+        WealthCsvRemapRequest(WealthOperationId(sourceOperationId), WealthOperationId(operationId), WealthJsonBody(mapping)),
+    )
 
     private suspend fun previewImport(request: ImportPreviewRequest): String =
         BridgeImportOperations.preview(

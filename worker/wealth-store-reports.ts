@@ -109,6 +109,22 @@ function portfolioEventSources(events: readonly WealthEvent[], investmentIds: Re
   return sources;
 }
 
+function addControlLineage(sourceId: string, controls: ReadonlyMap<string, Extract<WealthEvent, { kind: 'correction' | 'reversal' }>>, sources: Set<string>): void {
+  const control = controls.get(sourceId);
+  if (!control || sources.has(sourceId)) return;
+  sources.add(sourceId);
+  addControlLineage(control.targetSourceId, controls, sources);
+}
+
+function portfolioHistorySourceIds(events: readonly WealthEvent[], effectiveEvents: readonly WealthEvent[], investmentIds: ReadonlySet<string>): Set<string> {
+  const sources = portfolioEventSources(events, investmentIds);
+  const controls = new Map(events.filter((event): event is Extract<WealthEvent, { kind: 'correction' | 'reversal' }> => isPortfolioControl(event)).map((event) => [event.sourceId, event]));
+  for (const sourceId of portfolioEventSources(effectiveEvents, investmentIds)) {
+    if (sourceId.endsWith(':replacement')) addControlLineage(sourceId.slice(0, -':replacement'.length), controls, sources);
+  }
+  return sources;
+}
+
 function addAggregateStatus(target: Record<string, 'complete' | 'incomplete'>, currencyCode: string | undefined, state: 'fresh' | 'stale' | 'missing'): void {
   if (!currencyCode) return;
   if (state !== 'fresh') {
@@ -116,6 +132,34 @@ function addAggregateStatus(target: Record<string, 'complete' | 'incomplete'>, c
     return;
   }
   target[currencyCode] ??= 'complete';
+}
+
+function holdingsOnlySnapshot(base: WealthSnapshot, accounts: readonly WealthAccount[]): WealthSnapshot {
+  const holdingsIds = new Set(accounts.filter((account) => account.mode === 'holdings').map((account) => account.id));
+  const positions = base.positions.filter((position) => holdingsIds.has(position.accountId));
+  const cash = base.cash.filter((balance) => holdingsIds.has(balance.accountId));
+  const totals: Record<string, number> = {};
+  const status: Record<string, 'complete' | 'incomplete'> = {};
+  for (const balance of cash) {
+    addTotal(totals, balance.currency, balance.amountMinor);
+    status[balance.currency] ??= 'complete';
+  }
+  for (const position of positions) {
+    if (position.quantity === '0') continue;
+    if (position.marketValueMinor === null) {
+      status[position.instrument.currency] = 'incomplete';
+      continue;
+    }
+    addTotal(totals, position.instrument.currency, position.marketValueMinor);
+    status[position.instrument.currency] ??= 'complete';
+  }
+  return {
+    ...base,
+    positions,
+    cash,
+    totalByCurrency: Object.fromEntries(Object.entries(totals).sort(([left], [right]) => left.localeCompare(right))),
+    totalStatusByCurrency: Object.fromEntries(Object.entries(status).sort(([left], [right]) => left.localeCompare(right))),
+  };
 }
 
 async function domainSnapshot(
@@ -131,7 +175,7 @@ async function domainSnapshot(
     return segment.mode === 'holdings' && (segment.startDate === null || item.asOf >= segment.startDate);
   });
   const domainEvents = services.eventsForCurrentModeSegment(events, datedAccounts, transitions, asOf);
-  const base = createWealthSnapshot(domainEvents, { asOf, accounts: registry, valuations: normalValuations });
+  const base = holdingsOnlySnapshot(createWealthSnapshot(domainEvents, { asOf, accounts: registry, valuations: normalValuations }), datedAccounts);
   const totals = { ...base.totalByCurrency } as Record<string, number>;
   const totalStatusByCurrency = { ...base.totalStatusByCurrency } as Record<string, 'complete' | 'incomplete'>;
   const statuses: Record<string, unknown>[] = [];
@@ -145,6 +189,25 @@ async function domainSnapshot(
 
 function visibleEffectiveEvents(events: readonly WealthEvent[], asOf: string): readonly WealthEvent[] {
   return resolveWealthEvents(events.filter((event) => event.date <= asOf));
+}
+
+function isControlEvent(event: WealthEvent): boolean {
+  return event.kind === 'correction' || event.kind === 'reversal';
+}
+
+function addDiscoveryVariants(variants: Map<string, WealthEvent>, events: readonly WealthEvent[]): void {
+  for (const event of events) variants.set(event.sourceId, event);
+}
+
+function historicalDiscoveryEvents(events: readonly WealthEvent[], asOf: string): readonly WealthEvent[] {
+  const variants = new Map<string, WealthEvent>();
+  addDiscoveryVariants(variants, events.filter((event) => event.date <= asOf && !isControlEvent(event)));
+  const controlDates = new Set<string>([
+    asOf,
+    ...events.filter((event) => isControlEvent(event) && event.date <= asOf).map((event) => event.date),
+  ]);
+  for (const date of controlDates) addDiscoveryVariants(variants, visibleEffectiveEvents(events, date));
+  return [...variants.values()];
 }
 
 function mergeBalances(history: readonly StoredBalance[], latest: readonly StoredBalance[]): StoredBalance[] {
@@ -170,12 +233,15 @@ async function mergeProviderValuations(
   services: WealthReportReadServices,
 ) {
   const accountInstruments = new Map<string, { instrument: WealthQuoteInstrument; accountIds: Set<string> }>();
-  for (const event of events) {
-    if (!('accountId' in event) || !('instrument' in event) || !event.instrument || !accounts.some((account) => account.id === event.accountId && services.modeAtDate(account, transitions, event.date) === 'holdings')) continue;
+  const discoveryEvents = historicalDiscoveryEvents(events, asOf);
+  for (const event of discoveryEvents) {
+    if (!('instrument' in event) || !event.instrument) continue;
     const instrument = event.instrument as WealthQuoteInstrument;
     const key = instrumentKey(instrument);
     const current = accountInstruments.get(key) ?? { instrument, accountIds: new Set<string>() };
-    current.accountIds.add(event.accountId);
+    for (const accountId of wealthEventAccountIds(event)) {
+      if (accounts.some((account) => account.id === accountId && services.modeAtDate(account, transitions, event.date) === 'holdings')) current.accountIds.add(accountId);
+    }
     accountInstruments.set(key, current);
   }
   if (accountInstruments.size === 0) return valuations;
@@ -183,7 +249,7 @@ async function mergeProviderValuations(
   const existing = new Set(valuations.map((valuation) => `${valuation.accountId}:${valuation.instrument.exchange ? instrumentKey(valuation.instrument) : '__account__'}:${valuation.asOf}`));
   const merged = [...valuations];
   for (const quote of quotes) {
-    const entry = accountInstruments.get(quote.instrumentKey);
+    const entry = accountInstruments.get(instrumentKey(quote.instrument));
     if (!entry) continue;
     for (const accountId of entry.accountIds) {
       const account = accounts.find((candidate) => candidate.id === accountId);
@@ -434,7 +500,7 @@ export async function readWealthReportProjection(input: WealthReportProjectionIn
   // instrument; only holding prices belong in the domain report valuation
   // list, which normalizes instruments while replaying positions.
   const reportValuations = investmentValuations.filter((valuation) => Boolean(valuation.instrument.exchange));
-  const portfolioEventIds = portfolioEventSources(events, investmentAccountIds);
+  const portfolioEventIds = portfolioHistorySourceIds(events, effectiveEvents, investmentAccountIds);
   const portfolioHistoryEvents = events.filter((event) => portfolioEventIds.has(event.sourceId));
   const portfolioHistory = await buildWealthHistory(db, investmentAccounts, transitions, portfolioHistoryEvents, investmentValuations, [], range.asOf, reportingCurrency, dependencies, services);
   const startPoint = range.from ? portfolioHistory.find((point) => point.date === range.from && point.complete) : undefined;
