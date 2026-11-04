@@ -1,4 +1,4 @@
-import { createWealthAccountRegistry, replayWealthEvents } from '../src/domain/wealth';
+import { createWealthAccountRegistry } from '../src/domain/wealth';
 import type { WealthAccount, WealthEvent } from '../src/domain/wealth-types';
 import type { D1Database } from './db-types';
 import type { FinancialContext } from './financial-authority';
@@ -11,7 +11,7 @@ import {
   orderImportRecords,
 } from './wealth-import-records';
 import { transitionModeAtDate, transitionOpeningEvents } from './wealth-import-transitions';
-import { eventsForCurrentModeSegment, type WealthSegmentTransition } from './wealth-segment-projection';
+import { replayWealthEventsAcrossModeSegments, type WealthSegmentProjectionContext, type WealthSegmentTransition } from './wealth-segment-projection';
 import type { ImportModeTransition, ImportValidationServices, WealthImportRecord } from './wealth-import-types';
 
 interface BankAliasRow {
@@ -313,8 +313,8 @@ function replayImportErrors(query: ImportReplayQuery): string[] {
     const proposedEvents = [...query.events, ...importedEvents];
     const asOf = latestEventDate(proposedEvents);
     if (asOf) {
-      const projectedEvents = eventsForCurrentModeSegment(proposedEvents, query.accounts, segmentTransitions(query.transitions), asOf);
-      replayWealthEvents(projectedEvents, { accounts: query.accounts });
+      const context: WealthSegmentProjectionContext = { accounts: query.accounts, transitions: segmentTransitions(query.transitions) };
+      replayWealthEventsAcrossModeSegments({ events: proposedEvents, context, asOf });
     }
     return [];
   } catch (error) {

@@ -1,7 +1,6 @@
 import {
   classifyWealthCashFlows,
   calculateModifiedDietz,
-  createWealthAccountRegistry,
   createWealthReport,
   createWealthSnapshot,
   instrumentKey,
@@ -25,6 +24,7 @@ import { readWealthQuotes, wealthQuoteToHoldingValuation, type WealthQuoteInstru
 import { convertWealthTotals } from './wealth-store-fx';
 import { cashFlowRecords, classifyInvestmentCashFlows, portfolioFlowRecords, summarizeCashFlows, summarizeInvestmentCashFlows, type CashFlowTotal, type InvestmentCashFlowRecord } from './wealth-store-cashflows';
 import type { StoredModeTransition, WealthReportDependencies } from './wealth-store';
+import type { WealthSegmentProjectionContext } from './wealth-segment-projection';
 
 export interface WealthReportRange {
   readonly asOf: string;
@@ -42,7 +42,8 @@ export interface WealthReportReadServices {
   readonly accountsAtDate: (accounts: readonly (WealthAccount & { amountMinor?: number | null })[], transitions: readonly StoredModeTransition[], asOf: string) => (WealthAccount & { amountMinor?: number | null })[];
   readonly modeAtDate: (account: Pick<WealthAccount, 'id' | 'mode'>, transitions: readonly StoredModeTransition[], asOf: string) => WealthAccount['mode'];
   readonly modeSegment: (account: Pick<WealthAccount, 'id' | 'mode'>, transitions: readonly StoredModeTransition[], asOf: string) => { mode: WealthAccount['mode']; startDate: string | null };
-  readonly eventsForCurrentModeSegment: (events: readonly WealthEvent[], accounts: readonly WealthAccount[], transitions: readonly StoredModeTransition[], asOf: string) => readonly WealthEvent[];
+  readonly segmentReplayAccounts: (accounts: readonly WealthAccount[], transitions: readonly StoredModeTransition[], asOf: string) => readonly WealthAccount[];
+  readonly eventsForCurrentModeSegment: (events: readonly WealthEvent[], context: WealthSegmentProjectionContext, asOf: string) => readonly WealthEvent[];
 }
 
 interface WealthReportProjectionInput {
@@ -166,7 +167,6 @@ async function domainSnapshot(
   accounts: readonly (WealthAccount & { amountMinor?: number | null })[], transitions: readonly StoredModeTransition[], events: readonly WealthEvent[], valuations: readonly (HoldingValuation & { valueMinor?: number })[], balances: readonly StoredBalance[], asOf: string, services: WealthReportReadServices, historical = false,
 ): Promise<WealthSnapshot & { accounts: readonly (WealthAccount & Record<string, unknown>)[]; balanceStatuses: readonly Record<string, unknown>[] }> {
   const datedAccounts = services.accountsAtDate(accounts, transitions, asOf);
-  const registry = createWealthAccountRegistry(datedAccounts);
   const normalValuations = valuations.filter((item) => {
     if (!item.instrument.exchange) return false;
     const account = accounts.find((candidate) => candidate.id === item.accountId);
@@ -174,8 +174,9 @@ async function domainSnapshot(
     const segment = services.modeSegment(account, transitions, asOf);
     return segment.mode === 'holdings' && (segment.startDate === null || item.asOf >= segment.startDate);
   });
-  const domainEvents = services.eventsForCurrentModeSegment(events, datedAccounts, transitions, asOf);
-  const base = holdingsOnlySnapshot(createWealthSnapshot(domainEvents, { asOf, accounts: registry, valuations: normalValuations }), datedAccounts);
+  const domainEvents = services.eventsForCurrentModeSegment(events, { accounts, transitions }, asOf);
+  const replayAccounts = services.segmentReplayAccounts(accounts, transitions, asOf);
+  const base = holdingsOnlySnapshot(createWealthSnapshot(domainEvents, { asOf, accounts: replayAccounts, valuations: normalValuations }), datedAccounts);
   const totals = { ...base.totalByCurrency } as Record<string, number>;
   const totalStatusByCurrency = { ...base.totalStatusByCurrency } as Record<string, 'complete' | 'incomplete'>;
   const statuses: Record<string, unknown>[] = [];

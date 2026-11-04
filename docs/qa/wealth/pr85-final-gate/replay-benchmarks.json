@@ -1,0 +1,58 @@
+{
+  "date": "2026-11-04",
+  "before": [
+    {
+      "scenario": "distinct-date cash events",
+      "events": 100,
+      "elapsedMs": 62
+    },
+    {
+      "scenario": "distinct-date cash events",
+      "events": 500,
+      "elapsedMs": 1196
+    },
+    {
+      "scenario": "distinct-date cash events",
+      "events": 1000,
+      "elapsedMs": 4804
+    }
+  ],
+  "after": [
+    {
+      "scenario": "distinct-date cash events",
+      "events": 100,
+      "elapsedMs": 6
+    },
+    {
+      "scenario": "distinct-date cash events",
+      "events": 500,
+      "elapsedMs": 11
+    },
+    {
+      "scenario": "distinct-date cash events",
+      "events": 1000,
+      "elapsedMs": 17
+    },
+    {
+      "scenario": "distinct-date cash events",
+      "events": 10000,
+      "elapsedMs": 166
+    },
+    {
+      "scenario": "historical position transfer chain",
+      "transfers": 100,
+      "elapsedMs": 11
+    },
+    {
+      "scenario": "historical position transfer chain",
+      "transfers": 500,
+      "elapsedMs": 29
+    },
+    {
+      "scenario": "historical position transfer chain",
+      "transfers": 1000,
+      "elapsedMs": 48
+    }
+  ],
+  "environment": "Local Windows, Node 24; synthetic replay-only inputs; wall clock, not hosted latency"
+}

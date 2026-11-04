@@ -20,7 +20,7 @@ import { assertFinancialAuthority, financialAuthorityPredicate, type FinancialCo
 import type { StoredBalance } from './lunchflow-balance-store';
 import type { TransactionAliasRow } from './wealth-store-cashflows';
 import { readWealthReportProjection, readWealthSnapshotProjection, type WealthReportReadServices } from './wealth-store-reports';
-import { eventsForCurrentModeSegment } from './wealth-segment-projection';
+import { eventsForCurrentModeSegment, modeSegmentReplayAccounts, replayWealthEventsAcrossModeSegments } from './wealth-segment-projection';
 
 export type WealthOpeningPositionInput = WealthOpeningPositionRequest;
 export type WealthModeTransitionInput = WealthModeTransitionRequest;
@@ -667,6 +667,7 @@ const wealthReportServices: WealthReportReadServices = {
   accountsAtDate,
   modeAtDate,
   modeSegment,
+  segmentReplayAccounts: modeSegmentReplayAccounts,
   eventsForCurrentModeSegment,
 };
 
@@ -992,7 +993,13 @@ export async function appendWealthEvent(db: D1Database, context: FinancialContex
   const proposedEvents = [...events, orderedEvent];
   try {
     resolveWealthEvents(proposedEvents);
-    replayWealthEvents(eventsForCurrentModeSegment(proposedEvents, accounts, transitions, eventModeDate(event), { lineageEvents: correctionLineageEvents(proposedEvents, orderedEvent) }), { accounts });
+    const replayAsOf = [...proposedEvents.map((candidate) => candidate.date), ...transitions.map((transition) => transition.effective_date)].sort().at(-1) ?? eventModeDate(event);
+    replayWealthEventsAcrossModeSegments({
+      events: proposedEvents,
+      context: { accounts, transitions, lineageEvents: correctionLineageEvents(proposedEvents, orderedEvent) },
+      asOf: replayAsOf,
+      fromDate: eventModeDate(event),
+    });
   } catch (error) { if (error instanceof WealthDomainError) throw new WealthStoreError(error.code, error.message); throw error; }
   const fields = eventAccountFields(orderedEvent); const next = expected + 1; const response = { event: orderedEvent, revision: next };
   return runMutation(db, context, { operationId: options.operationId ?? `event-${event.sourceId}`, operationKind: 'event.append', expectedRevision: expected, eventCount: 1, payloadHash: await digest(eventForDigest(event)), response, statements: (guard) => [db.prepare(`INSERT INTO wealth_events(ledger_id,id,source_id,date,sequence,kind,account_id,from_account_id,to_account_id,linked_bank_source_id,payload_json) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE ${guard.sql}`).bind(context.ledgerId, orderedEvent.id, orderedEvent.sourceId, orderedEvent.date, orderedEvent.sequence, orderedEvent.kind, fields.accountId, fields.fromAccountId, fields.toAccountId, orderedEvent.linkedBankSourceId ?? null, JSON.stringify(orderedEvent), ...guard.bindings)] });
