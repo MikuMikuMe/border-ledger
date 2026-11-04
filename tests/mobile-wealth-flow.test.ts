@@ -11,7 +11,7 @@ vi.mock('../mobile/node_modules/react-native/index.js', () => ({
   TurboModuleRegistry: { getEnforcing: () => ({}) },
 }));
 
-const { InvestmentOperations } = await import('../mobile/src/features/wealth/WealthViews');
+const { InvestmentOperations, newDraftId } = await import('../mobile/src/features/wealth/WealthViews');
 const { DraftOperationIdentityRegistry, safeEventPayload } = await import('../mobile/src/screens/WealthScreen');
 
 type WriteCall = { operationId: string; action: string; body: string };
@@ -64,6 +64,21 @@ function chooseAccountAndFill({ choose, fill, targetLabel, date, valueLabel, val
 }
 
 describe('Android Wealth typed write flow', () => {
+  it('uses Web Crypto entropy when randomUUID is unavailable', () => {
+    const originalCrypto = (globalThis as { crypto?: unknown }).crypto;
+    const getRandomValues = vi.fn((bytes: Uint8Array) => {
+      bytes.set(Uint8Array.from([0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]));
+      return bytes;
+    });
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } });
+    try {
+      expect(newDraftId()).toBe('00112233-4455-4677-8899-aabbccddeeff');
+      expect(getRandomValues).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: originalCrypto });
+    }
+  });
+
   it('submits a generated account identity through the injected service action', () => {
     const startWrite = makeWrite();
     const data = { accounts: [], instruments: [], events: [], quote: { configured: false, provider: null, lastRefreshedAt: null }, csv: { template: null, previewId: null, rowCount: 0, errors: [], duplicates: [] } };
@@ -79,6 +94,47 @@ describe('Android Wealth typed write flow', () => {
     const firstId = JSON.parse(startWrite.mock.calls[0][0].body).id as string;
     expect(firstId).toMatch(/^maple-brokerage-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(JSON.parse(startWrite.mock.calls[1][0].body).id).toBe(firstId);
+  });
+
+  it('submits a dated zero opening valuation for a new aggregate account', () => {
+    const startWrite = vi.fn();
+    const { tree, choose, fill } = accountEditor({
+      accounts: [], instruments: [], events: [], bankTransactions: [],
+      quote: { configured: false, provider: null, lastRefreshedAt: null },
+      csv: { template: null, previewId: null, rowCount: 0, errors: [], duplicates: [] },
+    }, (action, body) => startWrite(action, body));
+    fill('Account name', 'Zero manual asset');
+    choose('manual asset');
+    const openingDate = tree.root.findByProps({ accessibilityLabel: 'Opening date (YYYY-MM-DD)' });
+    expect(openingDate.props.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    fill('Opening date (YYYY-MM-DD)', '');
+    fill('Opening value (optional, for example 1250.00)', '0');
+    const saveBeforeDate = tree.root.findAllByProps({ accessibilityLabel: 'Save account' }).at(-1);
+    expect(saveBeforeDate.props.accessibilityState.disabled).toBe(true);
+    fill('Opening date (YYYY-MM-DD)', '2026-11-03');
+    const save = tree.root.findAllByProps({ accessibilityLabel: 'Save account' }).at(-1);
+    expect(save.props.accessibilityState.disabled).toBe(false);
+    act(() => { save.props.onPress(); });
+    expect(JSON.parse(startWrite.mock.calls[0][1])).toMatchObject({
+      kind: 'manual_asset', mode: 'aggregate', amountMinor: 0, asOf: '2026-11-03',
+    });
+  });
+
+  it('does not turn a new holdings account amount into an undated valuation', () => {
+    const startWrite = vi.fn();
+    const { tree, fill } = accountEditor({
+      accounts: [], instruments: [], events: [], bankTransactions: [],
+      quote: { configured: false, provider: null, lastRefreshedAt: null },
+      csv: { template: null, previewId: null, rowCount: 0, errors: [], duplicates: [] },
+    }, (action, body) => startWrite(action, body));
+    fill('Account name', 'New brokerage');
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Opening amount (optional; not a dated value)' })).toHaveLength(0);
+    const save = tree.root.findAllByProps({ accessibilityLabel: 'Save account' }).at(-1);
+    expect(save.props.accessibilityState.disabled).toBe(false);
+    act(() => { save.props.onPress(); });
+    const payload = JSON.parse(startWrite.mock.calls[0][1]) as Record<string, unknown>;
+    expect(payload).toMatchObject({ kind: 'brokerage', mode: 'holdings', amountMinor: null });
+    expect(payload).not.toHaveProperty('asOf');
   });
 
   it('submits an aggregate-to-holdings account transition atomically', () => {

@@ -3,6 +3,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, Text
 import type { WealthBankAccount, WealthBankTransaction, WealthCashFlowRow, WealthCsvMapping, WealthEventRow, WealthInvestmentDetail, WealthView, WealthWireSnapshot } from './contracts';
 import { parseMoneyMinor } from '../../../../src/domain/currencies';
 import type { CanonicalInstrument } from '../../../../src/domain/wealth-types';
+import { createSecureIdentifier } from './identity';
 
 const light = { canvas: '#F3EFE6', ink: '#18201F', muted: '#68706D', rule: '#D2CCC0', signal: '#1B6B5B', danger: '#A83F3F', panel: '#F8F5EE' };
 const darkTheme = { canvas: '#101715', ink: '#EEF1E8', muted: '#B1BDB5', rule: '#43534B', signal: '#83C9B1', danger: '#FFB4AB', panel: '#17221D' };
@@ -25,6 +26,13 @@ const isIsoDate = (value: string): boolean => {
   const parsed = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 };
+const todayIsoDate = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 const parseQuantity = (value: string): string | null => {
   const input = value.trim();
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(input) || !/[1-9]/.test(input)) return null;
@@ -38,15 +46,7 @@ const operationActions = Object.keys(titleForAction);
 const eventKinds = ['opening_cash', 'opening_position', 'buy', 'sell', 'dividend', 'withholding', 'fee', 'contribution', 'withdrawal', 'split', 'transfer'];
 const instrumentEventKinds = new Set(['opening_position', 'buy', 'sell', 'dividend', 'withholding', 'fee', 'split']);
 const bankLinkEventKinds = new Set(['dividend', 'withholding', 'fee', 'contribution', 'withdrawal']);
-type RuntimeCrypto = { crypto?: { randomUUID?: () => string } };
-
-function newDraftId(): string {
-  const runtimeUuid = (globalThis as RuntimeCrypto).crypto?.randomUUID?.();
-  if (runtimeUuid) return runtimeUuid;
-  const hex = (length: number) => Array.from({ length }, () => Math.floor(Math.random() * 16).toString(16)).join('');
-  const variant = ['8', '9', 'a', 'b'][Math.floor(Math.random() * 4)];
-  return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
-}
+export const newDraftId = (): string => createSecureIdentifier();
 
 function bankTransactionLabel(transaction: WealthBankTransaction): string {
   const date = transaction.occurredAt.slice(0, 10);
@@ -495,6 +495,21 @@ function nonNegativeMinor(value: string, currency: string): number | null {
   return amount !== null && amount >= 0 ? amount : null;
 }
 
+function aggregateOpeningNeedsDate(values: OperationValues, amountMinor: number | null): boolean {
+  if (amountMinor === null) return false;
+  if (values.accountKind === 'linked_bank') return false;
+  return !values.accountId.trim();
+}
+
+function newAccountOpeningPayload(values: OperationValues): Record<string, unknown> {
+  const amountMinor = values.openingAmountMinor.trim() ? parseMinor(values.openingAmountMinor, values.currency) : null;
+  if (values.accountMode !== 'aggregate') {
+    return { amountMinor: values.accountId.trim() ? amountMinor : null };
+  }
+  if (!aggregateOpeningNeedsDate(values, amountMinor)) return { amountMinor };
+  return { amountMinor, asOf: values.effectiveDate };
+}
+
 function accountTransitionPayload(values: OperationValues): Record<string, unknown> | null {
   if (!isAccountModeTransition(values) || !isIsoDate(values.effectiveDate)) return null;
   const openingValue = nonNegativeMinor(values.openingAmountMinor, values.currency);
@@ -510,7 +525,7 @@ const buildOperationBody = (action: string, values: OperationValues, csv: Wealth
     const generatedId = values.accountId.trim() || `${slug}-${values.accountIdSuffix}`;
     const linkedBankAccountId = values.accountKind === 'linked_bank' ? values.linkedBankAccountId.trim() || null : null;
     const transition = accountTransitionPayload(values);
-    return JSON.stringify({ id: generatedId, name: values.accountName.trim(), kind: values.accountKind, mode: values.accountMode, currency: values.currency, linkedBankAccountId, amountMinor: transition ? null : (values.openingAmountMinor.trim() ? parseMinor(values.openingAmountMinor, values.currency) : null), ...(transition ?? {}), ...revisionPayload(revision) });
+    return JSON.stringify({ id: generatedId, name: values.accountName.trim(), kind: values.accountKind, mode: values.accountMode, currency: values.currency, linkedBankAccountId, ...(transition ? { amountMinor: null, ...transition } : newAccountOpeningPayload(values)), ...revisionPayload(revision) });
   }
   if (action === 'instrument') return JSON.stringify({ id: `instrument-${instrument.exchange}-${instrument.ticker}-${instrument.type}-${instrument.currency}`.toLowerCase(), ...instrument, ...revisionPayload(revision) });
   if (action === 'valuation') return JSON.stringify({ id: `valuation-${values.accountId.trim() || 'account'}-${values.date}`, accountId: values.accountId.trim(), instrument: values.valuationTarget === 'account' ? null : instrument, asOf: values.date, priceMinor: parseMinor(values.priceMinor, values.currency), source: 'manual', provider: null, ...revisionPayload(revision) });
@@ -542,7 +557,9 @@ function accountLinkAllowed(values: OperationValues): boolean {
 }
 
 function accountOpeningValueAllowed(values: OperationValues): boolean {
-  return !values.openingAmountMinor.trim() || parseMinor(values.openingAmountMinor, values.currency) !== null;
+  if (!values.openingAmountMinor.trim()) return true;
+  if (parseMinor(values.openingAmountMinor, values.currency) === null) return false;
+  return Boolean(values.accountId.trim()) || values.accountMode !== 'aggregate' || values.accountKind === 'linked_bank' || isIsoDate(values.effectiveDate);
 }
 
 function accountIdentityReady(values: OperationValues): boolean {
@@ -623,7 +640,8 @@ function OpeningPositionEditor({ dark, instruments, values, setters }: Pick<Oper
 
 function AccountTransitionFields({ dark, instruments, values, setters }: Pick<OperationEditorProps, 'dark' | 'instruments' | 'values' | 'setters'>) {
   const transitioning = isAccountModeTransition(values);
-  if (!transitioning) return <Field dark={dark} label="Opening value (optional, for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/>;
+  if (!transitioning && values.accountMode === 'aggregate') return <><Field dark={dark} label="Opening value (optional, for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/><Field dark={dark} label="Opening date (YYYY-MM-DD)" value={values.effectiveDate} onChange={setters.setEffectiveDate}/><Copy dark={dark} muted>A dated opening value seeds the first aggregate Wealth observation. Leave the value blank when you will add a dated balance later.</Copy></>;
+  if (!transitioning) return <Copy dark={dark} muted>Holdings accounts start without an opening amount here. Save the brokerage, then record dated Opening cash or Opening position activity so the server creates holdings history.</Copy>;
   return <><Copy dark={dark} heading>Atomic mode transition</Copy><Copy dark={dark} muted>The server records this effective-dated opening state in one account write. No follow-up event or valuation is submitted.</Copy><Field dark={dark} label="Effective date (YYYY-MM-DD)" value={values.effectiveDate} onChange={setters.setEffectiveDate}/>{values.accountMode === 'holdings' ? <><Field dark={dark} label="Opening cash (for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/><OpeningPositionEditor dark={dark} instruments={instruments} values={values} setters={setters}/></> : <Field dark={dark} label="Opening aggregate value (for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/>}</>;
 }
 
@@ -873,9 +891,19 @@ function useInvestmentOperationState(initialAction: string, accounts: WealthWire
   const [quoteKey, setQuoteKey] = useState('');
   const [csvText, setCsvText] = useState('');
   const [csvMapping, setCsvMapping] = useState<WealthCsvMapping>({});
-  const changeAccountKind = (value: string) => { setAccountKind(value); if (value !== 'brokerage') setAccountMode('aggregate'); };
+  const changeAccountMode = (value: 'aggregate' | 'holdings') => {
+    setAccountMode(value);
+    if (value === 'aggregate' && !accountId && !effectiveDate) setEffectiveDate(todayIsoDate());
+  };
+  const changeAccountKind = (value: string) => {
+    setAccountKind(value);
+    if (value !== 'brokerage') {
+      setAccountMode('aggregate');
+      if (!accountId && !effectiveDate) setEffectiveDate(todayIsoDate());
+    }
+  };
   const values: OperationValues = { accountId, accountIdSuffix, accountName, accountKind, accountMode, originalAccountMode, linkedBankAccountId, openingAmountMinor, effectiveDate, openingPosition, currency, exchange, ticker, instrumentType, valuationTarget, date, quantity, amountMinor, priceMinor, eventKind, targetEvent, selectedBankTransaction, numerator, denominator, toAccountId, transferKind, quoteKey, csvText, csvMapping };
-  const setters: OperationSetters = { setAccountId, setAccountIdSuffix, setAccountName, setAccountKind: changeAccountKind, setAccountMode, setLinkedBankAccountId, setOpeningAmountMinor, setEffectiveDate, setOpeningPosition, setCurrency, setExchange, setTicker, setInstrumentType, setValuationTarget, setDate, setQuantity, setAmountMinor, setPriceMinor, setEventKind, setTargetEvent, setSelectedBankTransaction, setNumerator, setDenominator, setToAccountId, setTransferKind, setQuoteKey, setCsvText, setCsvMapping };
+  const setters: OperationSetters = { setAccountId, setAccountIdSuffix, setAccountName, setAccountKind: changeAccountKind, setAccountMode: changeAccountMode, setLinkedBankAccountId, setOpeningAmountMinor, setEffectiveDate, setOpeningPosition, setCurrency, setExchange, setTicker, setInstrumentType, setValuationTarget, setDate, setQuantity, setAmountMinor, setPriceMinor, setEventKind, setTargetEvent, setSelectedBankTransaction, setNumerator, setDenominator, setToAccountId, setTransferKind, setQuoteKey, setCsvText, setCsvMapping };
   const selectAccount = (id: string) => {
     const account = accounts.find(item => item.id === id);
     setAccountId(id);

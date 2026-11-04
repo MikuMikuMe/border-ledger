@@ -4,6 +4,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactApplicationContext
 import com.lofuyu.borderledger.react.codegen.NativeWealthSpec
+import com.lofuyu.borderledger.wealth.WealthIdentifier
 import com.lofuyu.borderledger.wealth.WealthReadQuery
 import com.lofuyu.borderledger.wealth.WealthWriteCommand
 import org.json.JSONObject
@@ -18,6 +19,8 @@ class WealthModule(context: ReactApplicationContext, private val runtime: Native
     }
 
     override fun invalidate() { bridge.close(); super.invalidate() }
+
+    override fun createIdentifier(): String = WealthIdentifier.create()
 
     override fun readSnapshot(request: ReadableMap, promise: Promise) = bridge.call(promise) {
         runtime.container.wealthRepository.readSnapshot(

@@ -3,6 +3,7 @@ import { AppState, BackHandler, Pressable, StyleSheet, Text, View } from 'react-
 import type { Operation } from '../features/finance/contracts';
 import { WealthController } from '../features/wealth/WealthController';
 import type { WealthBankAccount, WealthBankTransaction, WealthCsvMapping, WealthCsvState, WealthEventRow, WealthInvestmentDetail, WealthPorts, WealthService, WealthView, WealthWireSnapshot } from '../features/wealth/contracts';
+import { createSecureIdentifier } from '../features/wealth/identity';
 import { nativeWealthPorts, nativeWealthService } from '../features/wealth/wealthService';
 import { decodeWealthCsvPreview, decodeWealthEvents, decodeWealthQuoteSettings, decodeWealthValuations } from '../features/wealth/model';
 import { WealthCashFlow, WealthError, WealthInvestments, WealthLoading, WealthOverview, WealthTabs } from '../features/wealth/WealthViews';
@@ -12,7 +13,7 @@ type Props = { dark: boolean; service?: WealthService; isFocused?: boolean };
 let operationSequence = 0;
 function operationId() {
   operationSequence += 1;
-  return `wealth_${Date.now().toString(36)}_${operationSequence.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return `wealth_${operationSequence.toString(36)}_${createSecureIdentifier()}`;
 }
 
 function portsFor(service?: WealthService): WealthPorts {
@@ -33,7 +34,7 @@ function portsFor(service?: WealthService): WealthPorts {
 let eventIdentitySequence = 0;
 function newEventIdentity(action: string): string {
   eventIdentitySequence += 1;
-  return `mobile-${action}-${Date.now().toString(36)}-${eventIdentitySequence.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `mobile-${action}-${eventIdentitySequence.toString(36)}-${createSecureIdentifier()}`;
 }
 
 export class DraftOperationIdentityRegistry {

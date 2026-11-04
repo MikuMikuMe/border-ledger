@@ -14,6 +14,7 @@ export type WealthReadRequest = {
 export type WealthHistoryRequest = {accountId?: string | null};
 
 export interface Spec extends TurboModule {
+  createIdentifier(): string;
   readSnapshot(request: WealthReadRequest): Promise<string>;
   readQuoteSettings(): Promise<string>;
   readEvents(request: WealthHistoryRequest): Promise<string>;

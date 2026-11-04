@@ -12,20 +12,21 @@ SDK, AVD, Java, Gradle caches, checkout, and APKs are on D:. Local configuration
 
 | Check | Result |
 | --- | --- |
-| Complete repository suite, including mobile tests | 212 files / 1,531 tests passed, 589.22 seconds |
+| Complete repository suite, including mobile tests | 213 files / 1,533 tests passed, 553.73 seconds |
 | Final web regression suite after signed-chart and explicit-zero refinements | 51 passed |
+| Final Android opening-date and secure-ID regressions | 19 passed after the complete-suite run |
 | Root and mobile TypeScript | Passed |
 | Production web build | Passed; Vite reports a 529 kB chunk-size advisory |
-| Android unit tests | 358 passed, zero failures/errors |
+| Android unit tests | 359 passed, zero failures/errors |
 | Shared Android host tests | 19 passed |
 | Android lint and normal debug build | Passed |
 | Android release build | Passed, unsigned x86_64 artifact |
 | Android static/toolchain gate | Passed |
 | Normal debug and release merged host/manifest checks | Passed |
 | CodeScene per-file reviews | Completed for supported source files |
-| CodeScene pre-commit safeguard | Failed; residual findings below |
+| CodeScene safeguard | Initial full-feature gate failed; follow-up change gate passed |
 
-The final complete suite includes the API/CSV representation guards, correction dates, signed charts, explicit zero values, FX provenance and missing coverage, and focused Android Back handling.
+The complete suite includes the final store/report/FX module extraction, secure native UUID bridge, API/CSV guards, correction dates, signed charts, explicit zero values, FX provenance, missing coverage, and focused Android Back handling. The subsequent Android dated-opening fix passed 19 focused tests, both typechecks, and a fresh release build.
 
 ## Browser flows
 
@@ -83,11 +84,28 @@ The filtered runtime log contains no fatal exception, fatal signal, TypeError, R
 ![Android dark theme](android-dark.png)
 
 See [the filtered emulator log](android-logcat.txt).
+
+### Follow-up native verification
+
+CodeQL's weak-randomness findings were fixed with synchronous native UUID generation; a regression also proves the native path works with JavaScript crypto absent. The actual emulator saved a new account and retained it after force-stop/relaunch.
+
+The follow-up check caught an undated Android opening amount. New aggregate openings now expose a date and save a true observation, including zero. The actual Android form saved `Synthetic dated UUID zero` with a November 3 zero observation; server coverage was fresh, no missing-data reasons remained, and CAD/USD totals and the CAD 3,974.02 estimate stayed unchanged. The updated release build passed. New holdings accounts direct users to dated opening cash/position activity instead of accepting an undated balance.
+
+The restored benchmark was also imported through the final extracted store/report modules; the canonical 29-record export retained the same SHA-256 listed above. A subsequent zero-valued regression account is additional synthetic QA data.
+
+![Android dated zero opening and successful save](android-dated-opening.png)
+
+![Android after relaunch](android-dated-relaunch.png)
+
+The web account-form refactor also saved an explicit zero through the actual browser and retained complete totals.
+
+![Web account-form regression](web-form-regression.jpg)
+
 ## CodeScene findings
 
-The safeguard checked 87 supported files. The oversized native service was refactored and now scores 10.0. New accounting, persistence, import, quote, and web logic received clean per-file reviews. Existing complexity in Worker entry/mobile routing remains stable or improved.
+The initial safeguard checked 87 supported files. The oversized native service was refactored and now scores 10.0. Accounting, persistence, import, quote, and web logic received clean local per-file reviews. Hosted analysis additionally flagged FX conversion complexity, store size/function count, quote lookup complexity, and account-form argument structure; those prompted cohesive FX/cash-flow/report module extraction and form/lookup refactors. Existing complexity in Worker entry/mobile routing remains stable or improved.
 
-The global gate remains **failed** for primitive/string-heavy arguments in these seven native boundary/controller/test files:
+The initial whole-feature gate was **failed** for primitive/string-heavy arguments in these seven native boundary/controller/test files:
 
 - `mobile/src/screens/WealthScreen.tsx`
 - `mobile/src/features/wealth/WealthController.ts`
@@ -97,7 +115,7 @@ The global gate remains **failed** for primitive/string-heavy arguments in these
 - `android/app/src/main/java/com/lofuyu/borderledger/react/WealthExternalDocumentOperations.kt`
 - `android/app/src/main/java/com/lofuyu/borderledger/auth/CredentialInterceptors.kt`
 
-These reviewed findings remain in the string-based React Native/HTTP/document operation contracts. See the [machine-readable safeguard result](codescene-precommit.json). Branch-level analysis compares the final commit against `origin/main`; its result is recorded in the PR.
+These reviewed findings concern the string-based React Native/HTTP/document operation contracts. The follow-up pre-commit gate passed for 15 supported changed files; final whole-branch/hosted status is recorded in the PR. See the [machine-readable safeguard result](codescene-precommit.json). Branch-level analysis compares the final commit against `origin/main`; its result is recorded in the PR.
 
 ## Limits and rollout
 

@@ -1,0 +1,32 @@
+{
+  "results": [
+    {
+      "name": "tests/mobile-wealth-flow.test.ts",
+      "verdict": "stable",
+      "findings": [
+        {
+          "category": "String Heavy Function Arguments",
+          "change-details": [
+            {
+              "change-type": "improved",
+              "description": "The ratio of strings in function arguments decreases from 66.67% to 61.54%, threshold = 39.0%",
+              "value": 0.6153846153846154,
+              "value-before": 0.6666666666666667
+            }
+          ],
+          "change-type": "unchanged",
+          "new-pp": 1,
+          "old-pp": 1,
+          "threshold": 0.39
+        }
+      ]
+    }
+  ],
+  "quality_gates": "passed",
+  "metadata": {
+    "checked-file-count": 15,
+    "code-health-eligible-file-count": 15,
+    "status": "issues-found",
+    "total-modified-file-count": 19
+  }
+}

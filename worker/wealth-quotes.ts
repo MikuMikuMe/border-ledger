@@ -566,29 +566,50 @@ async function reserveProviderRequest(options: WealthQuoteLookupOptions): Promis
   return options.reserveRequest ? options.reserveRequest() : true;
 }
 
+type ConfirmedLookupResult =
+  | Extract<WealthQuoteLookupResult, { readonly status: 'matched' }>
+  | { readonly status: 'ambiguous'; readonly reason: string; readonly matches: readonly AlphaVantageSearchMatch[] };
+type QuotaExhaustedLookupResult = { readonly status: 'quota_exhausted'; readonly reason: string };
+
+function confirmedLookupResult(instrument: WealthQuoteInstrument, matches: readonly AlphaVantageSearchMatch[], ambiguousReason = 'The provider returned multiple confirmed instrument matches.'): ConfirmedLookupResult | null {
+  const confirmed = matches.filter((match) => confirmAlphaVantageMatch(instrument, match));
+  if (confirmed.length === 1) return { status: 'matched', providerSymbol: confirmed[0].providerSymbol, match: confirmed[0] };
+  if (confirmed.length > 1) return { status: 'ambiguous', reason: ambiguousReason, matches: confirmed };
+  return null;
+}
+
+async function searchAlphaVantageMatches(instrument: WealthQuoteInstrument, credential: string, fetcher: typeof fetch): Promise<AlphaVantageSearchMatch[]> {
+  try {
+    return parseAlphaVantageSearch(await requestProvider('SYMBOL_SEARCH', { keywords: instrument.ticker, apikey: credential }, fetcher));
+  } catch (error) {
+    if (error instanceof WealthQuoteProviderError && error.code === 'empty_response') return [];
+    throw error;
+  }
+}
+
+function quotaExhaustedLookup(): QuotaExhaustedLookupResult {
+  return { status: 'quota_exhausted', reason: 'The free provider allowance is exhausted for this rolling 24-hour window.' };
+}
+
+async function searchAlphaVantageListings(instrument: WealthQuoteInstrument, credential: string, fetcher: typeof fetch, options: WealthQuoteLookupOptions): Promise<ConfirmedLookupResult | QuotaExhaustedLookupResult | null> {
+  if (instrument.currency !== 'USD') return null;
+  if (!await reserveProviderRequest(options)) return quotaExhaustedLookup();
+  const listingPayload = await requestProvider('LISTING_STATUS', { apikey: credential, state: 'active' }, fetcher, 'csv');
+  const listings = parseAlphaVantageListing(String(listingPayload));
+  return confirmedLookupResult(instrument, listingMatches(instrument, listings), 'The provider listing returned multiple confirmed instrument matches.');
+}
+
 export async function lookupAlphaVantageInstrument(instrumentInput: WealthQuoteInstrument, credential: string, options: WealthQuoteLookupOptions = {}): Promise<WealthQuoteLookupResult> {
   const instrument = normalizeInstrument(instrumentInput);
   validateCredential(credential);
   const fetcher = options.fetcher ?? fetch;
   try {
-    if (!await reserveProviderRequest(options)) return { status: 'quota_exhausted', reason: 'The free provider allowance is exhausted for this rolling 24-hour window.' };
-    let matches: AlphaVantageSearchMatch[] = [];
-    try {
-      matches = parseAlphaVantageSearch(await requestProvider('SYMBOL_SEARCH', { keywords: instrument.ticker, apikey: credential }, fetcher));
-    } catch (error) {
-      if (!(error instanceof WealthQuoteProviderError) || error.code !== 'empty_response') throw error;
-    }
-    const confirmed = matches.filter((match) => confirmAlphaVantageMatch(instrument, match));
-    if (confirmed.length === 1) return { status: 'matched', providerSymbol: confirmed[0].providerSymbol, match: confirmed[0] };
-    if (confirmed.length > 1) return { status: 'ambiguous', reason: 'The provider returned multiple confirmed instrument matches.', matches: confirmed };
-    if (instrument.currency === 'USD') {
-      if (!await reserveProviderRequest(options)) return { status: 'quota_exhausted', reason: 'The free provider allowance is exhausted for this rolling 24-hour window.' };
-      const listingPayload = await requestProvider('LISTING_STATUS', { apikey: credential, state: 'active' }, fetcher, 'csv');
-      const listings = parseAlphaVantageListing(String(listingPayload));
-      const listingConfirmed = listingMatches(instrument, listings).filter((match) => confirmAlphaVantageMatch(instrument, match));
-      if (listingConfirmed.length === 1) return { status: 'matched', providerSymbol: listingConfirmed[0].providerSymbol, match: listingConfirmed[0] };
-      if (listingConfirmed.length > 1) return { status: 'ambiguous', reason: 'The provider listing returned multiple confirmed instrument matches.', matches: listingConfirmed };
-    }
+    if (!await reserveProviderRequest(options)) return quotaExhaustedLookup();
+    const matches = await searchAlphaVantageMatches(instrument, credential, fetcher);
+    const searchResult = confirmedLookupResult(instrument, matches);
+    if (searchResult) return searchResult;
+    const listingResult = await searchAlphaVantageListings(instrument, credential, fetcher, options);
+    if (listingResult) return listingResult;
     return { status: matches.length === 0 ? 'not_found' : 'unsupported', reason: 'The provider did not confirm the requested exchange, currency, and instrument type.', matches };
   } catch (error) {
     if (error instanceof WealthQuoteProviderError) return { status: 'provider_error', reason: error.code === 'rate_limited' ? 'The provider quota was reached.' : 'The provider quote lookup was unavailable.' };

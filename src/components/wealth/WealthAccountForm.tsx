@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { createContext, useContext, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { CircleAlert, X } from 'lucide-react';
 import type { LedgerApi } from '../../domain/api';
 import type { WealthAccountView, WealthModeTransitionRequest, WealthOpeningPositionRequest } from '../../domain/wealth-api-types';
@@ -15,28 +15,44 @@ import {
   writeError,
 } from './wealth-form-shared';
 
-interface AccountFieldsProps {
+interface AccountFormValues {
   name: string;
-  setName: (value: string) => void;
   kind: WealthAccount['kind'];
-  setKind: (value: WealthAccount['kind']) => void;
   mode: WealthAccount['mode'];
-  setMode: (value: WealthAccount['mode']) => void;
   currency: string;
-  setCurrency: (value: string) => void;
   value: string;
-  setValue: (value: string) => void;
   date: string;
-  setDate: (value: string) => void;
   linkedBankAccountId: string;
-  setLinkedBankAccountId: (value: string) => void;
-  linkedAccounts: readonly LinkedAccountOption[];
   openingCash: string;
-  setOpeningCash: (value: string) => void;
-  showOpeningCash: boolean;
   openingPosition: OpeningPositionDraft;
+}
+
+interface AccountFormActions {
+  setName: (value: string) => void;
+  setKind: (value: WealthAccount['kind']) => void;
+  setMode: (value: WealthAccount['mode']) => void;
+  setCurrency: (value: string) => void;
+  setValue: (value: string) => void;
+  setDate: (value: string) => void;
+  setLinkedBankAccountId: (value: string) => void;
+  setOpeningCash: (value: string) => void;
   setOpeningPosition: Dispatch<SetStateAction<OpeningPositionDraft>>;
+}
+
+interface AccountFormContextValue {
+  values: AccountFormValues;
+  actions: AccountFormActions;
+  linkedAccounts: readonly LinkedAccountOption[];
+  showOpeningCash: boolean;
   showOpeningPosition: boolean;
+}
+
+const AccountFormContext = createContext<AccountFormContextValue | null>(null);
+
+function useAccountFormContext(): AccountFormContextValue {
+  const context = useContext(AccountFormContext);
+  if (!context) throw new Error('Account form fields must be rendered inside the account form.');
+  return context;
 }
 
 interface OpeningPositionDraft {
@@ -55,46 +71,53 @@ function emptyOpeningPosition(currency = 'CAD'): OpeningPositionDraft {
 
 const supportedExchanges = ['TSX', 'TSXV', 'NEO', 'CSE', 'NYSE', 'NASDAQ', 'AMEX', 'ARCA', 'NYSE ARCA', 'BATS'];
 
-function AccountKindField({ kind, setKind, setMode, linkedAccounts }: Pick<AccountFieldsProps, 'kind' | 'setKind' | 'setMode' | 'linkedAccounts'>) {
+function AccountKindField() {
+  const { values, actions, linkedAccounts } = useAccountFormContext();
   const onChange = (value: string) => {
     const next = value as WealthAccount['kind'];
-    setKind(next);
-    if (next !== 'brokerage') setMode('aggregate');
+    actions.setKind(next);
+    if (next !== 'brokerage') actions.setMode('aggregate');
   };
-  return <label>Kind<select value={kind} onChange={(event) => onChange(event.target.value)}><option value="manual_asset">Manual asset</option><option value="debt">Debt</option><option value="brokerage">Brokerage</option>{linkedAccounts.length ? <option value="linked_bank">Linked bank balance</option> : null}</select></label>;
+  return <label>Kind<select value={values.kind} onChange={(event) => onChange(event.target.value)}><option value="manual_asset">Manual asset</option><option value="debt">Debt</option><option value="brokerage">Brokerage</option>{linkedAccounts.length ? <option value="linked_bank">Linked bank balance</option> : null}</select></label>;
 }
 
-function AccountRepresentationField({ kind, mode, setMode }: Pick<AccountFieldsProps, 'kind' | 'mode' | 'setMode'>) {
-  return <label>Representation<select value={mode} disabled={kind !== 'brokerage'} onChange={(event) => setMode(event.target.value as WealthAccount['mode'])}><option value="aggregate">Aggregate value</option><option value="holdings">Holdings + cash</option></select></label>;
+function AccountRepresentationField() {
+  const { values, actions } = useAccountFormContext();
+  return <label>Representation<select value={values.mode} disabled={values.kind !== 'brokerage'} onChange={(event) => actions.setMode(event.target.value as WealthAccount['mode'])}><option value="aggregate">Aggregate value</option><option value="holdings">Holdings + cash</option></select></label>;
 }
 
-function LinkedBankField({ kind, linkedBankAccountId, setLinkedBankAccountId, linkedAccounts, setCurrency }: Pick<AccountFieldsProps, 'kind' | 'linkedBankAccountId' | 'setLinkedBankAccountId' | 'linkedAccounts' | 'setCurrency'>) {
-  if (kind !== 'linked_bank') return null;
+function LinkedBankField() {
+  const { values, actions, linkedAccounts } = useAccountFormContext();
+  if (values.kind !== 'linked_bank') return null;
   const onChange = (value: string) => {
     const selected = linkedAccounts.find((account) => account.id === value);
-    setLinkedBankAccountId(value);
-    if (selected?.currency) setCurrency(selected.currency);
+    actions.setLinkedBankAccountId(value);
+    if (selected?.currency) actions.setCurrency(selected.currency);
   };
-  return <label>Existing bank account<select value={linkedBankAccountId} onChange={(event) => onChange(event.target.value)}><option value="">Choose account</option>{linkedAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.currency ? ` · ${account.currency}` : ''}</option>)}</select></label>;
+  return <label>Existing bank account<select value={values.linkedBankAccountId} onChange={(event) => onChange(event.target.value)}><option value="">Choose account</option>{linkedAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.currency ? ` · ${account.currency}` : ''}</option>)}</select></label>;
 }
 
-function AggregateValueField({ kind, mode, value, setValue }: Pick<AccountFieldsProps, 'kind' | 'mode' | 'value' | 'setValue'>) {
-  if (mode !== 'aggregate' || kind === 'linked_bank') return null;
-  return <label>Opening value<input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="0.00" /></label>;
+function AggregateValueField() {
+  const { values, actions } = useAccountFormContext();
+  if (values.mode !== 'aggregate' || values.kind === 'linked_bank') return null;
+  return <label>Opening value<input inputMode="decimal" value={values.value} onChange={(event) => actions.setValue(event.target.value)} placeholder="0.00" /></label>;
 }
 
-function OpeningPositionFields({ position, setPosition }: { position: OpeningPositionDraft; setPosition: Dispatch<SetStateAction<OpeningPositionDraft>> }) {
-  const update = <K extends keyof OpeningPositionDraft>(key: K, value: OpeningPositionDraft[K]) => setPosition((current) => ({ ...current, [key]: value }));
-  return <fieldset className="wealth-form-wide"><legend>Opening position (optional)</legend><p className="wealth-empty-copy">Enter a security only when it is part of the dated transition. Leave all fields blank to use opening cash instead.</p><div className="wealth-form-grid"><label>Exchange<input list="wealth-opening-exchanges" value={position.exchange} onChange={(event) => update('exchange', event.target.value)} /><datalist id="wealth-opening-exchanges">{supportedExchanges.map((exchange) => <option key={exchange} value={exchange} />)}</datalist></label><label>Ticker<input value={position.ticker} onChange={(event) => update('ticker', event.target.value)} placeholder="SHOP" /></label><label>Instrument type<select value={position.instrumentType} onChange={(event) => update('instrumentType', event.target.value as CanonicalInstrument['type'])}><option value="stock">Stock</option><option value="etf">ETF</option></select></label><label>Position currency<select value={position.currency} onChange={(event) => update('currency', event.target.value)}><option>CAD</option><option>USD</option><option>CNY</option></select></label><label>Opening quantity<input inputMode="decimal" value={position.quantity} onChange={(event) => update('quantity', event.target.value)} placeholder="0" /></label><label>Opening basis (optional)<input inputMode="decimal" value={position.basis} onChange={(event) => update('basis', event.target.value)} placeholder="0.00" /></label><label>Dated price (optional)<input inputMode="decimal" value={position.price} onChange={(event) => update('price', event.target.value)} placeholder="0.00" /></label></div></fieldset>;
+function OpeningPositionFields() {
+  const { values, actions } = useAccountFormContext();
+  const update = <K extends keyof OpeningPositionDraft>(key: K, value: OpeningPositionDraft[K]) => actions.setOpeningPosition((current) => ({ ...current, [key]: value }));
+  return <fieldset className="wealth-form-wide"><legend>Opening position (optional)</legend><p className="wealth-empty-copy">Enter a security only when it is part of the dated transition. Leave all fields blank to use opening cash instead.</p><div className="wealth-form-grid"><label>Exchange<input list="wealth-opening-exchanges" value={values.openingPosition.exchange} onChange={(event) => update('exchange', event.target.value)} /><datalist id="wealth-opening-exchanges">{supportedExchanges.map((exchange) => <option key={exchange} value={exchange} />)}</datalist></label><label>Ticker<input value={values.openingPosition.ticker} onChange={(event) => update('ticker', event.target.value)} placeholder="SHOP" /></label><label>Instrument type<select value={values.openingPosition.instrumentType} onChange={(event) => update('instrumentType', event.target.value as CanonicalInstrument['type'])}><option value="stock">Stock</option><option value="etf">ETF</option></select></label><label>Position currency<select value={values.openingPosition.currency} onChange={(event) => update('currency', event.target.value)}><option>CAD</option><option>USD</option><option>CNY</option></select></label><label>Opening quantity<input inputMode="decimal" value={values.openingPosition.quantity} onChange={(event) => update('quantity', event.target.value)} placeholder="0" /></label><label>Opening basis (optional)<input inputMode="decimal" value={values.openingPosition.basis} onChange={(event) => update('basis', event.target.value)} placeholder="0.00" /></label><label>Dated price (optional)<input inputMode="decimal" value={values.openingPosition.price} onChange={(event) => update('price', event.target.value)} placeholder="0.00" /></label></div></fieldset>;
 }
 
-function TransitionFields({ showOpeningCash, openingCash, setOpeningCash, showOpeningPosition, openingPosition, setOpeningPosition }: Pick<AccountFieldsProps, 'showOpeningCash' | 'openingCash' | 'setOpeningCash' | 'showOpeningPosition' | 'openingPosition' | 'setOpeningPosition'>) {
-  return <><OpeningCashField show={showOpeningCash} value={openingCash} setValue={setOpeningCash} optional={showOpeningPosition} />{showOpeningPosition ? <OpeningPositionFields position={openingPosition} setPosition={setOpeningPosition} /> : null}</>;
+function TransitionFields() {
+  const { values, actions, showOpeningCash, showOpeningPosition } = useAccountFormContext();
+  return <><OpeningCashField show={showOpeningCash} value={values.openingCash} setValue={actions.setOpeningCash} optional={showOpeningPosition} />{showOpeningPosition ? <OpeningPositionFields /> : null}</>;
 }
 
-function EffectiveDateField({ date, setDate }: Pick<AccountFieldsProps, 'date' | 'setDate'>) {
-  const update = (event: FormEvent<HTMLInputElement>) => setDate(event.currentTarget.value);
-  return <label>Effective date<input type="date" value={date} onChange={update} onInput={update} /></label>;
+function EffectiveDateField() {
+  const { values, actions } = useAccountFormContext();
+  const update = (event: FormEvent<HTMLInputElement>) => actions.setDate(event.currentTarget.value);
+  return <label>Effective date<input type="date" value={values.date} onChange={update} onInput={update} /></label>;
 }
 
 function OpeningCashField({ show, value, setValue, optional }: { show: boolean; value: string; setValue: (value: string) => void; optional: boolean }) {
@@ -102,8 +125,9 @@ function OpeningCashField({ show, value, setValue, optional }: { show: boolean; 
   return <label className="wealth-form-wide">Opening cash for holdings<input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="0.00" /><small>{optional ? 'Optional when an opening position is entered; the server records the transition atomically.' : 'Seeds this brokerage with a dated opening cash event.'}</small></label>;
 }
 
-function AccountFields({ name, setName, kind, setKind, mode, setMode, currency, setCurrency, value, setValue, date, setDate, linkedBankAccountId, setLinkedBankAccountId, linkedAccounts, openingCash, setOpeningCash, showOpeningCash, openingPosition, setOpeningPosition, showOpeningPosition }: AccountFieldsProps) {
-  return <div className="wealth-form-grid"><label>Account name<input name="account-name" value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" /></label><AccountKindField kind={kind} setKind={setKind} setMode={setMode} linkedAccounts={linkedAccounts} /><AccountRepresentationField kind={kind} mode={mode} setMode={setMode} /><label>Currency<select value={currency} onChange={(event) => setCurrency(event.target.value)}><option>CAD</option><option>USD</option><option>CNY</option></select></label><LinkedBankField kind={kind} linkedBankAccountId={linkedBankAccountId} setLinkedBankAccountId={setLinkedBankAccountId} linkedAccounts={linkedAccounts} setCurrency={setCurrency} /><EffectiveDateField date={date} setDate={setDate} /><AggregateValueField kind={kind} mode={mode} value={value} setValue={setValue} /><TransitionFields showOpeningCash={showOpeningCash} openingCash={openingCash} setOpeningCash={setOpeningCash} showOpeningPosition={showOpeningPosition} openingPosition={openingPosition} setOpeningPosition={setOpeningPosition} /></div>;
+function AccountFields() {
+  const { values, actions } = useAccountFormContext();
+  return <div className="wealth-form-grid"><label>Account name<input name="account-name" value={values.name} onChange={(event) => actions.setName(event.target.value)} autoComplete="off" /></label><AccountKindField /><AccountRepresentationField /><label>Currency<select value={values.currency} onChange={(event) => actions.setCurrency(event.target.value)}><option>CAD</option><option>USD</option><option>CNY</option></select></label><LinkedBankField /><EffectiveDateField /><AggregateValueField /><TransitionFields /></div>;
 }
 
 interface AccountMutationResponse {
@@ -178,12 +202,24 @@ function initialMoney(account: WealthAccountView | undefined): string {
   return typeof amount === 'number' ? (amount / 100).toFixed(2) : '';
 }
 
-function accountValidationError(name: string, kind: WealthAccount['kind'], mode: WealthAccount['mode'], linkedBankAccountId: string, amount: number | null, date: string, needsOpeningCash: boolean, openingCash: number | null, openingPosition: WealthOpeningPositionRequest | null): string | null {
-  if (kind !== 'brokerage' && mode !== 'aggregate') return 'Only brokerage accounts can use Holdings + cash.';
-  const fieldValidation = accountFormError(name, kind, mode, linkedBankAccountId, amount);
-  if (fieldValidation) return fieldError(name, 'Account name') ?? fieldValidation;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'Choose a valid effective date.';
-  return needsOpeningCash && openingCash === null && openingPosition === null ? 'Enter opening cash or an opening position to set up this brokerage for holdings tracking.' : null;
+interface AccountValidationInput {
+  name: string;
+  kind: WealthAccount['kind'];
+  mode: WealthAccount['mode'];
+  linkedBankAccountId: string;
+  amount: number | null;
+  date: string;
+  needsOpeningCash: boolean;
+  openingCash: number | null;
+  openingPosition: WealthOpeningPositionRequest | null;
+}
+
+function accountValidationError(input: AccountValidationInput): string | null {
+  if (input.kind !== 'brokerage' && input.mode !== 'aggregate') return 'Only brokerage accounts can use Holdings + cash.';
+  const fieldValidation = accountFormError(input.name, input.kind, input.mode, input.linkedBankAccountId, input.amount);
+  if (fieldValidation) return fieldError(input.name, 'Account name') ?? fieldValidation;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return 'Choose a valid effective date.';
+  return input.needsOpeningCash && input.openingCash === null && input.openingPosition === null ? 'Enter opening cash or an opening position to set up this brokerage for holdings tracking.' : null;
 }
 
 function AccountFormHeading({ account, onCancel }: { account?: WealthAccountView; onCancel: () => void }) {
@@ -218,7 +254,7 @@ interface AccountSubmitInput {
 }
 
 async function submitAccount(input: AccountSubmitInput): Promise<string | null> {
-  const validationError = accountValidationError(input.name, input.kind, input.mode, input.linkedBankAccountId, input.amount, input.date, input.needsOpeningCash, input.openingCash, input.openingPosition);
+  const validationError = accountValidationError(input);
   if (validationError) return validationError;
   try {
     await saveAccount(input);
@@ -229,21 +265,22 @@ async function submitAccount(input: AccountSubmitInput): Promise<string | null> 
   }
 }
 
-interface AccountFormViewProps extends AccountFieldsProps {
+interface AccountFormViewProps {
   account?: WealthAccountView;
   error: string | null;
   busy: boolean;
   onCancel: () => void;
   onSubmit: (event: FormEvent) => void;
+  form: AccountFormContextValue;
 }
 
-function AccountFormView({ account, error, busy, onCancel, onSubmit, ...fields }: AccountFormViewProps) {
-  return <form className="wealth-form" onSubmit={onSubmit} aria-labelledby="wealth-account-form-title">
+function AccountFormView({ account, error, busy, onCancel, onSubmit, form }: AccountFormViewProps) {
+  return <AccountFormContext.Provider value={form}><form className="wealth-form" onSubmit={onSubmit} aria-labelledby="wealth-account-form-title">
     <AccountFormHeading account={account} onCancel={onCancel} />
     <AccountFormError message={error} />
-    <AccountFields {...fields} />
+    <AccountFields />
     <AccountFormActions busy={busy} onCancel={onCancel} />
-  </form>;
+  </form></AccountFormContext.Provider>;
 }
 
 function shouldSeedOpeningCash(account: WealthAccountView | undefined, kind: WealthAccount['kind'], mode: WealthAccount['mode']): boolean {
@@ -302,35 +339,28 @@ function openingPositionResult(position: OpeningPositionDraft, enabled: boolean)
   return { request: openingPositionPayload(position), error: null };
 }
 
-function modeTransition(account: WealthAccountView | undefined, mode: WealthAccount['mode'], date: string, amount: number | null, openingCash: number | null, openingPosition: WealthOpeningPositionRequest | null): WealthModeTransitionRequest | null {
-  if (!account || account.mode === mode) return null;
-  return mode === 'holdings'
-    ? { effectiveDate: date, ...(openingCash === null ? {} : { openingCashMinor: openingCash }), ...(openingPosition ? { openingPositions: [openingPosition] } : {}) }
-    : { effectiveDate: date, openingValueMinor: amount };
+interface ModeTransitionInput {
+  account?: WealthAccountView;
+  mode: WealthAccount['mode'];
+  date: string;
+  amount: number | null;
+  openingCash: number | null;
+  openingPosition: WealthOpeningPositionRequest | null;
+}
+
+function modeTransition(input: ModeTransitionInput): WealthModeTransitionRequest | null {
+  if (!input.account || input.account.mode === input.mode) return null;
+  return input.mode === 'holdings'
+    ? { effectiveDate: input.date, ...(input.openingCash === null ? {} : { openingCashMinor: input.openingCash }), ...(input.openingPosition ? { openingPositions: [input.openingPosition] } : {}) }
+    : { effectiveDate: input.date, openingValueMinor: input.amount };
 }
 
 interface AccountDraftState {
   accountId: string;
-  name: string;
-  setName: (value: string) => void;
-  kind: WealthAccount['kind'];
-  setKind: (value: WealthAccount['kind']) => void;
-  mode: WealthAccount['mode'];
-  setMode: (value: WealthAccount['mode']) => void;
-  currency: string;
-  setCurrency: (value: string) => void;
-  value: string;
-  setValue: (value: string) => void;
-  date: string;
-  setDate: (value: string) => void;
-  openingCash: string;
-  setOpeningCash: (value: string) => void;
-  openingPosition: OpeningPositionDraft;
-  setOpeningPosition: Dispatch<SetStateAction<OpeningPositionDraft>>;
-  linkedBankAccountId: string;
-  setLinkedBankAccountId: (value: string) => void;
+  values: AccountFormValues;
+  actions: AccountFormActions;
+  form: AccountFormContextValue;
   needsOpeningCash: boolean;
-  showOpeningPosition: boolean;
 }
 
 function initialAccountMode(account: WealthAccountView | undefined): WealthAccount['mode'] {
@@ -358,7 +388,10 @@ function useAccountDraft(account: WealthAccountView | undefined, linkedAccounts:
   const [linkedBankAccountId, setLinkedBankAccountId] = useState(() => initialLinkedBankAccount(account, linkedAccounts));
   const needsOpeningCash = shouldSeedOpeningCash(account, kind, mode);
   const showOpeningPosition = account?.mode === 'aggregate' && kind === 'brokerage' && mode === 'holdings';
-  return { accountId, name, setName, kind, setKind, mode, setMode, currency, setCurrency, value, setValue, date, setDate, openingCash, setOpeningCash, openingPosition, setOpeningPosition, linkedBankAccountId, setLinkedBankAccountId, needsOpeningCash, showOpeningPosition };
+  const values = { name, kind, mode, currency, value, date, linkedBankAccountId, openingCash, openingPosition };
+  const actions = { setName, setKind, setMode, setCurrency, setValue, setDate, setLinkedBankAccountId, setOpeningCash, setOpeningPosition };
+  const form = { values, actions, linkedAccounts, showOpeningCash: needsOpeningCash, showOpeningPosition };
+  return { accountId, values, actions, form, needsOpeningCash };
 }
 
 export function WealthAccountForm({ api, revision = 0, onSaved, onCancel, linkedAccounts = [], account }: FormProps & { linkedAccounts?: readonly LinkedAccountOption[]; account?: WealthAccountView; hasHoldingsData?: boolean }) {
@@ -368,16 +401,17 @@ export function WealthAccountForm({ api, revision = 0, onSaved, onCancel, linked
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    const amount = parseMoneyMinor(draft.value, draft.currency);
-    const openingCashMinor = openingCashAmount(draft.needsOpeningCash, draft.openingCash, draft.currency);
-    const openingPosition = openingPositionResult(draft.openingPosition, draft.showOpeningPosition);
-    const transition = modeTransition(account, draft.mode, draft.date, amount, openingCashMinor, openingPosition.request);
+    const { values } = draft;
+    const amount = parseMoneyMinor(values.value, values.currency);
+    const openingCashMinor = openingCashAmount(draft.needsOpeningCash, values.openingCash, values.currency);
+    const openingPosition = openingPositionResult(values.openingPosition, draft.form.showOpeningPosition);
+    const transition = modeTransition({ account, mode: values.mode, date: values.date, amount, openingCash: openingCashMinor, openingPosition: openingPosition.request });
     setBusy(true);
     setError(null);
-    const submitError = openingPosition.error ?? await submitAccount({ api, name: draft.name, kind: draft.kind, mode: draft.mode, currency: draft.currency, amount, linkedBankAccountId: draft.linkedBankAccountId, date: draft.date, revision, accountId: draft.accountId, openingCash: openingCashMinor, needsOpeningCash: draft.needsOpeningCash, openingPosition: openingPosition.request, modeTransition: transition, active: account?.active, onSaved });
+    const submitError = openingPosition.error ?? await submitAccount({ api, name: values.name, kind: values.kind, mode: values.mode, currency: values.currency, amount, linkedBankAccountId: values.linkedBankAccountId, date: values.date, revision, accountId: draft.accountId, openingCash: openingCashMinor, needsOpeningCash: draft.needsOpeningCash, openingPosition: openingPosition.request, modeTransition: transition, active: account?.active, onSaved });
     setError(submitError);
     setBusy(false);
   };
 
-  return <AccountFormView account={account} error={error} busy={busy} onCancel={onCancel} onSubmit={(event) => { void save(event); }} name={draft.name} setName={draft.setName} kind={draft.kind} setKind={draft.setKind} mode={draft.mode} setMode={draft.setMode} currency={draft.currency} setCurrency={draft.setCurrency} value={draft.value} setValue={draft.setValue} date={draft.date} setDate={draft.setDate} linkedBankAccountId={draft.linkedBankAccountId} setLinkedBankAccountId={draft.setLinkedBankAccountId} linkedAccounts={linkedAccounts} openingCash={draft.openingCash} setOpeningCash={draft.setOpeningCash} showOpeningCash={draft.needsOpeningCash} openingPosition={draft.openingPosition} setOpeningPosition={draft.setOpeningPosition} showOpeningPosition={draft.showOpeningPosition} />;
+  return <AccountFormView account={account} error={error} busy={busy} onCancel={onCancel} onSubmit={(event) => { void save(event); }} form={draft.form} />;
 }

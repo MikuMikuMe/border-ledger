@@ -1,9 +1,4 @@
 import {
-  classifyWealthCashFlows,
-  calculateModifiedDietz,
-  createWealthAccountRegistry,
-  createWealthReport,
-  createWealthSnapshot,
   canonicalEventFingerprint,
   instrumentKey,
   resolveWealthEvents,
@@ -13,25 +8,18 @@ import {
 import { assertPositiveQuantity } from '../src/domain/wealth-validation';
 import type {
   CanonicalInstrument,
-  ClassifiedWealthCashFlow,
   HoldingValuation,
-  ModifiedDietzResult,
   WealthAccount,
-  WealthCashFlowRecord,
   WealthCorrectionPayload,
   WealthEvent,
   WealthMoney,
-  WealthReport,
-  WealthSnapshot,
 } from '../src/domain/wealth-types';
-import type { WealthAllocationRow, WealthFxStatus, WealthHistoryPoint, WealthModeTransitionRecord, WealthModeTransitionRequest, WealthOpeningPositionRequest } from '../src/domain/wealth-api-types';
+import type { WealthModeTransitionRecord, WealthModeTransitionRequest, WealthOpeningPositionRequest } from '../src/domain/wealth-api-types';
 import type { D1Database, D1Statement } from './db-types';
-import { readFxSnapshot } from './db-types';
-import { convertMinorUnits, parseFrankfurterRates, type ValidatedFxRates } from './fx-rates';
-import { warmFxSnapshot } from './ledger-reports';
 import { assertFinancialAuthority, financialAuthorityPredicate, type FinancialContext } from './financial-authority';
-import { readLunchFlowBalances, type StoredBalance } from './lunchflow-balance-store';
-import { readWealthQuotes, wealthQuoteToHoldingValuation, type WealthQuoteInstrument } from './wealth-quotes';
+import type { StoredBalance } from './lunchflow-balance-store';
+import type { TransactionAliasRow } from './wealth-store-cashflows';
+import { readWealthReportProjection, readWealthSnapshotProjection, type WealthReportReadServices } from './wealth-store-reports';
 
 export type WealthOpeningPositionInput = WealthOpeningPositionRequest;
 export type WealthModeTransitionInput = WealthModeTransitionRequest;
@@ -62,6 +50,21 @@ export type WealthValuationInput = {
 export interface WealthReportQuery { asOf?: string | null; from?: string | null; to?: string | null; currency?: string | null; reportingCurrency?: string | null }
 export interface WealthReportDependencies { fetcher?: typeof fetch; now?: () => Date }
 
+function dateRange(query: WealthReportQuery): { asOf: string; from: string | null; to: string | null } {
+  const asOf = query.asOf ? date(query.asOf, 'asOf') : new Date().toISOString().slice(0, 10);
+  const from = query.from ? date(query.from, 'from') : null;
+  const to = query.to ? date(query.to, 'to') : null;
+  validateDateRange(from, to);
+  return { asOf, from, to };
+}
+
+function validateDateRange(from: string | null, to: string | null): void {
+  if (!from) return;
+  if (!to) return;
+  if (from <= to) return;
+  throw new WealthStoreError('invalid_request', 'The report period is not valid.');
+}
+
 export class WealthStoreError extends Error {
   readonly code: string; readonly status: number; readonly retryable: boolean; readonly currentRevision?: number;
   constructor(code: string, message: string, ...options: [status?: number, retryable?: boolean, currentRevision?: number]) {
@@ -79,7 +82,7 @@ const MAX_IMPORT_ROWS = 10_000;
 export const ACCOUNT_VALUE_KEY = '__account__';
 
 interface StoredAccount { ledger_id: string; id: string; name: string; kind: WealthAccount['kind']; mode: WealthAccount['mode']; currency: string | null; linked_bank_account_id: string | null; amount_minor: number | null; active: number; revision: number }
-interface StoredModeTransition { account_id: string; effective_date: string; from_mode: WealthAccount['mode']; to_mode: WealthAccount['mode']; revision: number; payload_json: string }
+export interface StoredModeTransition { account_id: string; effective_date: string; from_mode: WealthAccount['mode']; to_mode: WealthAccount['mode']; revision: number; payload_json: string }
 interface StoredInstrument { id: string; exchange: string; ticker: string; type: 'stock' | 'etf'; currency: string; revision: number }
 interface StoredValuation { id: string; account_id: string; instrument_key: string; as_of: string; price_minor: number; source: 'manual' | 'provider'; provider: string | null; payload_json: string; revision: number }
 interface StoredEvent { id: string; source_id: string; date: string; sequence: number; kind: WealthEvent['kind']; account_id: string | null; from_account_id: string | null; to_account_id: string | null; linked_bank_source_id: string | null; payload_json: string }
@@ -424,6 +427,15 @@ function normalizedModeTransition(body: Record<string, unknown>, fromMode: Wealt
   return { fromMode, toMode, effectiveDate, openingCashMinor, openingValueMinor: null, openingPositions };
 }
 
+function wealthEventAccountIds(event: WealthEvent): string[] {
+  if (event.kind === 'transfer') return [event.fromAccountId, event.toAccountId];
+  if (event.kind === 'correction') {
+    const replacement = event.replacement;
+    return replacement.kind === 'transfer' ? [replacement.fromAccountId, replacement.toAccountId] : 'accountId' in replacement ? [replacement.accountId] : [];
+  }
+  return 'accountId' in event ? [event.accountId] : [];
+}
+
 interface AccountHistory { readonly hasHistory: boolean; readonly latestDate: string | null }
 
 async function accountHistory(db: D1Database, context: FinancialContext, accountId: string): Promise<AccountHistory> {
@@ -652,635 +664,47 @@ async function readLinkedBalanceHistory(db: D1Database, context: FinancialContex
   const rows = await db.prepare(`SELECT account_id AS accountId,currency,amount_minor AS amountMinor,observed_at AS observedAt,0 AS stale FROM wealth_linked_balance_observations WHERE ledger_id=? ORDER BY observed_at,account_id`).bind(context.ledgerId).all<StoredBalance>();
   return rows.results;
 }
-function mergeBalances(history: readonly StoredBalance[], latest: readonly StoredBalance[]): StoredBalance[] {
-  const seen = new Set<string>(); const merged: StoredBalance[] = [];
-  for (const balance of [...latest, ...history]) {
-    const key = `${balance.accountId}|${balance.currency}|${balance.amountMinor}|${balance.observedAt}`;
-    if (!seen.has(key)) { seen.add(key); merged.push(balance); }
-  }
-  return merged;
-}
-async function mergeProviderValuations(db: D1Database, context: FinancialContext, accounts: readonly WealthAccount[], transitions: readonly StoredModeTransition[], events: readonly WealthEvent[], valuations: readonly (HoldingValuation & { valueMinor?: number; id: string })[], asOf: string) {
-  const accountInstruments = new Map<string, { instrument: WealthQuoteInstrument; accountIds: Set<string> }>();
-  for (const event of events) {
-    if (!('accountId' in event) || !('instrument' in event) || !event.instrument || !accounts.some((account) => account.id === event.accountId && modeAtDate(account, transitions, event.date) === 'holdings')) continue;
-    const instrument = event.instrument as WealthQuoteInstrument; const key = instrumentKey(instrument); const current = accountInstruments.get(key) ?? { instrument, accountIds: new Set<string>() }; current.accountIds.add(event.accountId); accountInstruments.set(key, current);
-  }
-  if (accountInstruments.size === 0) return valuations;
-  const quotes = await readWealthQuotes(db, context, [...accountInstruments.values()].map((entry) => entry.instrument), new Date(`${asOf}T23:59:59.999Z`));
-  const existing = new Set(valuations.map((valuation) => `${valuation.accountId}:${valuation.instrument.exchange ? instrumentKey(valuation.instrument) : ACCOUNT_VALUE_KEY}:${valuation.asOf}`)); const merged = [...valuations];
-  for (const quote of quotes) {
-    const entry = accountInstruments.get(quote.instrumentKey); if (!entry) continue;
-    for (const accountId of entry.accountIds) {
-      const account = accounts.find((candidate) => candidate.id === accountId);
-      if (!account || modeAtDate(account, transitions, quote.quoteDate) !== 'holdings') continue;
-      const valuation = wealthQuoteToHoldingValuation(accountId, quote); const key = `${accountId}:${instrumentKey(valuation.instrument)}:${valuation.asOf}`;
-      if (!existing.has(key)) { existing.add(key); merged.push({ ...valuation, id: `quote:${quote.revision}:${accountId}` }); }
-    }
-  }
-  return merged;
-}
-function dateRange(query: WealthReportQuery): { asOf: string; from: string | null; to: string | null } {
-  const asOf = query.asOf ? date(query.asOf, 'asOf') : new Date().toISOString().slice(0, 10);
-  const from = query.from ? date(query.from, 'from') : null; const to = query.to ? date(query.to, 'to') : null;
-  validateDateRange(from, to);
-  return { asOf, from, to };
-}
 
-function validateDateRange(from: string | null, to: string | null): void {
-  if (!from) return;
-  if (!to) return;
-  if (from <= to) return;
-  throw new WealthStoreError('invalid_request', 'The report period is not valid.');
-}
-
-function linkedStatus(account: WealthAccount, balances: readonly StoredBalance[], asOf: string) {
-  if (account.kind !== 'linked_bank' || !account.linkedBankAccountId) return null;
-  const balance = balances.filter((candidate) => candidate.accountId === account.linkedBankAccountId && candidate.observedAt.slice(0, 10) <= asOf).sort((left, right) => right.observedAt.localeCompare(left.observedAt) || right.stale - left.stale)[0];
-  if (!balance) return { state: 'missing' as const, balance: null, observedAt: null };
-  if (balance.stale || balance.observedAt.slice(0, 10) > asOf) return { state: 'stale' as const, balance: null, observedAt: balance.observedAt };
-  return { state: 'fresh' as const, balance: balance.amountMinor, observedAt: balance.observedAt };
-}
-function aggregateValue(account: WealthAccount & { amountMinor?: number | null }, valuations: readonly (HoldingValuation & { valueMinor?: number })[], balances: readonly StoredBalance[], asOf: string, historical: boolean) {
-  if (account.mode !== 'aggregate') return null;
-  const dated = valuations.filter((item) => item.accountId === account.id && item.asOf <= asOf && item.valueMinor !== undefined).sort((left, right) => right.asOf.localeCompare(left.asOf))[0];
-  if (dated) return { amount: account.kind === 'debt' ? -Math.abs(dated.valueMinor!) : dated.valueMinor!, observedAt: dated.asOf, state: 'fresh' as const };
-  const linked = linkedStatus(account, balances, asOf);
-  if (linked) return { amount: linked.balance === null ? null : account.kind === 'debt' ? -Math.abs(linked.balance) : linked.balance, observedAt: linked.observedAt, state: linked.state };
-  if (historical) return { amount: null, observedAt: null, state: 'missing' as const };
-  return { amount: null, observedAt: null, state: 'missing' as const };
-}
-function addTotal(target: Record<string, number>, currencyCode: string | undefined, amount: number | null) {
-  if (!currencyCode || amount === null) return;
-  target[currencyCode] = (target[currencyCode] ?? 0) + amount;
-}
-
-function wealthEventAccountIds(event: WealthEvent): string[] {
-  if (event.kind === 'transfer') return [event.fromAccountId, event.toAccountId];
-  if (event.kind === 'correction') {
-    const replacement = event.replacement;
-    return replacement.kind === 'transfer' ? [replacement.fromAccountId, replacement.toAccountId] : 'accountId' in replacement ? [replacement.accountId] : [];
-  }
-  return 'accountId' in event ? [event.accountId] : [];
-}
-
-function isPortfolioBaseEvent(event: WealthEvent, investmentIds: ReadonlySet<string>): boolean {
-  if (event.kind === 'reversal' || event.kind === 'correction') return false;
-  const accountIds = wealthEventAccountIds(event);
-  return accountIds.length > 0 && accountIds.every((id) => investmentIds.has(id));
-}
-
-function addPortfolioControls(events: readonly WealthEvent[], sources: Set<string>): void {
-  for (const event of events) {
-    if (!isPortfolioControl(event)) continue;
-    if (!sources.has(event.targetSourceId)) continue;
-    sources.add(event.sourceId);
-  }
-}
-
-function isPortfolioControl(event: WealthEvent): event is Extract<WealthEvent, { kind: 'reversal' | 'correction' }> {
-  return event.kind === 'reversal' || event.kind === 'correction';
-}
-
-function portfolioEventSources(events: readonly WealthEvent[], investmentIds: ReadonlySet<string>): Set<string> {
-  const sources = new Set(events.filter((event) => isPortfolioBaseEvent(event, investmentIds)).map((event) => event.sourceId));
-  let previousSize = -1;
-  while (sources.size !== previousSize) { previousSize = sources.size; addPortfolioControls(events, sources); }
-  return sources;
-}
-
-function addAggregateStatus(target: Record<string, 'complete' | 'incomplete'>, currencyCode: string | undefined, state: 'fresh' | 'stale' | 'missing'): void {
-  if (!currencyCode) return;
-  if (state !== 'fresh') {
-    target[currencyCode] = 'incomplete';
-    return;
-  }
-  target[currencyCode] ??= 'complete';
-}
-
-async function domainSnapshot(
-  accounts: readonly (WealthAccount & { amountMinor?: number | null })[], transitions: readonly StoredModeTransition[], events: readonly WealthEvent[], valuations: readonly (HoldingValuation & { valueMinor?: number })[], balances: readonly StoredBalance[], asOf: string, historical = false,
-): Promise<WealthSnapshot & { accounts: readonly (WealthAccount & Record<string, unknown>)[]; balanceStatuses: readonly Record<string, unknown>[] }> {
-  const datedAccounts = accountsAtDate(accounts, transitions, asOf);
-  const registry = createWealthAccountRegistry(datedAccounts);
-  const normalValuations = valuations.filter((item) => {
-    if (!item.instrument.exchange) return false;
-    const account = accounts.find((candidate) => candidate.id === item.accountId);
-    if (!account) return false;
-    const segment = modeSegment(account, transitions, asOf);
-    return segment.mode === 'holdings' && (segment.startDate === null || item.asOf >= segment.startDate);
-  });
-  const domainEvents = eventsForCurrentModeSegment(events, datedAccounts, transitions, asOf);
-  const base = createWealthSnapshot(domainEvents, { asOf, accounts: registry, valuations: normalValuations });
-  const totals = { ...base.totalByCurrency } as Record<string, number>;
-  const totalStatusByCurrency = { ...base.totalStatusByCurrency } as Record<string, 'complete' | 'incomplete'>;
-  const statuses: Record<string, unknown>[] = [];
-  const renderedAccounts = datedAccounts.map((account) => {
-    const value = aggregateValue(account, valuations, balances, asOf, historical);
-    if (value) { addTotal(totals, account.currency, value.amount); addAggregateStatus(totalStatusByCurrency, account.currency, value.state); statuses.push({ accountId: account.id, state: value.state, observedAt: value.observedAt }); }
-    return { ...account, ...(value ? { valueMinor: value.amount, valueState: value.state, valueObservedAt: value.observedAt } : {}) };
-  });
-  return { ...base, accounts: renderedAccounts, totalByCurrency: Object.fromEntries(Object.entries(totals).sort(([left], [right]) => left.localeCompare(right))), totalStatusByCurrency: Object.fromEntries(Object.entries(totalStatusByCurrency).sort(([left], [right]) => left.localeCompare(right))), balanceStatuses: statuses };
-}
-
-interface TransactionRow { id: string; account_id: string; account_name: string | null; wealth_account_id: string | null; wealth_account_name: string | null; merchant: string; date: string; amount_minor: number; currency: string; category: string | null; kind: 'expense' | 'income' | 'refund' | 'fee'; status: string; source: string | null }
-interface TransactionAliasRow { transaction_id: string; id: string; identity_key: string; provider_transaction_id: string | null; provider_pending_transaction_id: string | null; bank_source_id: string | null; bank_row_id: string | null; event_id: string | null; bank_reference: string | null }
-type StoredCashFlowRecord = WealthCashFlowRecord & { transactionId: string; accountName: string | null; merchant: string; category: string | null; bankKind: TransactionRow['kind']; source: string | null; status: string; linkConflict?: boolean };
-type CashFlowSummaryRecord = WealthCashFlowRecord & { classification?: ClassifiedWealthCashFlow['classification']; bankKind?: TransactionRow['kind']; linkConflict?: boolean; confirmed?: boolean; reason?: string };
-interface CashFlowTotal { inflowMinor: number; outflowMinor: number; netMinor: number; incomeMinor: number; expenseMinor: number; refundMinor: number; feeMinor: number }
-type InvestmentEventKind = 'dividend' | 'withholding' | 'fee' | 'contribution' | 'withdrawal';
-type InvestmentCashFlowRecord = ClassifiedWealthCashFlow & { eventKind?: InvestmentEventKind; bankKind?: TransactionRow['kind']; confirmed?: boolean };
-
-type ExternalPortfolioEvent = Extract<WealthEvent, { kind: 'contribution' | 'withdrawal' }>;
-type InvestmentCashEvent = Extract<WealthEvent, { kind: 'dividend' | 'withholding' | 'fee' | 'contribution' | 'withdrawal' }>;
-type InvestmentTradeEvent = Extract<WealthEvent, { kind: 'buy' | 'sell' }>;
-type InvestmentCashFlowInput = WealthCashFlowRecord & { embeddedTradeFee?: true };
-
-function visibleEffectiveEvents(events: readonly WealthEvent[], asOf: string): readonly WealthEvent[] {
-  return resolveWealthEvents(events.filter((event) => event.date <= asOf));
-}
-
-function isExternalPortfolioEvent(event: WealthEvent, investmentIds: ReadonlySet<string>): event is ExternalPortfolioEvent {
-  return (event.kind === 'contribution' || event.kind === 'withdrawal') && investmentIds.has(event.accountId);
-}
-
-function isInvestmentCashEvent(event: WealthEvent, investmentIds: ReadonlySet<string>): event is InvestmentCashEvent {
-  return ['dividend', 'withholding', 'fee', 'contribution', 'withdrawal'].includes(event.kind) && 'accountId' in event && investmentIds.has(event.accountId);
-}
-
-function eventCashFlowRecord(event: InvestmentCashEvent): WealthCashFlowRecord {
-  const inflow = event.kind === 'contribution' || event.kind === 'dividend';
-  return {
-    sourceId: event.sourceId,
-    date: event.date,
-    accountId: event.accountId,
-    money: event.money,
-    direction: inflow ? 'inflow' : 'outflow',
-    kind: inflow ? 'contribution' : 'withdrawal',
-    linkedWealthSourceId: event.sourceId,
-  };
-}
-
-function embeddedTradeFeeRecord(event: InvestmentTradeEvent): InvestmentCashFlowInput | null {
-  if (!event.fee || event.fee.amountMinor === 0) return null;
-  return {
-    sourceId: `${event.sourceId}:fee`,
-    date: event.date,
-    accountId: event.accountId,
-    money: event.fee,
-    direction: 'outflow',
-    kind: 'withdrawal',
-    embeddedTradeFee: true,
-  };
-}
-
-function investmentEventInRange(event: WealthEvent, investmentIds: ReadonlySet<string>, from: string | null, to: string | null): boolean {
-  return 'accountId' in event && investmentIds.has(event.accountId) && (!from || event.date >= from) && (!to || event.date <= to);
-}
-
-function investmentEventCashFlows(event: WealthEvent, investmentIds: ReadonlySet<string>): InvestmentCashFlowInput[] {
-  const records: InvestmentCashFlowInput[] = [];
-  if (isInvestmentCashEvent(event, investmentIds)) records.push(eventCashFlowRecord(event));
-  if (event.kind === 'buy' || event.kind === 'sell') {
-    const fee = embeddedTradeFeeRecord(event);
-    if (fee) records.push(fee);
-  }
-  return records;
-}
-
-function eventCashFlowRecords(events: readonly WealthEvent[], investmentIds: ReadonlySet<string>, from: string | null, to: string | null): InvestmentCashFlowInput[] {
-  return events.filter((event) => investmentEventInRange(event, investmentIds, from, to)).flatMap((event) => investmentEventCashFlows(event, investmentIds));
-}
-
-function portfolioBankRecords(records: readonly StoredCashFlowRecord[], eventSources: ReadonlySet<string>): StoredCashFlowRecord[] {
-  return records.filter((record) => {
-    const sourceId = record.linkedWealthSourceId;
-    return typeof sourceId === 'string' && eventSources.has(sourceId);
-  });
-}
-
-interface PortfolioFlowQuery { readonly records: readonly StoredCashFlowRecord[]; readonly events: readonly WealthEvent[]; readonly investmentIds: ReadonlySet<string>; readonly from?: string | null; readonly to?: string | null }
-
-function portfolioFlowRecords(query: PortfolioFlowQuery): InvestmentCashFlowInput[] {
-  const portfolioEvents = query.events.filter((event) => isPortfolioBaseEvent(event, query.investmentIds));
-  const eventSources = new Set(portfolioEvents.map((event) => event.sourceId));
-  const bankRecords = portfolioBankRecords(query.records, eventSources);
-  const linkedSources = new Set(bankRecords.map((record) => record.linkedWealthSourceId).filter((source): source is string => Boolean(source)));
-  const manualRecords = eventCashFlowRecords(portfolioEvents, query.investmentIds, query.from ?? null, query.to ?? null).filter((record) => !linkedSources.has(record.linkedWealthSourceId ?? ''));
-  return [...bankRecords, ...manualRecords];
-}
-
-function isInvestmentIncomeEvent(event: WealthEvent | undefined): event is Extract<WealthEvent, { kind: 'dividend' | 'withholding' | 'fee' }> {
-  return event?.kind === 'dividend' || event?.kind === 'withholding' || event?.kind === 'fee';
-}
-
-function investmentFlowBankKind(kind: InvestmentEventKind): TransactionRow['kind'] {
-  return kind === 'dividend' ? 'income' : kind === 'contribution' || kind === 'withdrawal' ? 'income' : 'fee';
-}
-
-type ClassifiedInvestmentInput = ClassifiedWealthCashFlow & { embeddedTradeFee?: true };
-
-function classifyEmbeddedTradeFee(flow: ClassifiedInvestmentInput): InvestmentCashFlowRecord | null {
-  if (!flow.embeddedTradeFee) return null;
-  const { embeddedTradeFee: _embeddedTradeFee, ...record } = flow;
-  return { ...record, eventKind: 'fee', bankKind: 'fee', confirmed: true, includedInPerformance: false, reason: 'Embedded trade fee; trade principal remains excluded from cash-flow totals.' };
-}
-
-function classifyInvestmentIncomeFlow(flow: ClassifiedWealthCashFlow, event: Extract<WealthEvent, { kind: 'dividend' | 'withholding' | 'fee' }>): InvestmentCashFlowRecord {
-  const eventKind = event.kind;
-  const expectedDirection = eventKind === 'dividend' ? 'inflow' : 'outflow';
-  const bankMatch = flow.kind !== 'bank' || (flow.direction === expectedDirection && sameMoney(flow.money, event.money));
-  return { ...flow, eventKind, bankKind: investmentFlowBankKind(eventKind), confirmed: bankMatch, includedInPerformance: false, reason: bankMatch ? 'Recorded investment income or expense; excluded from external capital flows.' : 'Linked bank amount does not agree with the recorded investment income or expense.' };
-}
-
-function classifyInvestmentFlow(flow: ClassifiedInvestmentInput, eventsBySource: ReadonlyMap<string, WealthEvent>): InvestmentCashFlowRecord {
-  const embeddedFee = classifyEmbeddedTradeFee(flow);
-  if (embeddedFee) return embeddedFee;
-  const event = flow.linkedWealthSourceId ? eventsBySource.get(flow.linkedWealthSourceId) : undefined;
-  return isInvestmentIncomeEvent(event) ? classifyInvestmentIncomeFlow(flow, event) : flow;
-}
-
-function classifyInvestmentCashFlows(records: readonly WealthCashFlowRecord[], events: readonly WealthEvent[]): InvestmentCashFlowRecord[] {
-  const classified = classifyWealthCashFlows(records, events) as ClassifiedInvestmentInput[];
-  const eventsBySource = new Map(events.map((event) => [event.sourceId, event]));
-  return classified.map((flow) => classifyInvestmentFlow(flow, eventsBySource));
-}
-
-function sameMoney(left: WealthCashFlowRecord['money'], right: WealthCashFlowRecord['money']): boolean {
-  return left.currency.toUpperCase() === right.currency.toUpperCase() && left.amountMinor === right.amountMinor;
-}
-
-function emptyCashFlowTotal(): CashFlowTotal {
-  return { inflowMinor: 0, outflowMinor: 0, netMinor: 0, incomeMinor: 0, expenseMinor: 0, refundMinor: 0, feeMinor: 0 };
-}
-
-function addFlowDirection(total: CashFlowTotal, flow: WealthCashFlowRecord): void {
-  if (flow.direction === 'inflow') { total.inflowMinor += flow.money.amountMinor; total.netMinor += flow.money.amountMinor; }
-  if (flow.direction === 'outflow') { total.outflowMinor += flow.money.amountMinor; total.netMinor -= flow.money.amountMinor; }
-}
-
-function addBankCategory(total: CashFlowTotal, kind: TransactionRow['kind'] | undefined, amount: number): void {
-  if (kind === 'income') total.incomeMinor += amount;
-  if (kind === 'expense') total.expenseMinor += amount;
-  if (kind === 'refund') total.refundMinor += amount;
-  if (kind === 'fee') total.feeMinor += amount;
-}
-
-function addInvestmentCategory(total: CashFlowTotal, kind: InvestmentEventKind | undefined, amount: number): void {
-  if (kind === 'dividend') total.incomeMinor += amount;
-  if (kind === 'withholding') total.expenseMinor += amount;
-  if (kind === 'fee') { total.expenseMinor += amount; total.feeMinor += amount; }
-}
-
-function summarizeInvestmentCashFlows(flows: readonly InvestmentCashFlowRecord[]): Readonly<Record<string, CashFlowTotal>> {
-  return summarizeFlowTotals(flows, (total, flow) => addInvestmentCategory(total, flow.eventKind, flow.money.amountMinor));
-}
-
-function summarizeCashFlows(flows: readonly CashFlowSummaryRecord[]): Readonly<Record<string, CashFlowTotal>> {
-  return summarizeFlowTotals(flows, (total, flow) => addBankCategory(total, flow.bankKind, flow.money.amountMinor));
-}
-
-function summarizeFlowTotals<T extends CashFlowSummaryRecord>(flows: readonly T[], addCategory: (total: CashFlowTotal, flow: T) => void): Readonly<Record<string, CashFlowTotal>> {
-  const totals: Record<string, CashFlowTotal> = {};
-  for (const flow of flows) {
-    if (!summaryEligible(flow)) continue;
-    const code = flow.money.currency.toUpperCase();
-    const current = totals[code] ?? emptyCashFlowTotal();
-    addFlowDirection(current, flow);
-    addCategory(current, flow);
-    totals[code] = current;
-  }
-  return Object.fromEntries(Object.entries(totals).sort(([left], [right]) => left.localeCompare(right)));
-}
-
-function summaryEligible(flow: CashFlowSummaryRecord): boolean {
-  if (flow.classification === 'trade' || flow.classification === 'internal_transfer') return false;
-  if (flow.linkConflict || flow.confirmed === false) return false;
-  return flow.reason !== 'Conflicting bank records share one explicit wealth link.';
-}
-
-async function cashFlowRecords(db: D1Database, context: FinancialContext, events: readonly WealthEvent[]): Promise<StoredCashFlowRecord[]> {
-  const [rows, aliases] = await Promise.all([
-    db.prepare(`SELECT t.id,t.account_id,t.merchant,t.date,t.amount_minor,t.currency,t.category,t.kind,t.status,t.source,
-      (SELECT a.name FROM accounts a WHERE a.ledger_id=t.ledger_id AND a.id=t.account_id LIMIT 1) AS account_name,
-      (SELECT wa.id FROM wealth_accounts wa WHERE wa.ledger_id=t.ledger_id AND wa.linked_bank_account_id=t.account_id ORDER BY wa.id LIMIT 1) AS wealth_account_id,
-      (SELECT wa.name FROM wealth_accounts wa WHERE wa.ledger_id=t.ledger_id AND wa.linked_bank_account_id=t.account_id ORDER BY wa.id LIMIT 1) AS wealth_account_name
-      FROM transactions t WHERE t.ledger_id=? AND t.status='confirmed' AND t.kind IN ('income','expense','refund','fee') ORDER BY t.date,t.id`).bind(context.ledgerId).all<TransactionRow>(),
-    db.prepare(`SELECT transaction_id,id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference
-      FROM transaction_source_records WHERE ledger_id=? ORDER BY transaction_id,id`).bind(context.ledgerId).all<TransactionAliasRow>(),
-  ]);
-  const aliasesByTransaction = new Map<string, Set<string>>();
-  const sourceRecordByTransaction = new Map<string, string>();
-  for (const alias of aliases.results) {
-    const values = [alias.id, alias.identity_key, alias.provider_transaction_id, alias.provider_pending_transaction_id, alias.bank_source_id, alias.bank_row_id, alias.event_id, alias.bank_reference].filter((value): value is string => Boolean(value));
-    const set = aliasesByTransaction.get(alias.transaction_id) ?? new Set<string>();
-    values.forEach((value) => set.add(value));
-    aliasesByTransaction.set(alias.transaction_id, set);
-    sourceRecordByTransaction.set(alias.transaction_id, sourceRecordByTransaction.get(alias.transaction_id) ?? alias.id);
-  }
-  return rows.results.map((row) => {
-    const candidates = aliasesByTransaction.get(row.id) ?? new Set<string>([row.id]);
-    const linked = events.filter((event) => event.linkedBankSourceId && candidates.has(event.linkedBankSourceId));
-    const linkedSources = [...new Set(linked.map((event) => event.sourceId))];
-    const linkConflict = linkedSources.length > 1;
-    return { sourceId: sourceRecordByTransaction.get(row.id) ?? row.id, transactionId: row.id, merchant: row.merchant, accountName: row.wealth_account_name ?? row.account_name, date: row.date, accountId: row.wealth_account_id ?? row.account_id, category: row.category, bankKind: row.kind, source: row.source, status: row.status, money: { currency: row.currency, amountMinor: Math.abs(row.amount_minor) }, direction: row.kind === 'income' || row.kind === 'refund' ? 'inflow' : 'outflow', kind: 'bank', linkedWealthSourceId: linkConflict ? null : linkedSources[0] ?? null, ...(linkConflict ? { linkConflict: true } : {}) };
-  });
-}
-function emptyFxProvenance(): Pick<WealthFxStatus, 'effectiveDate' | 'provider' | 'baseCurrency' | 'rates'> {
-  return { effectiveDate: null, provider: null, baseCurrency: null, rates: {} };
-}
-
-function fxProvenance(rates: ValidatedFxRates | null, totals: Readonly<Record<string, number>>, requested: string): Pick<WealthFxStatus, 'effectiveDate' | 'provider' | 'baseCurrency' | 'rates'> {
-  const sourceCodes = Object.keys(totals).filter((code) => code !== requested);
-  if (!rates || sourceCodes.length === 0) return emptyFxProvenance();
-  const requiredQuotes = new Set<string>();
-  for (const sourceCode of sourceCodes) {
-    if (sourceCode !== 'EUR') requiredQuotes.add(sourceCode);
-    if (requested !== 'EUR') requiredQuotes.add(requested);
-  }
-  const quotedRates = Object.fromEntries([...requiredQuotes].sort().flatMap((quote) => {
-    const rate = rates.rates[quote];
-    return rate === undefined ? [] : [[quote, rate] as const];
-  }));
-  return { effectiveDate: rates.effectiveDate, provider: 'frankfurter', baseCurrency: 'EUR', rates: quotedRates };
-}
-
-function incompleteCurrencyCodes(statusByCurrency: Readonly<Record<string, string>>): readonly string[] {
-  return Object.entries(statusByCurrency).filter(([, status]) => status === 'incomplete').map(([currency]) => currency);
-}
-
-function normalizeWealthReportingCurrency(value: string | null): string | null {
+function normalizeWealthReportingCurrency(value: string | null): 'CAD' | null {
   const code = value?.trim().toUpperCase() ?? '';
   if (!code) return null;
   if (code !== 'CAD') throw new WealthStoreError('invalid_request', 'Wealth reports support CAD as the converted reporting currency.');
   return code;
 }
 
-async function convertTotals(db: D1Database, totals: Readonly<Record<string, number>>, requested: string | null, asOf: string, dependencies: WealthReportDependencies = {}, statusByCurrency: Readonly<Record<string, string>> = {}): Promise<WealthFxStatus> {
-  const target = normalizeWealthReportingCurrency(requested);
-  if (!target) return { convertedCadMinor: null, complete: false, unavailable: [], ...emptyFxProvenance() };
-  let total = 0; const unavailable: string[] = [];
-  const row = await readFxSnapshot(db, asOf);
-  let rates: ReturnType<typeof parseFrankfurterRates> | null = null;
-  if (row) {
-    try { rates = parseFrankfurterRates(Object.entries(JSON.parse(row.rates_json) as Record<string, unknown>).map(([quote, rate]) => ({ date: row.effective_date, base: 'EUR', quote, rate }))); } catch { rates = null; }
-  }
-  if (!rates && dependencies.fetcher) {
-    try { rates = await warmFxSnapshot(db, asOf, dependencies); } catch { rates = null; }
-  }
-  for (const [code, amount] of Object.entries(totals)) {
-    if (code === target) total += amount;
-    else {
-      const converted = rates ? convertMinorUnits({ amountMinorUnits: amount, sourceCode: code, targetCode: target, rates }) : null;
-      if (converted === null) unavailable.push(code); else total += converted;
-    }
-  }
-  const incomplete = incompleteCurrencyCodes(statusByCurrency);
-  const complete = unavailable.length === 0 && incomplete.length === 0;
-  return { convertedCadMinor: complete ? total : null, complete, unavailable, ...fxProvenance(rates, totals, target) };
-}
+const wealthReportServices: WealthReportReadServices = {
+  accounts: readAccounts,
+  transitions: loadModeTransitions,
+  events: readStoredEvents,
+  valuations: readStoredValuations,
+  balanceHistory: readLinkedBalanceHistory,
+  currentRevision,
+  accountsAtDate,
+  modeAtDate,
+  modeSegment,
+  eventsForCurrentModeSegment,
+};
 
-type SnapshotAccount = WealthAccount & { amountMinor?: number | null; valueMinor?: number | null; valueState?: 'fresh' | 'stale' | 'missing'; valueObservedAt?: string | null };
-type SnapshotWithStatus = Omit<WealthSnapshot, 'accounts'> & { accounts: readonly SnapshotAccount[]; balanceStatuses: readonly Record<string, unknown>[] };
-interface WealthHistoryPointInternal extends WealthHistoryPoint {}
-
-function addBalanceCoverage(snapshot: SnapshotWithStatus, missing: Set<string>): boolean {
-  let stale = false;
-  for (const status of snapshot.balanceStatuses) {
-    const accountId = typeof status.accountId === 'string' ? status.accountId : null;
-    if (status.state === 'stale') stale = true;
-    if (accountId && status.state === 'missing') missing.add(`account:${accountId}`);
-  }
-  return stale;
-}
-
-function addValuationCoverage(snapshot: SnapshotWithStatus, missing: Set<string>): void {
-  for (const [currencyCode, state] of Object.entries(snapshot.totalStatusByCurrency)) if (state === 'incomplete') missing.add(`valuation:${currencyCode}`);
-  for (const position of snapshot.positions) if (position.quantity !== '0' && position.valuation === null) missing.add(`position:${position.accountId}:${instrumentKey(position.instrument)}`);
-}
-
-function snapshotCoverage(snapshot: SnapshotWithStatus) {
-  const missing = new Set<string>();
-  const stale = addBalanceCoverage(snapshot, missing);
-  addValuationCoverage(snapshot, missing);
-  return { stale, missingData: [...missing].sort() };
-}
-
-function missingAccountObservation(account: SnapshotAccount, point: string): string | null {
-  if (account.mode !== 'aggregate') return null;
-  if (!account.valueObservedAt) return null;
-  if (account.valueObservedAt.slice(0, 10) === point) return null;
-  return `account:${account.id}:observation`;
-}
-
-function missingPositionObservation(position: WealthSnapshot['positions'][number], point: string): string | null {
-  if (position.quantity === '0') return null;
-  if (position.valuation?.asOf === point) return null;
-  return `position:${position.accountId}:${instrumentKey(position.instrument)}:observation`;
-}
-
-function historyPointCoverage(snapshot: SnapshotWithStatus, point: string): { readonly complete: boolean; readonly stale: boolean; readonly missingData: readonly string[] } {
-  const quality = snapshotCoverage(snapshot);
-  const observations = [
-    ...snapshot.accounts.map((account) => missingAccountObservation(account, point)),
-    ...snapshot.positions.map((position) => missingPositionObservation(position, point)),
-  ].filter((value): value is string => value !== null);
-  const missingData = [...new Set([...quality.missingData, ...observations])].sort();
-  const valuesComplete = Object.values(snapshot.totalStatusByCurrency).every((state) => state === 'complete');
-  return { complete: !quality.stale && missingData.length === 0 && valuesComplete, stale: quality.stale, missingData };
-}
-
-type AllocationDraft = Omit<WealthAllocationRow, 'share'>;
-
-function investmentAccountIds(snapshot: SnapshotWithStatus): ReadonlySet<string> {
-  return new Set(snapshot.accounts.filter((account) => account.kind === 'brokerage').map((account) => account.id));
-}
-
-function allocationDrafts(snapshot: SnapshotWithStatus): AllocationDraft[] {
-  const ids = investmentAccountIds(snapshot);
-  const holdingsIds = new Set(snapshot.accounts.filter((account) => ids.has(account.id) && account.mode === 'holdings').map((account) => account.id));
-  const aggregate = snapshot.accounts.filter((account) => ids.has(account.id) && account.mode === 'aggregate' && account.currency).map((account) => ({ currency: account.currency!.toUpperCase(), accountId: account.id, kind: 'aggregate' as const, instrument: null, valueMinor: account.valueMinor ?? null, available: account.valueState === 'fresh' && account.valueMinor !== null }));
-  const cash = snapshot.cash.filter((balance) => holdingsIds.has(balance.accountId)).map((balance) => ({ currency: balance.currency.toUpperCase(), accountId: balance.accountId, kind: 'cash' as const, instrument: null, valueMinor: balance.amountMinor, available: true }));
-  const holdings = snapshot.positions.filter((position) => holdingsIds.has(position.accountId) && position.quantity !== '0').map((position) => ({ currency: position.instrument.currency.toUpperCase(), accountId: position.accountId, kind: 'holding' as const, instrument: position.instrument, valueMinor: position.marketValueMinor, available: position.marketValueMinor !== null }));
-  return [...aggregate, ...cash, ...holdings];
-}
-
-function allocationTotals(rows: readonly AllocationDraft[]): { totals: ReadonlyMap<string, number>; incomplete: ReadonlySet<string> } {
-  const totals = new Map<string, number>();
-  const incomplete = new Set<string>();
-  for (const row of rows) {
-    if (row.valueMinor === null) { incomplete.add(row.currency); continue; }
-    totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.valueMinor);
-  }
-  return { totals, incomplete };
-}
-
-function allocationRowShare(row: AllocationDraft, totals: ReadonlyMap<string, number>, incomplete: ReadonlySet<string>): number | null {
-  const total = totals.get(row.currency) ?? 0;
-  if (allocationUnavailable(row, total, incomplete)) return null;
-  if (row.valueMinor === null) return null;
-  return row.valueMinor / total;
-}
-
-function allocationUnavailable(row: AllocationDraft, total: number, incomplete: ReadonlySet<string>): boolean {
-  if (!row.available || incomplete.has(row.currency)) return true;
-  if (row.valueMinor === null) return true;
-  return total === 0;
-}
-
-function compareAllocationRows(left: WealthAllocationRow, right: WealthAllocationRow): number {
-  const leftKey = allocationSortKey(left);
-  const rightKey = allocationSortKey(right);
-  for (let index = 0; index < leftKey.length; index += 1) {
-    const comparison = leftKey[index].localeCompare(rightKey[index]);
-    if (comparison !== 0) return comparison;
-  }
-  return 0;
-}
-
-function allocationSortKey(row: WealthAllocationRow): readonly string[] {
-  return [row.currency, row.accountId, row.kind, row.instrument?.exchange ?? '', row.instrument?.ticker ?? ''];
-}
-
-function wealthAllocationRows(snapshot: SnapshotWithStatus): readonly WealthAllocationRow[] {
-  const drafts = allocationDrafts(snapshot);
-  const { totals, incomplete } = allocationTotals(drafts);
-  return drafts.map((row) => ({ ...row, share: allocationRowShare(row, totals, incomplete) })).sort(compareAllocationRows);
-}
-
-async function buildWealthHistory(
+export async function readWealthSnapshot(
   db: D1Database,
-  accounts: readonly (WealthAccount & { amountMinor?: number | null })[],
-  transitions: readonly StoredModeTransition[],
-  events: readonly WealthEvent[],
-  valuations: readonly (HoldingValuation & { valueMinor?: number })[],
-  balances: readonly StoredBalance[],
-  asOf: string,
-  reportingCurrency: string | null,
+  context: FinancialContext,
+  query: Pick<WealthReportQuery, 'asOf' | 'reportingCurrency'> = {},
   dependencies: WealthReportDependencies = {},
-): Promise<WealthHistoryPointInternal[]> {
-  const dates = new Set<string>();
-  for (const event of events) if (event.date <= asOf) dates.add(event.date);
-  for (const valuation of valuations) if (valuation.asOf <= asOf) dates.add(valuation.asOf);
-  for (const balance of balances) if (balance.observedAt.slice(0, 10) <= asOf) dates.add(balance.observedAt.slice(0, 10));
-  const history: WealthHistoryPointInternal[] = [];
-  for (const point of [...dates].sort()) {
-    const pointSnapshot = await domainSnapshot(accounts, transitions, events, valuations, balances, point, true);
-    const conversion = await convertTotals(db, pointSnapshot.totalByCurrency, reportingCurrency, point, dependencies, pointSnapshot.totalStatusByCurrency);
-    const coverage = historyPointCoverage(pointSnapshot, point);
-    history.push({ date: point, totals: pointSnapshot.totalByCurrency, convertedCadMinor: conversion.convertedCadMinor, ...coverage });
-  }
-  return history;
-}
-
-function unavailableDietz(): ModifiedDietzResult {
-  return { value: null, available: false, reason: 'incomplete_flows' };
-}
-
-interface DietzValues {
-  readonly startValues: Readonly<Record<string, number>> | null | undefined;
-  readonly endValues: Readonly<Record<string, number>> | null | undefined;
-}
-interface DietzPeriod {
-  readonly periodStart: string | null;
-  readonly periodEnd: string | null;
-}
-interface DietzByCurrencyInput extends DietzValues, DietzPeriod {
-  readonly flows: readonly ClassifiedWealthCashFlow[];
-}
-
-function currencyDietz(
-  currencyCode: string,
-  values: DietzValues,
-  flows: readonly ClassifiedWealthCashFlow[],
-  period: DietzPeriod,
-): ModifiedDietzResult {
-  const currencyFlows = flows.filter((flow) => flow.money.currency.toUpperCase() === currencyCode);
-  const performanceFlows = currencyFlows.filter((flow) => flow.includedInPerformance);
-  if (performanceFlows.some((flow) => flow.classification === 'ambiguous')) return unavailableDietz();
-  if (!period.periodStart || !period.periodEnd) return unavailableDietz();
-  return calculateModifiedDietz(values.startValues?.[currencyCode] ?? null, values.endValues?.[currencyCode] ?? null, performanceFlows, period.periodStart, period.periodEnd);
-}
-
-function modifiedDietzByCurrency(input: DietzByCurrencyInput): Readonly<Record<string, ModifiedDietzResult>> {
-  const currencies = new Set<string>([...Object.keys(input.startValues ?? {}), ...Object.keys(input.endValues ?? {}), ...input.flows.map((flow) => flow.money.currency.toUpperCase())]);
-  const period = { periodStart: input.periodStart, periodEnd: input.periodEnd };
-  const values = { startValues: input.startValues, endValues: input.endValues };
-  return Object.fromEntries([...currencies].sort().map((currencyCode) => [currencyCode, currencyDietz(currencyCode, values, input.flows, period)]));
-}
-
-export async function readWealthSnapshot(db: D1Database, context: FinancialContext, query: Pick<WealthReportQuery, 'asOf' | 'reportingCurrency'> = {}, dependencies: WealthReportDependencies = {}) {
-  const { asOf } = dateRange(query);
-  const [accounts, transitions, events, storedValuations, latestBalances, balanceHistory] = await Promise.all([readAccounts(db, context), loadModeTransitions(db, context), readStoredEvents(db, context), readStoredValuations(db, context), readLunchFlowBalances(db, context), readLinkedBalanceHistory(db, context)]);
-  const effectiveEvents = visibleEffectiveEvents(events, asOf);
-  const balances = mergeBalances(balanceHistory, latestBalances);
-  const valuations = await mergeProviderValuations(db, context, accounts, transitions, events, storedValuations, asOf);
-  const snapshot = await domainSnapshot(accounts, transitions, events, valuations, balances, asOf);
-  const [history, records] = await Promise.all([
-    buildWealthHistory(db, accounts, transitions, events, valuations, balances, asOf, query.reportingCurrency ?? null, dependencies),
-    cashFlowRecords(db, context, effectiveEvents),
-  ]);
-  const quality = snapshotCoverage(snapshot);
-  const cashFlows = classifyWealthCashFlows(records.filter((record) => record.date <= asOf), effectiveEvents);
-  return {
-    ...snapshot,
-    allocations: wealthAllocationRows(snapshot),
-    history,
-    cashFlows,
-    cashFlowTotals: summarizeCashFlows(cashFlows),
-    modifiedDietz: { value: null, available: false, reason: 'missing_end_valuation' as const },
-    stale: quality.stale,
-    missingData: quality.missingData,
-    revision: await currentRevision(db, context),
-    fx: await convertTotals(db, snapshot.totalByCurrency, query.reportingCurrency ?? null, asOf, dependencies, snapshot.totalStatusByCurrency),
-  };
-}
-
-export async function readWealthReport(db: D1Database, context: FinancialContext, query: WealthReportQuery = {}, dependencies: WealthReportDependencies = {}): Promise<WealthReport & { history: readonly WealthHistoryPoint[]; revision: number; balanceStatuses: readonly Record<string, unknown>[]; stale: boolean; missingData: readonly string[]; fx: WealthFxStatus; cashFlowTotals: Readonly<Record<string, CashFlowTotal>>; householdCashFlows: readonly WealthCashFlowRecord[]; investmentCashFlows: readonly InvestmentCashFlowRecord[]; investmentCashFlowTotals: Readonly<Record<string, CashFlowTotal>>; modifiedDietzByCurrency: Readonly<Record<string, ModifiedDietzResult>>; allocations: readonly WealthAllocationRow[] }> {
+) {
   const range = dateRange(query);
-  const [accounts, transitions, events, storedValuations, latestBalances, balanceHistory] = await Promise.all([readAccounts(db, context), loadModeTransitions(db, context), readStoredEvents(db, context), readStoredValuations(db, context), readLunchFlowBalances(db, context), readLinkedBalanceHistory(db, context)]);
-  const effectiveEvents = visibleEffectiveEvents(events, range.asOf);
-  const balances = mergeBalances(balanceHistory, latestBalances);
-  const valuations = await mergeProviderValuations(db, context, accounts, transitions, events, storedValuations, range.asOf);
-  const historyInternal = await buildWealthHistory(db, accounts, transitions, events, valuations, balances, range.asOf, query.reportingCurrency ?? null, dependencies);
-  const history = historyInternal;
-  const snapshot = await domainSnapshot(accounts, transitions, events, valuations, balances, range.asOf);
-  const records = await cashFlowRecords(db, context, effectiveEvents);
-  const filtered = records.filter((record) => (!range.from || record.date >= range.from) && (!range.to || record.date <= range.to));
-  const investmentAccounts = accounts.filter((account) => account.kind === 'brokerage');
-  const investmentAccountIds = new Set(investmentAccounts.map((account) => account.id));
-  const reportInvestmentAccounts = accountsAtDate(investmentAccounts, transitions, range.asOf);
-  // Cash-flow classification and Dietz use the complete resolved portfolio
-  // ledger. Snapshot replay remains segment-scoped, but a flow before a later
-  // representation transition must still be included in the period return.
-  const investmentEvents = effectiveEvents.filter((event) => isPortfolioBaseEvent(event, investmentAccountIds));
-  const investmentValuations = valuations.filter((valuation) => investmentAccountIds.has(valuation.accountId));
-  // Aggregate brokerage values are already represented by the portfolio
-  // start/end totals. They use the account-value valuation key and have no
-  // instrument; only holding prices belong in the domain report valuation
-  // list, which normalizes instruments while replaying positions.
-  const reportValuations = investmentValuations.filter((valuation) => Boolean(valuation.instrument.exchange));
-  const portfolioEventIds = portfolioEventSources(events, investmentAccountIds);
-  const portfolioHistoryEvents = events.filter((event) => portfolioEventIds.has(event.sourceId));
-  const portfolioHistory = await buildWealthHistory(db, investmentAccounts, transitions, portfolioHistoryEvents, investmentValuations, [], range.asOf, query.reportingCurrency ?? null, dependencies);
-  const startPoint = range.from ? portfolioHistory.find((point) => point.date === range.from && point.complete) : undefined;
-  const endPoint = range.to ? portfolioHistory.find((point) => point.date === range.to && point.complete) : undefined;
-  const investmentRecords = portfolioFlowRecords({ records: filtered, events: investmentEvents, investmentIds: investmentAccountIds, from: range.from, to: range.to });
-  // Valuations are end-of-day observations. The domain Dietz helper therefore
-  // ignores start-date flows (already included in the opening observation) and
-  // keeps end-date flows with zero time weight so they are removed from the
-  // ending balance without being treated as return.
-  const dietzRecords = investmentRecords.filter((record) => {
-    if (range.from && record.date <= range.from) return false;
-    const linked = record.linkedWealthSourceId ? investmentEvents.find((event) => event.sourceId === record.linkedWealthSourceId) : undefined;
-    return linked?.kind === 'contribution' || linked?.kind === 'withdrawal';
-  });
-  const investmentCashFlows = classifyInvestmentCashFlows(investmentRecords, investmentEvents);
-  const report = createWealthReport(investmentEvents, dietzRecords, { asOf: range.asOf, accounts: reportInvestmentAccounts, valuations: reportValuations, startValuation: startPoint?.totals ?? null, endValuation: endPoint?.totals ?? null, periodStart: range.from ?? undefined, periodEnd: range.to ?? undefined });
-  const dietzByCurrency = modifiedDietzByCurrency({ startValues: startPoint?.totals ?? null, endValues: endPoint?.totals ?? null, flows: investmentCashFlows, periodStart: range.from, periodEnd: range.to });
-  const quality = snapshotCoverage(snapshot);
-  const householdCashFlows = classifyWealthCashFlows(filtered, effectiveEvents);
-  return { ...report, ...snapshot, allocations: wealthAllocationRows(snapshot), cashFlows: householdCashFlows, cashFlowTotals: summarizeCashFlows(householdCashFlows), householdCashFlows, investmentCashFlows, investmentCashFlowTotals: summarizeInvestmentCashFlows(investmentCashFlows), modifiedDietzByCurrency: dietzByCurrency, history, revision: await currentRevision(db, context), balanceStatuses: snapshot.balanceStatuses, stale: quality.stale, missingData: quality.missingData, fx: await convertTotals(db, snapshot.totalByCurrency, query.reportingCurrency ?? null, range.asOf, dependencies, snapshot.totalStatusByCurrency) };
+  const reportingCurrency = normalizeWealthReportingCurrency(query.reportingCurrency ?? null);
+  return readWealthSnapshotProjection({ db, context, range, reportingCurrency, dependencies, services: wealthReportServices });
+}
+
+export async function readWealthReport(
+  db: D1Database,
+  context: FinancialContext,
+  query: WealthReportQuery = {},
+  dependencies: WealthReportDependencies = {},
+) {
+  const range = dateRange(query);
+  const reportingCurrency = normalizeWealthReportingCurrency(query.reportingCurrency ?? null);
+  return readWealthReportProjection({ db, context, range, reportingCurrency, dependencies, services: wealthReportServices });
 }
 
 export async function validateExpected(db: D1Database, context: FinancialContext, expected: number) {
