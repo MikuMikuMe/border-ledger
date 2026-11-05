@@ -45,9 +45,20 @@ export function recordId(record: WealthImportRecord): string {
 export function recordSignature(record: WealthImportRecord, tools: RecordIdentityTools): string {
   if (record.recordType === 'account') return tools.stable({ ...record.account, currency: record.account.currency ?? null });
   if (record.recordType === 'instrument') return tools.stable(record.instrument);
-  if (record.recordType === 'event') return tools.canonicalEventFingerprint(record.event);
+  if (record.recordType === 'event') return tools.canonicalEventFingerprint(csvComparableEvent(record.event));
   if (record.recordType === 'mode_transition') return tools.stable(record.transition);
   return tools.stable(record.valuation);
+}
+
+const EMPTY_OPTIONAL_VALUES: ReadonlySet<unknown> = new Set([null, undefined, '']);
+
+/** CSV blank cells and omitted optional event fields describe the same record. */
+function csvComparableEvent(event: WealthEvent): WealthEvent {
+  const comparable = { ...event } as unknown as Record<string, unknown>;
+  for (const field of ['memo', 'linkedBankSourceId', 'fee', 'basis', 'instrument']) {
+    if (EMPTY_OPTIONAL_VALUES.has(comparable[field])) delete comparable[field];
+  }
+  return comparable as unknown as WealthEvent;
 }
 
 export function existingAccountRecord(account: WealthAccount & Record<string, unknown>): WealthImportRecord {

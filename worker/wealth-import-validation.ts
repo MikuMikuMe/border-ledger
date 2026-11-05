@@ -298,8 +298,20 @@ function importedBankClaimError(link: ImportedBankLink, context: ImportedBankCla
   return null;
 }
 
-async function importedLinkErrors(db: D1Database, context: FinancialContext, records: readonly WealthImportRecord[], services: ImportValidationServices): Promise<string[]> {
+async function importedAccountLinkErrors(db: D1Database, context: FinancialContext, records: readonly WealthImportRecord[]): Promise<string[]> {
   const errors: string[] = [];
+  for (const record of records) {
+    if (record.recordType !== 'account' || record.account.kind !== 'linked_bank') continue;
+    const account = record.account;
+    const bank = await db.prepare('SELECT currency FROM accounts WHERE ledger_id=? AND id=?').bind(context.ledgerId, account.linkedBankAccountId).first<{ currency: string | null }>();
+    if (!bank) errors.push(`Account ${account.id} references a bank account outside this ledger.`);
+    else if (!account.currency || bank.currency !== account.currency) errors.push(`Account ${account.id} currency must match the linked bank account currency.`);
+  }
+  return errors;
+}
+
+async function importedLinkErrors(db: D1Database, context: FinancialContext, records: readonly WealthImportRecord[], services: ImportValidationServices): Promise<string[]> {
+  const errors = await importedAccountLinkErrors(db, context, records);
   const events = records.flatMap((record) => {
     const event = importRecordEvent(record);
     return event ? [event] : [];

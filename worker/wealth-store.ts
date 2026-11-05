@@ -285,10 +285,11 @@ function operationId(body: Record<string, unknown>, requested?: string, prefix =
   return value ? bounded(value, 'operationId', 256) : randomId(prefix);
 }
 
-async function validateLinkedBankReference(db: D1Database, context: FinancialContext, accountId: string | null): Promise<void> {
+async function validateLinkedBankReference(db: D1Database, context: FinancialContext, accountId: string | null, currencyCode: string | null): Promise<void> {
   if (!accountId) return;
-  const row = await db.prepare('SELECT id FROM accounts WHERE ledger_id=? AND id=?').bind(context.ledgerId, accountId).first<{ id: string }>();
+  const row = await db.prepare('SELECT id,currency FROM accounts WHERE ledger_id=? AND id=?').bind(context.ledgerId, accountId).first<{ id: string; currency: string | null }>();
   if (!row) throw new WealthStoreError('invalid_request', 'The linked bank account does not belong to this ledger.');
+  if (!currencyCode || row.currency !== currencyCode) throw new WealthStoreError('linked_bank_currency_mismatch', 'The Wealth currency must match the linked bank account currency.');
 }
 
 async function assertLinkedBankUnique(db: D1Database, context: FinancialContext, accountId: string, linkedBankAccountId: string | null): Promise<void> {
@@ -709,7 +710,7 @@ export async function upsertWealthAccount(db: D1Database, context: FinancialCont
   if (kind === 'linked_bank' && !linkedBankAccountId) throw new WealthStoreError('invalid_request', 'A linked bank account is required.');
   if (kind !== 'linked_bank' && linkedBankAccountId) throw new WealthStoreError('invalid_request', 'Only linked bank wealth accounts may reference a bank account.');
   if (kind === 'linked_bank' && mode !== 'aggregate') throw new WealthStoreError('invalid_request', 'Linked bank wealth accounts must be aggregate accounts.');
-  await validateLinkedBankReference(db, context, linkedBankAccountId);
+  await validateLinkedBankReference(db, context, linkedBankAccountId, code);
   await assertLinkedBankUnique(db, context, id, linkedBankAccountId);
   const existing = await db.prepare('SELECT mode,kind,currency,linked_bank_account_id FROM wealth_accounts WHERE ledger_id=? AND id=?').bind(context.ledgerId, id).first<{ mode: WealthAccount['mode']; kind: WealthAccount['kind']; currency: string | null; linked_bank_account_id: string | null }>();
   if (!existing && transitionRequested(body)) throw new WealthStoreError('invalid_request', 'Opening transition data requires an existing account representation.');

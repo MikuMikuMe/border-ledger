@@ -57,9 +57,9 @@ interface WealthReportProjectionInput {
 
 function linkedStatus(account: WealthAccount, balances: readonly StoredBalance[], asOf: string) {
   if (account.kind !== 'linked_bank' || !account.linkedBankAccountId) return null;
-  const balance = balances.filter((candidate) => candidate.accountId === account.linkedBankAccountId && candidate.observedAt.slice(0, 10) <= asOf).sort((left, right) => right.observedAt.localeCompare(left.observedAt) || right.stale - left.stale)[0];
+  const balance = balances.filter((candidate) => candidate.accountId === account.linkedBankAccountId && candidate.currency === account.currency && candidate.observedAt.slice(0, 10) <= asOf).sort((left, right) => right.observedAt.localeCompare(left.observedAt) || right.stale - left.stale)[0];
   if (!balance) return { state: 'missing' as const, balance: null, observedAt: null };
-  if (balance.stale || balance.observedAt.slice(0, 10) > asOf) return { state: 'stale' as const, balance: null, observedAt: balance.observedAt };
+  if (balance.stale) return { state: 'stale' as const, balance: null, observedAt: balance.observedAt };
   return { state: 'fresh' as const, balance: balance.amountMinor, observedAt: balance.observedAt };
 }
 function aggregateValue(account: WealthAccount & { amountMinor?: number | null }, valuations: readonly (HoldingValuation & { valueMinor?: number })[], balances: readonly StoredBalance[], asOf: string, historical: boolean) {

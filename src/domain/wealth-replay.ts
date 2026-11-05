@@ -332,8 +332,12 @@ function addPosition(positions: Map<string, MutablePosition>, input: PositionAdd
     positions.set(key, { accountId: input.accountId, instrument: input.instrument, quantity: input.quantity, costBasisMinor: input.basisMinor, realizedGainMinor: 0n });
     return;
   }
+  position.costBasisMinor = isZero(position.quantity) ? input.basisMinor : combinedBasis(position.costBasisMinor, input.basisMinor);
   position.quantity = add(position.quantity, input.quantity);
-  position.costBasisMinor = position.costBasisMinor === null || input.basisMinor === null ? null : position.costBasisMinor + input.basisMinor;
+}
+
+function combinedBasis(existing: bigint | null, incoming: bigint | null): bigint | null {
+  return existing === null || incoming === null ? null : existing + incoming;
 }
 
 function sellPosition(positions: Map<string, MutablePosition>, sale: PositionSale): void {

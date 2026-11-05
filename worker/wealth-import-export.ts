@@ -1,7 +1,7 @@
 import type { CanonicalInstrument, HoldingValuation, WealthAccount, WealthEvent } from '../src/domain/wealth-types';
 import { csvEscape } from './wealth-import-csv';
 import { CANONICAL_CSV_HEADERS, type ImportModeTransition } from './wealth-import-types';
-import { storedTransitionPayload, transitionOpeningEvents, transitionOpeningValuations } from './wealth-import-transitions';
+import { initialAccountMode, storedTransitionPayload, transitionOpeningEvents, transitionOpeningValuations } from './wealth-import-transitions';
 
 export { CANONICAL_CSV_HEADERS } from './wealth-import-types';
 
@@ -73,7 +73,7 @@ function row(fields: Record<string, unknown>): string {
 }
 
 function accountFields(account: WealthAccount & Record<string, unknown>, transitions: readonly ImportModeTransition[]): Record<string, unknown> {
-  const initialMode = transitions.filter((transition) => transition.accountId === account.id).sort((left, right) => left.effectiveDate.localeCompare(right.effectiveDate))[0]?.fromMode ?? account.mode;
+  const initialMode = initialAccountMode(account, transitions);
   return { record_type: 'account', id: account.id, name: account.name, account_kind: account.kind, account_mode: initialMode, currency: account.currency ?? '', amount_minor: account.amountMinor ?? '', active: account.active ? '1' : '0', linked_bank_account_id: account.linkedBankAccountId ?? '' };
 }
 

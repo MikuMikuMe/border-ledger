@@ -1,0 +1,9 @@
+record_type,id,source_id,date,kind,account_id,name,account_kind,account_mode,currency,amount_minor,active,linked_bank_account_id,exchange,ticker,type,quantity,numerator,denominator,basis_minor,consideration_minor,proceeds_minor,fee_minor,from_account_id,to_account_id,transfer_kind,transfer_id,target_source_id,linked_bank_source_id,memo,as_of,price_minor,source,provider,sequence,event_json,effective_date,from_mode,to_mode,opening_cash_minor,opening_value_minor,opening_positions_json,transition_json
+account,basis-qa,,,,,Reopened basis QA,brokerage,aggregate,CAD,,1,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+account,usd-linked,,,,,Original USD balance,linked_bank,aggregate,USD,,1,usd-bank,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+instrument,ry,,,,,,,,CAD,,,,TSX,RY,stock,,,,,,,,,,,,,,,,,,,,,,,,,,,
+mode_transition,mode-transition:basis-qa:2026-11-01,,2026-11-01,,basis-qa,,,,CAD,,,,,,,,,,,,,,,,,,,,,,,,,,,2026-11-01,aggregate,holdings,10000,,,"{""fromMode"":""aggregate"",""toMode"":""holdings"",""effectiveDate"":""2026-11-01"",""openingCashMinor"":10000,""openingValueMinor"":null,""openingPositions"":[]}"
+valuation,price,,2026-11-03,,basis-qa,,,,CAD,,,,TSX,RY,stock,,,,,,,,,,,,,,,2026-11-03,70,manual,,,,,,,,,,
+event,unknown-opening,unknown-opening,2026-11-01,opening_position,basis-qa,,,,CAD,,,,TSX,RY,stock,1,,,,,,,,,,,,,,,,,,2,,,,,,,,
+event,close-unknown,close-unknown,2026-11-02,sell,basis-qa,,,,CAD,,,,TSX,RY,stock,1,,,,,10000,,,,,,,,,,,,,3,,,,,,,,
+event,known-purchase,known-purchase,2026-11-03,buy,basis-qa,,,,CAD,,,,TSX,RY,stock,1,,,,50,,,,,,,,,,,,,,4,,,,,,,,

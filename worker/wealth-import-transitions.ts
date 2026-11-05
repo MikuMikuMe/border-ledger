@@ -140,6 +140,11 @@ export function transitionSyntheticValuationIds(transition: ImportModeTransition
   return new Set(transitionOpeningValuations(transition).map((valuation) => valuation.id));
 }
 
+export function initialAccountMode(account: TransitionAccount, transitions: readonly ImportModeTransition[]): WealthAccount['mode'] {
+  const first = transitions.filter(transition => transition.accountId === account.id).sort((left, right) => left.effectiveDate.localeCompare(right.effectiveDate))[0];
+  return first?.fromMode ?? account.mode;
+}
+
 export function transitionModeAtDate(account: TransitionAccount, transitions: readonly ImportModeTransition[], asOf: string): WealthAccount['mode'] {
   const history = transitions.filter((transition) => transition.accountId === account.id).sort((left, right) => left.effectiveDate.localeCompare(right.effectiveDate));
   const prior = history.filter((transition) => transition.effectiveDate <= asOf).at(-1);
