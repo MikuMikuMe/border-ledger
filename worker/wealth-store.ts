@@ -774,7 +774,7 @@ export async function upsertWealthValuation(db: D1Database, context: FinancialCo
   if (existing) {
     const previous = parseJson<Record<string, unknown>>(existing.payload_json, 'valuation');
     if (valuationFingerprint(previous) === valuationFingerprint(payload)) return { valuation: previous, revision };
-    if (source !== 'manual' || existing.source !== 'manual' || body.expectedRevision === undefined) throw new WealthStoreError('valuation_conflict', 'A different manual valuation exists for this date; supply the current expectedRevision to correct it.', 409);
+    if (source !== 'manual' || body.expectedRevision === undefined) throw new WealthStoreError('valuation_conflict', 'A different valuation exists for this date; supply the current expectedRevision to correct it manually.', 409);
     const next = expected + 1; const response = { valuation: payload, revision: next };
     return runMutation(db, context, { operationId: operationId(body, undefined, `valuation-${id}`), operationKind: 'valuation.correct', expectedRevision: expected, payloadHash: await digest(payload), response, statements: (guard) => [db.prepare(`INSERT INTO wealth_valuation_corrections(ledger_id,id,account_id,instrument_key,as_of,price_minor,source,provider,payload_json,revision) SELECT ?,?,?,?,?,?,?,?,?,? WHERE ${guard.sql}`).bind(context.ledgerId, id, accountId, key, asOf, priceMinor, source, provider, JSON.stringify(payload), next, ...guard.bindings)] });
   }

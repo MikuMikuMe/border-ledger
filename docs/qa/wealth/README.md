@@ -1,5 +1,7 @@
 # Wealth verification record
 
+Newest: [provider quote identity and aggregate transfer validation](pr85-quotes-validation/README.md), verified 2026-11-05.
+
 Newest: [realized gains and portfolio returns self-review](pr85-returns-review/README.md), verified 2026-11-05.
 
 Newest: [currency, reopened basis and canonical-import fixes](pr85-data-integrity/README.md), verified 2026-11-05.

@@ -1,3 +1,4 @@
+import { assertMoney, WealthDomainError } from '../src/domain/wealth-validation';
 import { createWealthAccountRegistry, resolveWealthEvents, replayWealthEvents } from '../src/domain/wealth';
 import type { WealthAccount, WealthEvent } from '../src/domain/wealth-types';
 
@@ -255,7 +256,14 @@ function addPositionSegmentDependencies(state: SegmentProjectionState, dependenc
   offsets.set(key, cursor);
 }
 
+function validateProjectedTransfer(event: Extract<WealthEvent, { kind: 'transfer' }>): void {
+  if (!['cash', 'position'].includes(event.transferKind)) throw new WealthDomainError('invalid_transfer', 'The transfer kind must be cash or position.');
+  if (event.fromAccountId === event.toAccountId) throw new WealthDomainError('invalid_transfer', 'A transfer must have distinct source and destination accounts.');
+  if (event.transferKind === 'cash') assertMoney(event.money, 'cash transfer');
+}
+
 function projectTransfer(state: SegmentProjectionState, event: Extract<WealthEvent, { kind: 'transfer' }>): void {
+  validateProjectedTransfer(event);
   const endpoints = [event.fromAccountId, event.toAccountId].map((accountId) => ({ accountId, active: accountInCurrentHoldingsSegment(accountId, event.date, state) }));
   const active = endpoints.filter((endpoint) => endpoint.active);
   if (active.length === 2) {

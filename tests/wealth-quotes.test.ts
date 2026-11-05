@@ -1,3 +1,5 @@
+import { instrumentKey } from '../src/domain/wealth';
+import { appendWealthEvent, createWealthImportPreview, readWealthAccounts, readWealthSnapshot, readWealthValuations, upsertWealthAccount, upsertWealthValuation, wealthExportCsv } from '../worker/wealth-store';
 import { describe, expect, it, vi } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import {
@@ -178,25 +180,38 @@ describe('wealth quote quota and cache publication', () => {
     }
   });
 
-  it('keeps a manual same-day valuation authoritative when appending a provider observation', async () => {
+  it.each(['manual-first', 'provider-first'])('keeps the same-day manual value authoritative (%s)', async order => {
     const fixture = createSqliteD1Fixture();
     try {
       await saveWealthQuoteCredential(fixture.db, owner, { credential: 'private-key' }, { secret });
-      await fixture.db.prepare(`INSERT INTO wealth_accounts(ledger_id,id,name,kind,mode,currency) VALUES(?,?,?,?,?,?)`).bind('personal', 'brokerage', 'Brokerage', 'brokerage', 'holdings', 'CAD').run();
-      await fixture.db.prepare(`INSERT INTO wealth_events(ledger_id,id,source_id,date,sequence,kind,account_id,payload_json) VALUES(?,?,?,?,?,?,?,?)`).bind(
-        'personal', 'opening-shop', 'opening-shop', '2026-11-01', 1, 'opening_position', 'brokerage', JSON.stringify({ accountId: 'brokerage', instrument: stock, quantity: '1', kind: 'opening_position' }),
-      ).run();
-      await fixture.db.prepare(`INSERT INTO wealth_valuations(ledger_id,id,account_id,instrument_key,as_of,price_minor,source,provider,payload_json)
-        VALUES(?,?,?,?,?,?,?,?,?)`).bind('personal', 'manual-shop', 'brokerage', 'TSX\u0000SHOP\u0000stock\u0000CAD', '2026-11-02', 11111, 'manual', null, JSON.stringify({ accountId: 'brokerage', instrument: stock, asOf: '2026-11-02', priceMinor: 11111, source: 'manual', provider: null })).run();
+      await upsertWealthAccount(fixture.db, owner, { id: 'brokerage', name: 'Brokerage', kind: 'brokerage', mode: 'holdings', currency: 'CAD' });
+      await appendWealthEvent(fixture.db, owner, { id: 'opening-shop', sourceId: 'opening-shop', date: '2026-11-01', kind: 'opening_position', accountId: 'brokerage', instrument: stock, quantity: '1', basis: { currency: 'CAD', amountMinor: 10000 } });
+      const manual = { id: 'valuation-android-shop', accountId: 'brokerage', instrument: stock, asOf: '2026-11-02', priceMinor: 20000, source: 'manual' } as const;
+      if (order === 'manual-first') await upsertWealthValuation(fixture.db, owner, manual);
       const result = await refreshWealthQuote(fixture.db, owner, { instrument: stock, providerSymbol: 'SHOP.TRT' }, {
         secret,
         fetcher: vi.fn(async (input: RequestInfo | URL) => String(input).includes('SYMBOL_SEARCH')
           ? Response.json({ bestMatches: [{ '1. symbol': 'SHOP.TRT', '2. name': 'Shopify Inc.', '3. type': 'Equity', '4. region': 'Canada', '8. currency': 'CAD', exchange: 'TSX' }] })
-          : Response.json({ 'Global Quote': { '01. symbol': 'SHOP.TRT', '05. price': '123.45', '07. latest trading day': '2026-11-02' } })),
+          : Response.json({ 'Global Quote': { '01. symbol': 'SHOP.TRT', '05. price': '100.00', '07. latest trading day': '2026-11-02' } })),
         now: () => new Date('2026-11-02T12:00:00Z'),
       });
       expect(result.status).toBe('refreshed');
-      expect(await fixture.db.prepare(`SELECT price_minor,source FROM wealth_valuations WHERE ledger_id=? AND account_id=? AND instrument_key=? AND as_of=?`).bind('personal', 'brokerage', 'TSX\u0000SHOP\u0000stock\u0000CAD', '2026-11-02').first()).toMatchObject({ price_minor: 11111, source: 'manual' });
+      if (order === 'provider-first') {
+        await expect(upsertWealthValuation(fixture.db, owner, manual)).rejects.toMatchObject({ code: 'valuation_conflict' });
+        const { revision } = await readWealthAccounts(fixture.db, owner);
+        await upsertWealthValuation(fixture.db, owner, { ...manual, expectedRevision: revision });
+      }
+      expect((await readWealthSnapshot(fixture.db, owner, { asOf: '2026-11-02' })).totalByCurrency).toEqual({ CAD: 20000 });
+      const current = await readWealthAccounts(fixture.db, owner);
+      await expect(upsertWealthValuation(fixture.db, owner, { ...manual, id: 'provider-overwrite', source: 'provider', priceMinor: 10000, expectedRevision: current.revision })).rejects.toMatchObject({ code: 'valuation_conflict' });
+      const valuations = await readWealthValuations(fixture.db, owner);
+      expect(valuations.valuations).toEqual([expect.objectContaining({ priceMinor: 20000, source: 'manual' })]);
+      const keys = await fixture.db.prepare('SELECT instrument_key FROM wealth_valuations').all<{ instrument_key: string }>();
+      expect(keys.results).toEqual([{ instrument_key: instrumentKey(stock) }]);
+      const csv = await wealthExportCsv(fixture.db, owner);
+      const preview = await createWealthImportPreview(fixture.db, owner, { csv, operationId: 'same-day-quote-roundtrip' });
+      expect(preview.errors).toEqual([]);
+      expect(preview.duplicates).toHaveLength(preview.rows.length);
     } finally {
       fixture.close();
     }

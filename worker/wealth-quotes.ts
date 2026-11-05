@@ -1,3 +1,4 @@
+import { instrumentKey } from '../src/domain/wealth-validation';
 import type { D1Database } from './db-types';
 import { assertFinancialAuthority, financialAuthorityPredicate, type FinancialContext } from './financial-authority';
 
@@ -907,7 +908,7 @@ async function appendQuoteValuationHistory(db: D1Database, context: FinancialCon
         AND json_extract(e.payload_json,'$.instrument.exchange')=? AND json_extract(e.payload_json,'$.instrument.ticker')=? AND json_extract(e.payload_json,'$.instrument.type')=? AND json_extract(e.payload_json,'$.instrument.currency')=?)
       AND ${authority.sql}
     ON CONFLICT(ledger_id,account_id,instrument_key,as_of) DO NOTHING`)
-    .bind(context.ledgerId, `quote:${quote.revision}`, quote.instrumentKey, quote.quoteDate, quote.priceMinor, quote.provider, payload, context.ledgerId, quote.instrument.exchange, quote.instrument.ticker, quote.instrument.type, quote.instrument.currency, ...authority.bindings).run();
+    .bind(context.ledgerId, `quote:${quote.revision}`, instrumentKey(quote.instrument), quote.quoteDate, quote.priceMinor, quote.provider, payload, context.ledgerId, quote.instrument.exchange, quote.instrument.ticker, quote.instrument.type, quote.instrument.currency, ...authority.bindings).run();
 }
 
 interface NormalizedRefreshInput {
