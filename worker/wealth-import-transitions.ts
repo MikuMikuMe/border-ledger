@@ -1,7 +1,8 @@
-import type { CanonicalInstrument, WealthEvent, WealthAccount } from '../src/domain/wealth-types';
+import { instrumentKey } from '../src/domain/wealth-validation';
+import type { CanonicalInstrument, HoldingValuation, WealthEvent, WealthAccount } from '../src/domain/wealth-types';
 import type { D1Database } from './db-types';
 import type { FinancialContext } from './financial-authority';
-import type { ImportModeTransition } from './wealth-import-types';
+import { WEALTH_ACCOUNT_VALUE_KEY, type ImportModeTransition, type ImportValuation } from './wealth-import-types';
 
 interface StoredModeTransitionRow {
   readonly account_id: string;
@@ -66,6 +67,29 @@ export async function readImportModeTransitions(
   const rows = await db.prepare(`SELECT account_id,effective_date,from_mode,to_mode,payload_json
     FROM wealth_account_mode_transitions WHERE ledger_id=? ORDER BY account_id,effective_date`).bind(context.ledgerId).all<StoredModeTransitionRow>();
   return rows.results.map((row) => normalizeStoredTransition(row, currencyByAccount.get(row.account_id) ?? null));
+}
+
+export function valuationIdentity(valuation: Pick<ImportValuation, 'accountId' | 'asOf' | 'instrument'>): string {
+  const key = valuation.instrument?.exchange ? instrumentKey(valuation.instrument) : WEALTH_ACCOUNT_VALUE_KEY;
+  return JSON.stringify([valuation.accountId, key, valuation.asOf]);
+}
+
+type OpeningPosition = ImportModeTransition['openingPositions'][number];
+type LatestValuations = ReadonlyMap<string, HoldingValuation>;
+
+function reconciledPositionPrice(position: OpeningPosition, transition: ImportModeTransition, latest: LatestValuations): OpeningPosition {
+  if (position.priceMinor === null || position.priceMinor === undefined) return position;
+  const valuation = latest.get(valuationIdentity({ accountId: transition.accountId, asOf: transition.effectiveDate, instrument: position.instrument }));
+  return valuation ? { ...position, priceMinor: valuation.priceMinor } : position;
+}
+
+/** Export current dated prices without changing the stored transition audit record. */
+export function reconcileTransitionValuations(transitions: readonly ImportModeTransition[], valuations: readonly HoldingValuation[]): ImportModeTransition[] {
+  const latest: LatestValuations = new Map(valuations.map(valuation => [valuationIdentity(valuation), valuation]));
+  return transitions.map(transition => {
+    const aggregate = hasAggregateOpeningValue(transition) ? latest.get(valuationIdentity({ accountId: transition.accountId, asOf: transition.effectiveDate, instrument: null })) : undefined;
+    return { ...transition, openingValueMinor: aggregate?.priceMinor ?? transition.openingValueMinor, openingPositions: transition.openingPositions.map(position => reconciledPositionPrice(position, transition, latest)) };
+  });
 }
 
 export function storedTransitionPayload(transition: ImportModeTransition): string {

@@ -47,8 +47,8 @@ function eventStatement(context: ImportStatementContext, record: Extract<WealthI
 
 function modeTransitionStatements(context: ImportStatementContext, record: Extract<WealthImportRecord, { recordType: 'mode_transition' }>, startingSequence: number): D1Statement[] {
   const transition = record.transition;
-  const statements: D1Statement[] = [context.db.prepare(`UPDATE wealth_accounts SET mode=?,amount_minor=?,revision=?,updated_at=CURRENT_TIMESTAMP WHERE ledger_id=? AND id=? AND ${context.guard.sql}`)
-    .bind(transition.toMode, transition.toMode === 'aggregate' ? transition.openingValueMinor : null, context.revision, context.context.ledgerId, transition.accountId, ...context.guard.bindings),
+  const statements: D1Statement[] = [context.db.prepare(`UPDATE wealth_accounts SET mode=?,revision=?,updated_at=CURRENT_TIMESTAMP WHERE ledger_id=? AND id=? AND ${context.guard.sql}`)
+    .bind(transition.toMode, context.revision, context.context.ledgerId, transition.accountId, ...context.guard.bindings),
   context.db.prepare(`INSERT INTO wealth_account_mode_transitions(ledger_id,account_id,effective_date,from_mode,to_mode,revision,payload_json) SELECT ?,?,?,?,?,?,? WHERE ${context.guard.sql}`)
     .bind(context.context.ledgerId, transition.accountId, transition.effectiveDate, transition.fromMode, transition.toMode, context.revision, storedTransitionPayload(transition), ...context.guard.bindings)];
   for (const event of transitionOpeningEvents(transition, startingSequence)) {

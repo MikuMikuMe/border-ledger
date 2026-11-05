@@ -10,7 +10,7 @@ import {
   importRecordValuation,
   orderImportRecords,
 } from './wealth-import-records';
-import { transitionModeAtDate, transitionOpeningEvents } from './wealth-import-transitions';
+import { transitionModeAtDate, transitionOpeningEvents, transitionOpeningValuations, valuationIdentity } from './wealth-import-transitions';
 import { replayWealthEventsAcrossModeSegments, type WealthSegmentProjectionContext, type WealthSegmentTransition } from './wealth-segment-projection';
 import type { ImportModeTransition, ImportValidationServices, WealthImportRecord } from './wealth-import-types';
 
@@ -164,6 +164,42 @@ function transferPairs(event: WealthEvent): Array<readonly [string, string]> {
 
 function modeAtDate(account: ModeTimelineAccount, transitions: readonly ImportModeTransition[], asOf: string): WealthAccount['mode'] {
   return transitionModeAtDate(account, transitions, asOf);
+}
+
+function duplicateValuationIds(valuations: readonly { readonly id: string }[], existing: ReadonlySet<string>): string[] {
+  const ids = new Set(existing);
+  const errors: string[] = [];
+  for (const valuation of valuations) {
+    if (ids.has(valuation.id)) errors.push(`Valuation ${valuation.id} reuses an existing or generated valuation ID.`);
+    ids.add(valuation.id);
+  }
+  return errors;
+}
+
+function transitionValuationConflicts(records: readonly WealthImportRecord[], transitions: readonly ImportModeTransition[], existingIds: ReadonlySet<string>): string[] {
+  const generated = transitions.flatMap(transitionOpeningValuations);
+  const imported = records.flatMap(record => { const valuation = importRecordValuation(record); return valuation ? [valuation] : []; });
+  const errors = duplicateValuationIds([...generated, ...imported], existingIds);
+  const keys = new Set(generated.map(valuationIdentity));
+  if (keys.size !== generated.length) errors.push('Mode transitions contain duplicate opening valuation keys.');
+  for (const valuation of imported) {
+    if (keys.has(valuationIdentity(valuation))) errors.push(`Valuation ${valuation.id} conflicts with a mode transition opening valuation; include the latest price in the transition instead.`);
+  }
+  return errors;
+}
+
+function transitionEventConflicts(records: readonly WealthImportRecord[], transitions: readonly ImportModeTransition[], existing: readonly WealthEvent[]): string[] {
+  const generated = transitions.flatMap(transition => transitionOpeningEvents(transition));
+  const imported = records.flatMap(record => { const event = importRecordEvent(record); return event ? [event] : []; });
+  const ids = new Set(existing.map(event => event.id));
+  const sources = new Set(existing.map(event => event.sourceId));
+  const errors: string[] = [];
+  for (const event of [...generated, ...imported]) {
+    if (ids.has(event.id) || sources.has(event.sourceId)) errors.push(`Event ${event.sourceId} reuses an existing or generated event ID or source identity.`);
+    ids.add(event.id);
+    sources.add(event.sourceId);
+  }
+  return errors;
 }
 
 function valuationModeError(valuation: NonNullable<ReturnType<typeof importRecordValuation>>, accounts: ReadonlyMap<string, WealthAccount>, transitions: readonly ImportModeTransition[]): string | null {
@@ -383,10 +419,11 @@ function replayImportErrors(query: ImportReplayQuery): string[] {
 
 export async function validateImportPortfolio(db: D1Database, context: FinancialContext, records: readonly WealthImportRecord[], services: ImportValidationServices): Promise<string[]> {
   const existingAccounts = await services.readAccounts(db, context);
-  const [existingEvents, existingValuations, existingTransitions] = await Promise.all([
+  const [existingEvents, existingValuations, existingTransitions, storedValuationIds] = await Promise.all([
     services.readStoredEvents(db, context),
     services.readStoredValuations(db, context),
     services.readModeTransitions(db, context, existingAccounts),
+    db.prepare('SELECT id FROM wealth_valuations WHERE ledger_id=?').bind(context.ledgerId).all<{ id: string }>(),
   ]);
   const nextSequence = Math.max(0, ...existingEvents.map((event) => event.sequence ?? 0)) + 1;
   const orderedRecords = orderImportRecords(records, nextSequence);
@@ -402,6 +439,8 @@ export async function validateImportPortfolio(db: D1Database, context: Financial
     new Set(importedTransitions.map((transition) => transition.id)),
   ));
   errors.push(...transitionHistoryErrors(importedTransitions, existingTransitions, existingEvents, existingValuations));
+  errors.push(...transitionValuationConflicts(orderedRecords, importedTransitions, new Set(storedValuationIds.results.map(row => row.id))));
+  errors.push(...transitionEventConflicts(orderedRecords, importedTransitions, existingEvents));
   errors.push(...importedModeErrors(orderedRecords, accountState.accounts, allTransitions));
   errors.push(...await importedLinkErrors(db, context, orderedRecords, services));
   errors.push(...replayImportErrors({ events: existingEvents, records: orderedRecords, accounts: accountState.accounts, transitions: allTransitions, nextSequence }));

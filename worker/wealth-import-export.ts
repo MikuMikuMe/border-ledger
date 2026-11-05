@@ -1,7 +1,7 @@
 import type { CanonicalInstrument, HoldingValuation, WealthAccount, WealthEvent } from '../src/domain/wealth-types';
 import { csvEscape } from './wealth-import-csv';
 import { CANONICAL_CSV_HEADERS, type ImportModeTransition } from './wealth-import-types';
-import { initialAccountMode, storedTransitionPayload, transitionOpeningEvents, transitionOpeningValuations } from './wealth-import-transitions';
+import { initialAccountMode, reconcileTransitionValuations, storedTransitionPayload, valuationIdentity, transitionOpeningEvents, transitionOpeningValuations } from './wealth-import-transitions';
 
 export { CANONICAL_CSV_HEADERS } from './wealth-import-types';
 
@@ -109,12 +109,13 @@ function withoutTransitionSyntheticRows(
   events: readonly WealthEvent[],
 ): { readonly valuations: readonly (HoldingValuation & { id: string })[]; readonly events: readonly WealthEvent[] } {
   const eventIds = new Set<string>();
-  const valuationIds = new Set<string>();
+  const eventSources = new Set<string>();
+  const valuationKeys = new Set<string>();
   transitions.forEach((transition) => {
-    transitionOpeningEvents(transition).forEach((event) => { eventIds.add(event.id); eventIds.add(event.sourceId); });
-    transitionOpeningValuations(transition).forEach((valuation) => valuationIds.add(valuation.id));
+    transitionOpeningEvents(transition).forEach((event) => { eventIds.add(event.id); eventSources.add(event.sourceId); });
+    transitionOpeningValuations(transition).forEach((valuation) => valuationKeys.add(valuationIdentity(valuation)));
   });
-  return { valuations: valuations.filter((valuation) => !valuationIds.has(valuation.id)), events: events.filter((event) => !eventIds.has(event.id) && !eventIds.has(event.sourceId)) };
+  return { valuations: valuations.filter((valuation) => !valuationKeys.has(valuationIdentity(valuation))), events: events.filter((event) => !eventIds.has(event.id) && !eventSources.has(event.sourceId)) };
 }
 
 export function wealthCsvRows(
@@ -124,11 +125,12 @@ export function wealthCsvRows(
   events: readonly WealthEvent[],
   transitions: readonly ImportModeTransition[] = [],
 ): string[] {
-  const filtered = withoutTransitionSyntheticRows(transitions, valuations, events);
+  const reconciled = reconcileTransitionValuations(transitions, valuations);
+  const filtered = withoutTransitionSyntheticRows(reconciled, valuations, events);
   return [
-    ...accounts.map((account) => row(accountFields(account, transitions))),
+    ...accounts.map((account) => row(accountFields(account, reconciled))),
     ...instruments.map((instrument) => row(instrumentFields(instrument))),
-    ...transitions.map((transition) => row(transitionFields(transition))),
+    ...reconciled.map((transition) => row(transitionFields(transition))),
     ...filtered.valuations.map((valuation) => row(valuationFields(valuation))),
     ...filtered.events.map((event) => row(eventExportFields(event))),
   ];

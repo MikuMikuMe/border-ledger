@@ -1,4 +1,4 @@
-import { initialAccountMode } from './wealth-import-transitions';
+import { initialAccountMode, reconcileTransitionValuations } from './wealth-import-transitions';
 import { canonicalEventFingerprint, instrumentKey } from '../src/domain/wealth';
 import type { D1Database } from './db-types';
 import { assertFinancialAuthority, financialAuthorityPredicate, type FinancialContext } from './financial-authority';
@@ -178,7 +178,7 @@ async function existingPreview(db: D1Database, context: FinancialContext, operat
 
 async function existingRecordMap(db: D1Database, context: FinancialContext) {
   const [accounts, instruments, valuations, events] = await Promise.all([readAccounts(db, context), readInstruments(db, context), readStoredValuations(db, context), readStoredEvents(db, context)]);
-  const transitions = await readImportModeTransitions(db, context, accounts);
+  const transitions = reconcileTransitionValuations(await readImportModeTransitions(db, context, accounts), valuations);
   return recordMap([
     ...accounts.map(account => existingAccountRecord({ ...account, mode: initialAccountMode(account, transitions) })),
     ...instruments.map(existingInstrumentRecord),
