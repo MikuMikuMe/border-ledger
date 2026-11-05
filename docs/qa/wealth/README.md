@@ -1,5 +1,7 @@
 # Wealth verification record
 
+Newest: [realized gains and portfolio returns self-review](pr85-returns-review/README.md), verified 2026-11-05.
+
 Newest: [currency, reopened basis and canonical-import fixes](pr85-data-integrity/README.md), verified 2026-11-05.
 
 Newest: [Android definitive-write retries](pr85-mobile-retries/README.md), verified 2026-11-05.

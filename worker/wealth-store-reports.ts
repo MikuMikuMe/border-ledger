@@ -91,6 +91,21 @@ function isPortfolioBaseEvent(event: WealthEvent, investmentIds: ReadonlySet<str
   return accountIds.length > 0 && accountIds.every((id) => investmentIds.has(id));
 }
 
+function portfolioBoundaryCashEvent(event: Extract<WealthEvent, { kind: 'transfer'; transferKind: 'cash' }>, incoming: boolean): WealthEvent {
+  const { id, sourceId, date, sequence, memo, linkedBankSourceId, money } = event;
+  return { id, sourceId, date, sequence, memo, linkedBankSourceId, money, kind: incoming ? 'contribution' : 'withdrawal', accountId: incoming ? event.toAccountId : event.fromAccountId };
+}
+
+/** Household transfers crossing the portfolio boundary change invested capital. */
+function portfolioAnalyticsEvent(event: WealthEvent, investmentIds: ReadonlySet<string>): WealthEvent | null {
+  if (isPortfolioBaseEvent(event, investmentIds)) return event;
+  if (event.kind !== 'transfer') return null;
+  if (event.transferKind !== 'cash') return null;
+  const incoming = investmentIds.has(event.toAccountId);
+  if (incoming === investmentIds.has(event.fromAccountId)) return null;
+  return portfolioBoundaryCashEvent(event, incoming);
+}
+
 function addPortfolioControls(events: readonly WealthEvent[], sources: Set<string>): void {
   for (const event of events) {
     if (!isPortfolioControl(event)) continue;
@@ -491,14 +506,14 @@ export async function readWealthReportProjection(input: WealthReportProjectionIn
   const valuations = await mergeProviderValuations(db, context, accounts, transitions, events, storedValuations, range.asOf, services);
   const history = await buildWealthHistory(db, accounts, transitions, events, valuations, balances, range.asOf, reportingCurrency, dependencies, services);
   const snapshot = await domainSnapshot(accounts, transitions, events, valuations, balances, range.asOf, services);
-  const records = await cashFlowRecords(db, context, effectiveEvents);
+  const records = await cashFlowRecords(db, context, effectiveEvents, { includeTransfers: true });
   const filtered = records.filter((record) => (!range.from || record.date >= range.from) && (!range.to || record.date <= range.to));
   const investmentAccounts = accounts.filter((account) => account.kind === 'brokerage');
   const investmentAccountIds = new Set(investmentAccounts.map((account) => account.id));
   // Cash-flow classification and Dietz use the complete resolved portfolio
   // ledger. Snapshot replay remains segment-scoped, but a flow before a later
   // representation transition must still be included in the period return.
-  const investmentEvents = effectiveEvents.filter((event) => isPortfolioBaseEvent(event, investmentAccountIds));
+  const investmentEvents = effectiveEvents.map((event) => portfolioAnalyticsEvent(event, investmentAccountIds)).filter((event): event is WealthEvent => event !== null);
   const investmentValuations = valuations.filter((valuation) => investmentAccountIds.has(valuation.accountId));
   const portfolioEventIds = portfolioHistorySourceIds(events, effectiveEvents, investmentAccountIds);
   const portfolioHistoryEvents = events.filter((event) => portfolioEventIds.has(event.sourceId));
@@ -519,6 +534,6 @@ export async function readWealthReportProjection(input: WealthReportProjectionIn
   const report = createWealthReportAnalytics(investmentEvents, dietzRecords, { asOf: range.asOf, accounts: investmentAccounts, startValuation: startPoint?.totals ?? null, endValuation: endPoint?.totals ?? null, periodStart: range.from ?? undefined, periodEnd: range.to ?? undefined });
   const dietzByCurrency = modifiedDietzByCurrency({ startValues: startPoint?.totals ?? null, endValues: endPoint?.totals ?? null, flows: investmentCashFlows, periodStart: range.from, periodEnd: range.to });
   const quality = snapshotCoverage(snapshot);
-  const householdCashFlows = classifyWealthCashFlows(filtered, effectiveEvents);
+  const householdCashFlows = classifyWealthCashFlows(filtered.filter((record) => record.bankKind !== 'transfer'), effectiveEvents);
   return { ...report, ...snapshot, allocations: wealthAllocationRows(snapshot), cashFlows: householdCashFlows, cashFlowTotals: summarizeCashFlows(householdCashFlows), householdCashFlows, investmentCashFlows, investmentCashFlowTotals: summarizeInvestmentCashFlows(investmentCashFlows), modifiedDietzByCurrency: dietzByCurrency, history, revision: await services.currentRevision(db, context), balanceStatuses: snapshot.balanceStatuses, stale: quality.stale, missingData: quality.missingData, fx: await convertWealthTotals({ db, totals: snapshot.totalByCurrency, requested: reportingCurrency, asOf: range.asOf, dependencies, statusByCurrency: snapshot.totalStatusByCurrency }) };
 }

@@ -370,7 +370,7 @@ function basisForSale(position: MutablePosition, quantity: ScaledDecimal, soldAl
 }
 
 function realizedGain(position: MutablePosition, allocatedBasis: bigint | null, proceedsMinor: bigint, feeMinor: bigint): bigint | null {
-  return allocatedBasis === null ? null : (position.realizedGainMinor ?? 0n) + proceedsMinor - feeMinor - allocatedBasis;
+  return allocatedBasis === null || position.realizedGainMinor === null ? null : position.realizedGainMinor + proceedsMinor - feeMinor - allocatedBasis;
 }
 
 function requirePosition(positions: Map<string, MutablePosition>, accountId: string, instrument: CanonicalInstrument): MutablePosition {
