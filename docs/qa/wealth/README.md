@@ -1,5 +1,7 @@
 # Wealth verification record
 
+Newest: [bank aliases, split-price transfers and performance](pr85-cashflow-splits/README.md), verified 2026-11-04.
+
 Newest: [historical writes, reset holdings and hosted CodeScene gate](pr85-final-gate/README.md), verified 2026-11-04.
 
 Latest: [PR 85 review fixes and architecture refresh](pr85-review/README.md), verified 2026-11-04. The older results below are retained as historical evidence.

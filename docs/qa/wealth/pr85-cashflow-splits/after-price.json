@@ -1,0 +1,133 @@
+{
+  "modifiedDietz": {
+    "value": null,
+    "available": false,
+    "reason": "incomplete_flows"
+  },
+  "totalStatusByCurrency": {
+    "CAD": "complete"
+  },
+  "totalByCurrency": {
+    "CAD": 30000
+  },
+  "history": [
+    {
+      "date": "2026-10-31",
+      "totals": {
+        "CAD": 10000
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    },
+    {
+      "date": "2026-11-01",
+      "totals": {
+        "CAD": 20000
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    },
+    {
+      "date": "2026-11-02",
+      "totals": {
+        "CAD": 20000
+      },
+      "convertedCadMinor": null,
+      "complete": false,
+      "stale": false,
+      "missingData": [
+        "position:split-dest:TSX:RY:stock:CAD",
+        "position:split-dest:TSX:RY:stock:CAD:observation",
+        "valuation:CAD"
+      ]
+    },
+    {
+      "date": "2026-11-03",
+      "totals": {
+        "CAD": 30000
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    }
+  ],
+  "investmentCashFlows": [
+    {
+      "sourceId": "qa-capital-alias",
+      "transactionId": "qa-capital-bank",
+      "merchant": "Synthetic capital bank",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-02",
+      "accountId": "qa-cash",
+      "category": "Investment",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 5000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": "review-contribution",
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "Bank flow does not agree with the explicitly linked wealth event."
+    }
+  ],
+  "modifiedDietzByCurrency": {
+    "CAD": {
+      "value": null,
+      "available": false,
+      "reason": "incomplete_flows"
+    }
+  },
+  "revision": 2,
+  "positions": [
+    {
+      "accountId": "split-dest",
+      "quantity": "2",
+      "marketValueMinor": 10000,
+      "unrealizedGainMinor": 0,
+      "valuation": {
+        "id": "split-dest-post-price",
+        "accountId": "split-dest",
+        "instrument": {
+          "exchange": "TSX",
+          "ticker": "RY",
+          "type": "stock",
+          "currency": "CAD"
+        },
+        "asOf": "2026-11-03",
+        "priceMinor": 5000,
+        "source": "manual",
+        "provider": null
+      }
+    },
+    {
+      "accountId": "split-source",
+      "quantity": "0",
+      "marketValueMinor": 0,
+      "unrealizedGainMinor": 0,
+      "valuation": {
+        "id": "split-source-post-price",
+        "accountId": "split-source",
+        "instrument": {
+          "exchange": "TSX",
+          "ticker": "RY",
+          "type": "stock",
+          "currency": "CAD"
+        },
+        "asOf": "2026-11-01",
+        "priceMinor": 5000,
+        "source": "manual",
+        "provider": null
+      }
+    }
+  ]
+}

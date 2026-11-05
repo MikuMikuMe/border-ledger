@@ -413,18 +413,23 @@ interface DietzPeriod {
   readonly periodEnd: string | null;
 }
 interface DietzByCurrencyInput extends DietzValues, DietzPeriod {
-  readonly flows: readonly ClassifiedWealthCashFlow[];
+  readonly flows: readonly InvestmentCashFlowRecord[];
+}
+
+function unresolvedCapitalFlow(flow: InvestmentCashFlowRecord): boolean {
+  if (flow.classification !== 'ambiguous') return false;
+  return !['dividend', 'withholding', 'fee'].includes(flow.eventKind ?? '');
 }
 
 function currencyDietz(
   currencyCode: string,
   values: DietzValues,
-  flows: readonly ClassifiedWealthCashFlow[],
+  flows: readonly InvestmentCashFlowRecord[],
   period: DietzPeriod,
 ): ModifiedDietzResult {
   const currencyFlows = flows.filter((flow) => flow.money.currency.toUpperCase() === currencyCode);
+  if (currencyFlows.some(unresolvedCapitalFlow)) return unavailableDietz();
   const performanceFlows = currencyFlows.filter((flow) => flow.includedInPerformance);
-  if (performanceFlows.some((flow) => flow.classification === 'ambiguous')) return unavailableDietz();
   if (!period.periodStart || !period.periodEnd) return unavailableDietz();
   return calculateModifiedDietz(values.startValues?.[currencyCode] ?? null, values.endValues?.[currencyCode] ?? null, performanceFlows, period.periodStart, period.periodEnd);
 }

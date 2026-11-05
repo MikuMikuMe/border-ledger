@@ -923,12 +923,17 @@ function linkedBankSources(event: WealthEvent): string[] {
   return [event.linkedBankSourceId, replacement].filter((value): value is string => Boolean(value));
 }
 
-async function bankSourceCandidates(db: D1Database, context: FinancialContext, linked: string): Promise<readonly string[]> {
+interface BankSourceIdentity {
+  readonly values: readonly string[];
+  readonly transactionIds: readonly string[];
+}
+
+async function bankSourceCandidates(db: D1Database, context: FinancialContext, linked: string): Promise<BankSourceIdentity> {
   const aliases = await db.prepare(`SELECT transaction_id,id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference
     FROM transaction_source_records WHERE ledger_id=? AND (? IN (id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference,transaction_id))`).bind(context.ledgerId, linked).all<TransactionAliasRow>();
   const candidates = new Set<string>([linked]);
   for (const row of aliases.results) [row.transaction_id, row.id, row.identity_key, row.provider_transaction_id, row.provider_pending_transaction_id, row.bank_source_id, row.bank_row_id, row.event_id, row.bank_reference].forEach((value) => { if (value) candidates.add(value); });
-  return [...candidates];
+  return { values: [...candidates], transactionIds: [...new Set(aliases.results.map((row) => row.transaction_id))] };
 }
 
 function rowUsesBankSource(row: { linked_bank_source_id: string | null; payload_json: string }, candidates: readonly string[]): boolean {
@@ -953,12 +958,27 @@ async function correctionTargetBankLink(db: D1Database, context: FinancialContex
   return target.linkedBankSourceId ?? (target.kind === 'correction' ? target.replacement.linkedBankSourceId ?? null : null);
 }
 
+function sameBankTransaction(left: BankSourceIdentity, right: BankSourceIdentity | null): boolean {
+  if (!right) return false;
+  if (left.transactionIds.length !== 1) return false;
+  if (right.transactionIds.length !== 1) return false;
+  return left.transactionIds[0] === right.transactionIds[0];
+}
+
+async function bankSourceForWrite(db: D1Database, context: FinancialContext, linked: string): Promise<BankSourceIdentity> {
+  const candidates = await bankSourceCandidates(db, context, linked);
+  if (candidates.transactionIds.length > 1) throw new WealthStoreError('ambiguous_bank_link', 'The bank link matches multiple transactions. Choose a transaction ID or unique source alias.', 400);
+  return candidates;
+}
+
 export async function assertBankLinkAvailable(db: D1Database, context: FinancialContext, event: WealthEvent): Promise<void> {
   const targetLink = await correctionTargetBankLink(db, context, event);
+  const targetIdentity = targetLink ? await bankSourceCandidates(db, context, targetLink) : null;
   for (const linked of linkedBankSources(event)) {
+    const candidates = await bankSourceForWrite(db, context, linked);
     if (linked === targetLink) continue;
-    const candidates = await bankSourceCandidates(db, context, linked);
-    if (await existingBankLink(db, context, candidates)) throw new WealthStoreError('bank_link_conflict', 'A bank transaction is already linked to another wealth event.', 409);
+    if (sameBankTransaction(candidates, targetIdentity)) continue;
+    if (await existingBankLink(db, context, candidates.values)) throw new WealthStoreError('bank_link_conflict', 'A bank transaction is already linked to another wealth event.', 409);
   }
 }
 

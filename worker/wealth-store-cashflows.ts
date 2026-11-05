@@ -248,7 +248,7 @@ export async function cashFlowRecords(db: D1Database, context: FinancialContext,
     sourceRecordByTransaction.set(alias.transaction_id, sourceRecordByTransaction.get(alias.transaction_id) ?? alias.id);
   }
   return rows.results.map((row) => {
-    const candidates = aliasesByTransaction.get(row.id) ?? new Set<string>([row.id]);
+    const candidates = new Set([row.id, ...(aliasesByTransaction.get(row.id) ?? [])]);
     const linked = events.filter((event) => event.linkedBankSourceId && candidates.has(event.linkedBankSourceId));
     const linkedSources = [...new Set(linked.map((event) => event.sourceId))];
     const linkConflict = linkedSources.length > 1;

@@ -167,12 +167,13 @@ describe('wealth store integration', () => {
     await insertBankSource(f.db);
     await account(f.db, 'brokerage');
     await event(f.db, { id: 'linked-event', sourceId: 'linked-event', date: '2026-01-01', kind: 'contribution', accountId: 'brokerage', money: money(100), linkedBankSourceId: 'tx-1' });
+    await event(f.db, { id: 'unlinked-event', sourceId: 'unlinked-event', date: '2026-01-01', kind: 'contribution', accountId: 'brokerage', money: money(100) });
     const correction = {
       id: 'import-correction',
       sourceId: 'import-correction',
       date: '2026-01-02',
       kind: 'correction',
-      targetSourceId: 'linked-event',
+      targetSourceId: 'unlinked-event',
       replacement: { kind: 'contribution', date: '2026-01-01', accountId: 'brokerage', money: money(100), linkedBankSourceId: 'bank-source-1' },
     };
     const csv = csvRows(['record_type', 'event_json'], [{ record_type: 'event', event_json: JSON.stringify(correction) }]);

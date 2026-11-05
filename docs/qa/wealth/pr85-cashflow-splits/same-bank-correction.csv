@@ -1,0 +1,2 @@
+"record_type","event_json"
+"event","{""sourceId"":""review-capital-correction"",""kind"":""correction"",""date"":""2026-11-03"",""id"":""review-capital-correction"",""targetSourceId"":""review-contribution"",""replacement"":{""accountId"":""review-cash"",""money"":{""currency"":""CAD"",""amountMinor"":10000},""linkedBankSourceId"":""qa-capital-alias"",""date"":""2026-11-02"",""kind"":""contribution""}}"

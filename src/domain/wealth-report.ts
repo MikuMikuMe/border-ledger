@@ -1,4 +1,4 @@
-import { exactMoneyTimesQuantity, safeNumber } from './wealth-math';
+import { add, decimal, divideExactInteger, exactMoneyTimesQuantity, isZero, multiplyInteger, safeNumber, subtract, type ScaledDecimal } from './wealth-math';
 import {
   accountRegistry,
   assertDate,
@@ -37,6 +37,16 @@ interface ExternalFlowContext {
   readonly priorCurrency: string | null;
 }
 type ExternalFlowValue = { readonly skip: true; readonly currency: string | null } | { readonly skip: false; readonly currency: string; readonly signed: number; readonly weighted: number };
+interface SplitObservationState {
+  quantity: ScaledDecimal;
+  readonly splitDates: Set<string>;
+}
+interface SplitObservationAddition {
+  readonly accountId: string;
+  readonly instrument: HoldingValuation['instrument'];
+  readonly quantity: string;
+  readonly inheritedDates?: readonly string[];
+}
 
 export function createWealthSnapshot(events: readonly WealthEvent[], options: WealthReportOptions): WealthSnapshot {
   assertDate(options.asOf, 'as-of date');
@@ -133,16 +143,81 @@ function valuePosition(position: WealthPositionState, valuations: readonly Holdi
 }
 
 function splitObservationBoundaries(events: readonly WealthEvent[]): ReadonlyMap<string, readonly string[]> {
-  const dates = new Map<string, string[]>();
-  for (const event of events) {
-    if (event.kind === 'split') addSplitDate(dates, event.accountId, event.instrument, event.date);
+  const states = new Map<string, SplitObservationState>();
+  for (const event of events) applySplitObservationEvent(states, event);
+  const boundaries = new Map<string, readonly string[]>();
+  for (const [key, state] of states) {
+    if (isZero(state.quantity) || state.splitDates.size === 0) continue;
+    boundaries.set(key, Object.freeze([...state.splitDates].sort()));
   }
-  return dates;
+  return boundaries;
 }
 
-function addSplitDate(target: Map<string, string[]>, accountId: string, instrument: HoldingValuation['instrument'], date: string): void {
+function applySplitObservationEvent(states: Map<string, SplitObservationState>, event: WealthEvent): void {
+  if (event.kind === 'opening_position' || event.kind === 'buy') {
+    addSplitObservationPosition(states, event);
+    return;
+  }
+  if (event.kind === 'sell') {
+    reduceSplitObservationPosition(states, event.accountId, event.instrument, event.quantity);
+    return;
+  }
+  if (event.kind === 'split') {
+    applySplitObservationSplit(states, event);
+    return;
+  }
+  if (event.kind === 'transfer' && event.transferKind === 'position') {
+    transferSplitObservationPosition(states, event);
+  }
+}
+
+function addSplitObservationPosition(states: Map<string, SplitObservationState>, addition: SplitObservationAddition): void {
+  const { accountId, instrument, quantity, inheritedDates = [] } = addition;
   const key = positionValuationKey(accountId, instrument);
-  target.set(key, [...(target.get(key) ?? []), date]);
+  const current = states.get(key);
+  if (!current) {
+    states.set(key, { quantity: decimal(quantity), splitDates: new Set(inheritedDates) });
+    return;
+  }
+  current.quantity = add(current.quantity, decimal(quantity));
+  for (const date of inheritedDates) current.splitDates.add(date);
+}
+
+function reduceSplitObservationPosition(
+  states: Map<string, SplitObservationState>,
+  accountId: string,
+  instrument: HoldingValuation['instrument'],
+  quantity: string,
+): void {
+  const key = positionValuationKey(accountId, instrument);
+  const current = states.get(key);
+  if (!current) return;
+  current.quantity = subtract(current.quantity, decimal(quantity));
+  // Closing a lot does not undo the known split adjustment to quote units.
+}
+
+function applySplitObservationSplit(
+  states: Map<string, SplitObservationState>,
+  event: Extract<WealthEvent, { kind: 'split' }>,
+): void {
+  const key = positionValuationKey(event.accountId, event.instrument);
+  const current = states.get(key);
+  if (!current) return;
+  current.quantity = divideExactInteger(multiplyInteger(current.quantity, BigInt(event.numerator)), BigInt(event.denominator));
+  current.splitDates.add(event.date);
+}
+
+function transferSplitObservationPosition(
+  states: Map<string, SplitObservationState>,
+  event: Extract<WealthEvent, { kind: 'transfer'; transferKind: 'position' }>,
+): void {
+  const sourceKey = positionValuationKey(event.fromAccountId, event.instrument);
+  const source = states.get(sourceKey);
+  if (!source) return;
+  const inheritedDates = [...source.splitDates];
+  source.quantity = subtract(source.quantity, decimal(event.quantity));
+  // Retain the source boundary if that account later holds this security again.
+  addSplitObservationPosition(states, { accountId: event.toAccountId, instrument: event.instrument, quantity: event.quantity, inheritedDates });
 }
 
 function valuationPrecedesSplit(position: WealthPositionState, valuation: HoldingValuation, splitDates: ReadonlyMap<string, readonly string[]>): boolean {

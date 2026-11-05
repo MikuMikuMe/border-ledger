@@ -26,6 +26,8 @@ interface BankAliasRow {
   readonly bank_reference: string | null;
 }
 
+type BankAliasGroups = ReadonlyMap<string, ReadonlySet<string>>;
+
 interface ImportedBankLink {
   readonly sourceId: string;
   readonly claimSourceId: string;
@@ -235,7 +237,7 @@ function aliasValues(row: BankAliasRow): string[] {
   return BANK_ALIAS_FIELDS.map((field) => row[field]).filter((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
-async function readBankAliasGroups(db: D1Database, context: FinancialContext, links: readonly ImportedBankLink[]): Promise<ReadonlyMap<string, string>> {
+async function readBankAliasGroups(db: D1Database, context: FinancialContext, links: readonly ImportedBankLink[]): Promise<BankAliasGroups> {
   const requested = [...new Set(links.map((link) => link.linkedBankSourceId))];
   if (requested.length === 0) return new Map();
   const placeholders = requested.map(() => '?').join(',');
@@ -245,9 +247,55 @@ async function readBankAliasGroups(db: D1Database, context: FinancialContext, li
   if (transactionIds.length === 0) return new Map();
   const transactionPlaceholders = transactionIds.map(() => '?').join(',');
   const aliases = await db.prepare(`SELECT transaction_id,id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference FROM transaction_source_records WHERE ledger_id=? AND transaction_id IN (${transactionPlaceholders})`).bind(context.ledgerId, ...transactionIds).all<BankAliasRow>();
-  const groups = new Map<string, string>();
-  for (const row of aliases.results) for (const value of aliasValues(row)) groups.set(value, row.transaction_id);
+  const groups = new Map<string, Set<string>>();
+  for (const row of aliases.results) {
+    for (const value of aliasValues(row)) {
+      const transactions = groups.get(value) ?? new Set<string>();
+      transactions.add(row.transaction_id);
+      groups.set(value, transactions);
+    }
+  }
   return groups;
+}
+
+function bankAliasGroup(linked: string, aliases: BankAliasGroups): string | null {
+  const transactions = aliases.get(linked);
+  if (!transactions) return `unresolved:${linked}`;
+  if (transactions.size !== 1) return null;
+  return [...transactions][0];
+}
+
+function correctedBankClaim(link: ImportedBankLink, corrections: ReadonlyMap<string, Extract<WealthEvent, { kind: 'correction' }>>, aliases: BankAliasGroups): string {
+  const group = bankAliasGroup(link.linkedBankSourceId, aliases);
+  if (group === null) return link.claimSourceId;
+  let claim = link.claimSourceId;
+  const visited = new Set<string>();
+  while (!visited.has(claim)) {
+    visited.add(claim);
+    const correction = corrections.get(claim);
+    if (!correction) break;
+    const replacementLink = correction.replacement.linkedBankSourceId;
+    if (!replacementLink) break;
+    if (bankAliasGroup(replacementLink, aliases) !== group) break;
+    claim = correction.sourceId;
+  }
+  return claim;
+}
+
+interface ImportedBankClaimContext {
+  readonly aliases: BankAliasGroups;
+  readonly corrections: ReadonlyMap<string, Extract<WealthEvent, { kind: 'correction' }>>;
+  readonly claimed: Map<string, string>;
+}
+
+function importedBankClaimError(link: ImportedBankLink, context: ImportedBankClaimContext): string | null {
+  const group = bankAliasGroup(link.linkedBankSourceId, context.aliases);
+  if (group === null) return `Event ${link.sourceId} references an ambiguous bank link; choose a transaction ID or unique source alias.`;
+  const claim = correctedBankClaim(link, context.corrections, context.aliases);
+  const prior = context.claimed.get(group);
+  if (prior && prior !== claim) return `Event ${link.sourceId} conflicts with another imported bank link.`;
+  context.claimed.set(group, claim);
+  return null;
 }
 
 async function importedLinkErrors(db: D1Database, context: FinancialContext, records: readonly WealthImportRecord[], services: ImportValidationServices): Promise<string[]> {
@@ -258,12 +306,11 @@ async function importedLinkErrors(db: D1Database, context: FinancialContext, rec
   });
   const links = importedBankLinks(events);
   const aliasGroups = await readBankAliasGroups(db, context, links);
-  const claimedGroups = new Map<string, string>();
+  const corrections = new Map(events.filter((event): event is Extract<WealthEvent, { kind: 'correction' }> => event.kind === 'correction').map((event) => [event.targetSourceId, event]));
+  const claims: ImportedBankClaimContext = { aliases: aliasGroups, corrections, claimed: new Map() };
   for (const link of links) {
-    const group = aliasGroups.get(link.linkedBankSourceId) ?? `unresolved:${link.linkedBankSourceId}`;
-    const prior = claimedGroups.get(group);
-    if (prior && prior !== link.claimSourceId) errors.push(`Event ${link.sourceId} conflicts with another imported bank link.`);
-    claimedGroups.set(group, link.claimSourceId);
+    const claimError = importedBankClaimError(link, claims);
+    if (claimError) { errors.push(claimError); continue; }
     try {
       await services.assertBankLinkAvailable(db, context, link.event);
     } catch (error) {
