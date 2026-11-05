@@ -57,6 +57,16 @@ describe('debug Wealth SAF fixture boundary', () => {
     expect(urls[1].searchParams.get('reportingCurrency')).toBe('CAD');
   });
 
+  it.each([
+    { httpStatus: 400, status: 'rejected' },
+    { httpStatus: 409, status: 'revision_conflict' },
+    { httpStatus: 503, status: 'reconciliation_required' },
+  ])('exposes the $status operation receipt from the synthetic transport', async ({ httpStatus, status }) => {
+    vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: httpStatus }));
+    const result = await localWealthService.startWrite(`fixture-${status}`, 'event', '{}');
+    expect(result).toMatchObject({ operationId: `fixture-${status}`, status });
+  });
+
   it('retains handler-shaped preview rows and commits exactly those row IDs', async () => {
     const rows = Array.from({ length: 10 }, (_, index) => ({
       rowId: `row-${index + 1}`, rowIndex: index, recordType: 'event',

@@ -1,0 +1,473 @@
+{
+  "cashFlows": [
+    {
+      "sourceId": "qa-fee",
+      "transactionId": "qa-fee",
+      "merchant": "Synthetic Fee",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Bank fees",
+      "bankKind": "fee",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 500
+      },
+      "direction": "outflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-refund",
+      "transactionId": "qa-refund",
+      "merchant": "Synthetic Refund",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Housing",
+      "bankKind": "refund",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 1000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-rent",
+      "transactionId": "qa-rent",
+      "merchant": "Synthetic Rent",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Housing",
+      "bankKind": "expense",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 75000
+      },
+      "direction": "outflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-salary",
+      "transactionId": "qa-salary",
+      "merchant": "Synthetic Salary",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Income",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 250000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-capital-alias",
+      "transactionId": "qa-capital-bank",
+      "merchant": "Synthetic capital bank",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-02",
+      "accountId": "qa-cash",
+      "category": "Investment",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 5000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    }
+  ],
+  "modifiedDietz": {
+    "value": null,
+    "available": false,
+    "reason": "incomplete_flows"
+  },
+  "asOf": "2026-11-03",
+  "accounts": [
+    {
+      "id": "reverse-split-qa",
+      "name": "Reverse split QA",
+      "kind": "brokerage",
+      "mode": "holdings",
+      "currency": "CAD",
+      "linkedBankAccountId": null,
+      "active": true,
+      "amountMinor": null,
+      "revision": 5
+    }
+  ],
+  "positions": [
+    {
+      "accountId": "reverse-split-qa",
+      "instrument": {
+        "exchange": "TSX",
+        "ticker": "RY",
+        "type": "stock",
+        "currency": "CAD"
+      },
+      "quantity": "1",
+      "costBasisMinor": 15000,
+      "basisKnown": true,
+      "realizedGainMinor": 0,
+      "valuation": {
+        "id": "new-price",
+        "accountId": "reverse-split-qa",
+        "instrument": {
+          "exchange": "TSX",
+          "ticker": "RY",
+          "type": "stock",
+          "currency": "CAD"
+        },
+        "asOf": "2026-11-03",
+        "priceMinor": 15000,
+        "source": "manual",
+        "provider": null
+      },
+      "marketValueMinor": 15000,
+      "unrealizedGainMinor": 0
+    }
+  ],
+  "cash": [
+    {
+      "accountId": "reverse-split-qa",
+      "currency": "CAD",
+      "amountMinor": 21000
+    }
+  ],
+  "totalByCurrency": {
+    "CAD": 36000
+  },
+  "totalStatusByCurrency": {
+    "CAD": "complete"
+  },
+  "balanceStatuses": [],
+  "allocations": [
+    {
+      "currency": "CAD",
+      "accountId": "reverse-split-qa",
+      "kind": "cash",
+      "instrument": null,
+      "valueMinor": 21000,
+      "available": true,
+      "share": 0.5833333333333334
+    },
+    {
+      "currency": "CAD",
+      "accountId": "reverse-split-qa",
+      "kind": "holding",
+      "instrument": {
+        "exchange": "TSX",
+        "ticker": "RY",
+        "type": "stock",
+        "currency": "CAD"
+      },
+      "valueMinor": 15000,
+      "available": true,
+      "share": 0.4166666666666667
+    }
+  ],
+  "cashFlowTotals": {
+    "CAD": {
+      "inflowMinor": 256000,
+      "outflowMinor": 75500,
+      "netMinor": 180500,
+      "incomeMinor": 255000,
+      "expenseMinor": 75000,
+      "refundMinor": 1000,
+      "feeMinor": 500
+    }
+  },
+  "householdCashFlows": [
+    {
+      "sourceId": "qa-fee",
+      "transactionId": "qa-fee",
+      "merchant": "Synthetic Fee",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Bank fees",
+      "bankKind": "fee",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 500
+      },
+      "direction": "outflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-refund",
+      "transactionId": "qa-refund",
+      "merchant": "Synthetic Refund",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Housing",
+      "bankKind": "refund",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 1000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-rent",
+      "transactionId": "qa-rent",
+      "merchant": "Synthetic Rent",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Housing",
+      "bankKind": "expense",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 75000
+      },
+      "direction": "outflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-salary",
+      "transactionId": "qa-salary",
+      "merchant": "Synthetic Salary",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Income",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 250000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-capital-alias",
+      "transactionId": "qa-capital-bank",
+      "merchant": "Synthetic capital bank",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-02",
+      "accountId": "qa-cash",
+      "category": "Investment",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 5000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    }
+  ],
+  "investmentCashFlows": [
+    {
+      "sourceId": "mobile-event-2-071ca707-f806-494e-ae43-c1199e32d83e",
+      "date": "2026-11-03",
+      "accountId": "reverse-split-qa",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 7000
+      },
+      "direction": "inflow",
+      "kind": "contribution",
+      "linkedWealthSourceId": "mobile-event-2-071ca707-f806-494e-ae43-c1199e32d83e",
+      "classification": "external_contribution",
+      "includedInPerformance": true,
+      "reason": "Explicitly linked external capital flow."
+    },
+    {
+      "sourceId": "mobile-event-4-07b317db-222c-4ab9-b62f-3b50e0fb178b",
+      "date": "2026-11-03",
+      "accountId": "reverse-split-qa",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 7000
+      },
+      "direction": "inflow",
+      "kind": "contribution",
+      "linkedWealthSourceId": "mobile-event-4-07b317db-222c-4ab9-b62f-3b50e0fb178b",
+      "classification": "external_contribution",
+      "includedInPerformance": true,
+      "reason": "Explicitly linked external capital flow."
+    },
+    {
+      "sourceId": "mobile-event-6-7c3f41f6-ca13-487c-b722-a28429dd6d36",
+      "date": "2026-11-03",
+      "accountId": "reverse-split-qa",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 7000
+      },
+      "direction": "inflow",
+      "kind": "contribution",
+      "linkedWealthSourceId": "mobile-event-6-7c3f41f6-ca13-487c-b722-a28429dd6d36",
+      "classification": "external_contribution",
+      "includedInPerformance": true,
+      "reason": "Explicitly linked external capital flow."
+    }
+  ],
+  "investmentCashFlowTotals": {
+    "CAD": {
+      "inflowMinor": 21000,
+      "outflowMinor": 0,
+      "netMinor": 21000,
+      "incomeMinor": 0,
+      "expenseMinor": 0,
+      "refundMinor": 0,
+      "feeMinor": 0
+    }
+  },
+  "modifiedDietzByCurrency": {
+    "CAD": {
+      "value": null,
+      "available": false,
+      "reason": "missing_start_valuation"
+    }
+  },
+  "history": [
+    {
+      "date": "2026-10-29",
+      "totals": {},
+      "convertedCadMinor": null,
+      "complete": false,
+      "stale": false,
+      "missingData": [
+        "position:reverse-split-qa:TSX:RY:stock:CAD",
+        "position:reverse-split-qa:TSX:RY:stock:CAD:observation",
+        "valuation:CAD"
+      ]
+    },
+    {
+      "date": "2026-10-30",
+      "totals": {
+        "CAD": 5000
+      },
+      "convertedCadMinor": null,
+      "complete": false,
+      "stale": false,
+      "missingData": [
+        "position:reverse-split-qa:TSX:RY:stock:CAD",
+        "position:reverse-split-qa:TSX:RY:stock:CAD:observation",
+        "valuation:CAD"
+      ]
+    },
+    {
+      "date": "2026-10-31",
+      "totals": {
+        "CAD": 15000
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    },
+    {
+      "date": "2026-11-01",
+      "totals": {},
+      "convertedCadMinor": null,
+      "complete": false,
+      "stale": false,
+      "missingData": [
+        "position:reverse-split-qa:TSX:RY:stock:CAD",
+        "position:reverse-split-qa:TSX:RY:stock:CAD:observation",
+        "valuation:CAD"
+      ]
+    },
+    {
+      "date": "2026-11-02",
+      "totals": {
+        "CAD": 15000
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    },
+    {
+      "date": "2026-11-03",
+      "totals": {
+        "CAD": 36000
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    }
+  ],
+  "revision": 11,
+  "stale": false,
+  "missingData": [],
+  "fx": {
+    "convertedCadMinor": null,
+    "complete": false,
+    "unavailable": [],
+    "effectiveDate": null,
+    "provider": null,
+    "baseCurrency": null,
+    "rates": {}
+  }
+}

@@ -177,8 +177,6 @@ export const localWealthService: WealthService = {
       headers: { Accept: 'text/csv, application/json', 'Content-Type': 'application/json' },
       ...(plan.payload === undefined ? {} : { body: JSON.stringify(plan.payload) }),
     });
-    const result = localOperation(operationId, action, statusFor(response.status));
-    if (!response.ok) throw new Error(`Local Wealth write rejected (${response.status}).`);
-    return result;
+    return localOperation(operationId, action, statusFor(response.status));
   },
 };

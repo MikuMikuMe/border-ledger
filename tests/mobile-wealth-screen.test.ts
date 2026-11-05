@@ -326,6 +326,32 @@ describe('Android Wealth views', () => {
     expect(decodeQuoteReceiptError(JSON.stringify({ status: 'provider_error', reason: 'Provider unavailable.' }))).toBe('Provider unavailable.');
   });
 
+  it.each([
+    { status: 'rejected', amount: 7000, revision: 4 },
+    { status: 'rejected', amount: 5000, revision: 4 },
+    { status: 'revision_conflict', amount: 5000, revision: 5 },
+  ])('renews a draft operation after $status so a corrected submission can complete', async ({ status, amount, revision }) => {
+    let attempt = 0;
+    const service = {
+      read: vi.fn(async () => JSON.stringify({ ...data, revision: attempt === 0 ? 4 : revision })),
+      readEvents: vi.fn(async () => JSON.stringify({ events: [] })),
+      startWrite: vi.fn(async (operationId: string, kind: string, _body: string) => ({ operationId, kind, status: attempt++ === 0 ? status : 'completed', updatedAt: 'now', resultId: null })),
+      onChanged: () => ({ remove() {} }),
+    };
+    let tree: any;
+    await act(async () => { tree = create(React.createElement(WealthScreen, { dark: false, service })); });
+    await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Investments' }).props.onPress(); });
+    const body = { kind: 'contribution', date: '2026-11-01', accountId: 'brokerage', money: { currency: 'CAD', amountMinor: 5000 }, expectedRevision: 4 };
+    await act(async () => { tree.root.findByType(WealthInvestments).props.onAction('event', JSON.stringify(body), 'same-editor'); });
+    expect(service.startWrite).toHaveBeenCalledTimes(1);
+    await act(async () => { tree.root.findByType(WealthInvestments).props.onAction('event', JSON.stringify({ ...body, money: { currency: 'CAD', amountMinor: amount }, expectedRevision: revision }), 'same-editor'); });
+    expect(service.startWrite).toHaveBeenCalledTimes(2);
+    const [first, retry] = service.startWrite.mock.calls;
+    expect(retry[0]).not.toBe(first[0]);
+    expect(JSON.parse(retry[2])).toMatchObject({ id: retry[0], sourceId: retry[0], expectedRevision: revision });
+    await act(async () => { tree.unmount(); });
+  });
+
   it('keeps an account guard reason in the accessible write error copy', () => {
     expect(decodeWealthWriteFailure(JSON.stringify({ code: 'account_mode_conflict', reason: 'Only brokerage accounts support holdings plus cash representation.' }), 'rejected')).toBe('Only brokerage accounts support holdings plus cash representation.');
   });

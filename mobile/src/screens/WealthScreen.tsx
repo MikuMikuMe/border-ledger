@@ -44,22 +44,22 @@ function newEventIdentity({ action }: DraftIdentityRequest): string {
 
 export class DraftOperationIdentityRegistry {
   private readonly identities = new Map<string, string>();
-  private readonly completed = new Set<string>();
 
   resolve(request: DraftIdentityRequest): string {
     const { action, draftId } = request;
     if (!draftId) return newEventIdentity(request);
     const key = `${action}:${draftId}`;
     const existing = this.identities.get(key);
-    if (existing && !this.completed.has(key)) return existing;
+    if (existing) return existing;
     const identity = newEventIdentity(request);
     this.identities.set(key, identity);
-    this.completed.delete(key);
     return identity;
   }
 
-  markCompleted({ action, draftId }: DraftIdentityRequest): void {
-    if (draftId) this.completed.add(`${action}:${draftId}`);
+  settle({ action, draftId, identity, status }: DraftIdentityRequest & { identity: string; status: string }): void {
+    if (!draftId || !['completed', 'rejected', 'revision_conflict', 'failed_local', 'canceled'].includes(status)) return;
+    const key = `${action}:${draftId}`;
+    if (this.identities.get(key) === identity) this.identities.delete(key);
   }
 }
 
@@ -67,9 +67,9 @@ export function safeEventPayload({ action, body, identity = newEventIdentity({ a
   if (!['event', 'correction', 'reversal'].includes(action)) return body;
   const value = JSON.parse(body) as Record<string, unknown>;
   // The typed form never accepts source IDs. The screen supplies a draft-scoped
-  // identity so a lost response can retry safely while a confirmed draft can
-  // be submitted again as a distinct event. Revision is deliberately excluded
-  // from the identity so a refreshed report can retry the same event.
+  // identity while a response is unresolved. A definitive native result retires
+  // that identity so corrected fields or a refreshed revision can be submitted
+  // as a new operation without colliding with the native journal fingerprint.
   const eventIdentity = { id: identity, sourceId: identity };
   if (action === 'correction') return JSON.stringify({ ...value, ...eventIdentity, kind: 'correction' });
   if (action === 'reversal') return JSON.stringify({ ...value, ...eventIdentity, kind: 'reversal' });
@@ -173,9 +173,10 @@ export function decodeWealthWriteFailure(resultId: string | null, status = ''): 
 
 type WealthWriteCompletion = { action: string; draftId?: string; identity?: string; operation: Operation | null; runtime: WealthWriteRuntime };
 
-function completeDraftIdentity(completion: WealthWriteCompletion, completed: boolean): void {
-  if (!completed || !completion.identity) return;
-  completion.runtime.operationIdentities.markCompleted({ action: completion.action, draftId: completion.draftId });
+function completeDraftIdentity(completion: WealthWriteCompletion): void {
+  if (!completion.identity) return;
+  const status = completion.operation?.status ?? completion.runtime.controller.mutation.current().status;
+  completion.runtime.operationIdentities.settle({ action: completion.action, draftId: completion.draftId, identity: completion.identity, status });
 }
 
 function completeCsvCommit(completion: WealthWriteCompletion, completed: boolean): void {
@@ -196,7 +197,7 @@ function completeWealthWrite({ action, draftId, identity, operation, runtime }: 
   const completed = runtime.controller.mutation.current().status === 'completed';
   runtime.setWriteError(completed ? null : decodeWealthWriteFailure(operation?.resultId ?? null, operation?.status ?? runtime.controller.mutation.current().status));
   const completion = { action, draftId, identity, operation, runtime };
-  completeDraftIdentity(completion, completed);
+  completeDraftIdentity(completion);
   completeCsvCommit(completion, completed);
   completeQuoteWrite(completion);
   completeEventWrite(completion);

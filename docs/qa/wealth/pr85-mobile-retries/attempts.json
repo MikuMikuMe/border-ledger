@@ -1,0 +1,182 @@
+[
+  {
+    "operationId": "mobile-event-1-4efcdabf-fc0b-4235-bd23-b835dec9d36f",
+    "payload": {
+      "operationId": "mobile-event-1-4efcdabf-fc0b-4235-bd23-b835dec9d36f",
+      "expectedRevision": 7,
+      "event": {
+        "date": "2026-11-03",
+        "kind": "contribution",
+        "accountId": "reverse-split-qa",
+        "instrument": null,
+        "quantity": "",
+        "money": {
+          "currency": "CAD",
+          "amountMinor": 5000
+        },
+        "consideration": {
+          "currency": "CAD",
+          "amountMinor": 5000
+        },
+        "proceeds": {
+          "currency": "CAD",
+          "amountMinor": 5000
+        },
+        "fee": null,
+        "id": "mobile-event-1-4efcdabf-fc0b-4235-bd23-b835dec9d36f",
+        "sourceId": "mobile-event-1-4efcdabf-fc0b-4235-bd23-b835dec9d36f"
+      }
+    },
+    "forcedStatus": 400
+  },
+  {
+    "operationId": "mobile-event-2-071ca707-f806-494e-ae43-c1199e32d83e",
+    "payload": {
+      "operationId": "mobile-event-2-071ca707-f806-494e-ae43-c1199e32d83e",
+      "expectedRevision": 7,
+      "event": {
+        "date": "2026-11-03",
+        "kind": "contribution",
+        "accountId": "reverse-split-qa",
+        "instrument": null,
+        "quantity": "",
+        "money": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "consideration": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "proceeds": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "fee": null,
+        "id": "mobile-event-2-071ca707-f806-494e-ae43-c1199e32d83e",
+        "sourceId": "mobile-event-2-071ca707-f806-494e-ae43-c1199e32d83e"
+      }
+    },
+    "forcedStatus": 0
+  },
+  {
+    "operationId": "mobile-event-3-92968d84-cecc-4c17-9727-3abfd28b20fb",
+    "payload": {
+      "operationId": "mobile-event-3-92968d84-cecc-4c17-9727-3abfd28b20fb",
+      "expectedRevision": 8,
+      "event": {
+        "date": "2026-11-03",
+        "kind": "contribution",
+        "accountId": "reverse-split-qa",
+        "instrument": null,
+        "quantity": "",
+        "money": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "consideration": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "proceeds": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "fee": null,
+        "id": "mobile-event-3-92968d84-cecc-4c17-9727-3abfd28b20fb",
+        "sourceId": "mobile-event-3-92968d84-cecc-4c17-9727-3abfd28b20fb"
+      }
+    },
+    "forcedStatus": 409
+  },
+  {
+    "operationId": "mobile-event-4-07b317db-222c-4ab9-b62f-3b50e0fb178b",
+    "payload": {
+      "operationId": "mobile-event-4-07b317db-222c-4ab9-b62f-3b50e0fb178b",
+      "expectedRevision": 8,
+      "event": {
+        "date": "2026-11-03",
+        "kind": "contribution",
+        "accountId": "reverse-split-qa",
+        "instrument": null,
+        "quantity": "",
+        "money": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "consideration": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "proceeds": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "fee": null,
+        "id": "mobile-event-4-07b317db-222c-4ab9-b62f-3b50e0fb178b",
+        "sourceId": "mobile-event-4-07b317db-222c-4ab9-b62f-3b50e0fb178b"
+      }
+    },
+    "forcedStatus": 0
+  },
+  {
+    "operationId": "mobile-event-5-614b7a68-b5af-4043-9cac-f225def471a7",
+    "payload": {
+      "operationId": "mobile-event-5-614b7a68-b5af-4043-9cac-f225def471a7",
+      "expectedRevision": 9,
+      "event": {
+        "date": "2026-11-03",
+        "kind": "contribution",
+        "accountId": "reverse-split-qa",
+        "instrument": null,
+        "quantity": "",
+        "money": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "consideration": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "proceeds": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "fee": null,
+        "id": "mobile-event-5-614b7a68-b5af-4043-9cac-f225def471a7",
+        "sourceId": "mobile-event-5-614b7a68-b5af-4043-9cac-f225def471a7"
+      }
+    },
+    "forcedStatus": 0
+  },
+  {
+    "operationId": "mobile-event-6-7c3f41f6-ca13-487c-b722-a28429dd6d36",
+    "payload": {
+      "operationId": "mobile-event-6-7c3f41f6-ca13-487c-b722-a28429dd6d36",
+      "expectedRevision": 10,
+      "event": {
+        "date": "2026-11-03",
+        "kind": "contribution",
+        "accountId": "reverse-split-qa",
+        "instrument": null,
+        "quantity": "",
+        "money": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "consideration": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "proceeds": {
+          "currency": "CAD",
+          "amountMinor": 7000
+        },
+        "fee": null,
+        "id": "mobile-event-6-7c3f41f6-ca13-487c-b722-a28429dd6d36",
+        "sourceId": "mobile-event-6-7c3f41f6-ca13-487c-b722-a28429dd6d36"
+      }
+    },
+    "forcedStatus": 0
+  }
+]

@@ -1,5 +1,7 @@
 # Wealth verification record
 
+Newest: [Android definitive-write retries](pr85-mobile-retries/README.md), verified 2026-11-05.
+
 Newest: [segment-scoped report replay after holdings resets](pr85-segment-report/README.md), verified 2026-11-04.
 
 Newest: [bank aliases, split-price transfers and performance](pr85-cashflow-splits/README.md), verified 2026-11-04.

@@ -298,12 +298,39 @@ describe('Android Wealth typed write flow', () => {
     expect(refreshed).toMatchObject({ id: first.id, sourceId: first.sourceId });
   });
 
+  it.each(['running', 'saving', 'reconciliation_required', 'checking'])('preserves a draft identity while its outcome is %s', status => {
+    const registry = new DraftOperationIdentityRegistry();
+    const request = { action: 'event', draftId: 'draft-unresolved' };
+    const identity = registry.resolve(request);
+    registry.settle({ ...request, identity, status });
+    expect(registry.resolve(request)).toBe(identity);
+  });
+
+  it.each(['completed', 'rejected', 'revision_conflict', 'failed_local', 'canceled'])('starts a fresh operation after the definitive %s result', status => {
+    const registry = new DraftOperationIdentityRegistry();
+    const request = { action: 'event', draftId: 'draft-terminal' };
+    const identity = registry.resolve(request);
+    registry.settle({ ...request, identity, status });
+    expect(registry.resolve(request)).not.toBe(identity);
+  });
+
+  it.each(['event', 'correction', 'reversal', 'csv-export'])('retires definitive outcomes without letting an older receipt clear a newer %s draft', action => {
+    const registry = new DraftOperationIdentityRegistry();
+    const request = { action, draftId: 'draft-settled' };
+    const first = registry.resolve(request);
+    registry.settle({ ...request, identity: first, status: 'rejected' });
+    const next = registry.resolve(request);
+    expect(next).not.toBe(first);
+    registry.settle({ ...request, identity: first, status: 'completed' });
+    expect(registry.resolve(request)).toBe(next);
+  });
+
   it('gives deliberate identical entries distinct identities after confirmation', () => {
     const registry = new DraftOperationIdentityRegistry();
     const body = JSON.stringify({ kind: 'dividend', accountId: 'brokerage', date: '2026-11-01', expectedRevision: 3 });
     const firstIdentity = registry.resolve({ action: 'event', draftId: 'draft-1' });
     const first = JSON.parse(safeEventPayload({ action: 'event', body, identity: firstIdentity }));
-    registry.markCompleted({ action: 'event', draftId: 'draft-1' });
+    registry.settle({ action: 'event', draftId: 'draft-1', identity: firstIdentity, status: 'completed' });
     const secondIdentity = registry.resolve({ action: 'event', draftId: 'draft-1' });
     const second = JSON.parse(safeEventPayload({ action: 'event', body, identity: secondIdentity }));
     expect(second.id).not.toBe(first.id);

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.lofuyu.borderledger.react.BridgeOperationJournalTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-11-05T05:24:49.241Z" hostname="KAY-OOKII" time="0.971">
+  <properties/>
+  <testcase name="lostRecurringResponseRemainsUnresolvedWithoutRepeatingTheRepositoryMutation" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.031"/>
+  <testcase name="terminalFingerprintEntriesArePrunedBeforeCapacityWhileUnresolvedEntriesRemain" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.424"/>
+  <testcase name="definitiveExportErrorsAreTerminalButMissingWorkerReceiptsRemainUnresolved" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.102"/>
+  <testcase name="simultaneousDuplicateStartUsesOneWrite" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.092"/>
+  <testcase name="recreatedRuntimeCanDiscoverLostOperationIdsWithoutJsStorage" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.026"/>
+  <testcase name="mismatchedPayloadAndOwnerCannotReuseOrInspectOperation" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.024"/>
+  <testcase name="aNewJsRequestIdCannotRetryAnUnresolvedIdenticalWrite" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.024"/>
+  <testcase name="lostPromiseAndRecreationNeverReplayFinancialWrite" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.025"/>
+  <testcase name="cancellationNeverClaimsToUndoSubmittedWrite" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.017"/>
+  <testcase name="externalCallbackAfterRecreationIsClaimedOnceAndCancelDiscardsLateResult" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.044"/>
+  <testcase name="plaidRecoveryReplaysOnlyTheSameIdempotentExternalOperation" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.038"/>
+  <testcase name="budgetRevisionConflictIsTerminalAndPermitsAReviewedRetry" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.026"/>
+  <testcase name="aConfirmedRevisionConflictIsNotAnAmbiguousSuccess" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.017"/>
+  <testcase name="claimedCallbackWithLostProcessRemainsAmbiguousAndNeverResubmits" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.028"/>
+  <testcase name="plaidRecoveryDoesNotRaceAnExchangeThatIsStillActive" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.033"/>
+  <testcase name="wealthRejectionReceiptPreservesTheServerReason" classname="com.lofuyu.borderledger.react.BridgeOperationJournalTest" time="0.017"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
