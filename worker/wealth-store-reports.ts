@@ -1,7 +1,7 @@
 import {
   classifyWealthCashFlows,
   calculateModifiedDietz,
-  createWealthReport,
+  createWealthReportAnalytics,
   createWealthSnapshot,
   instrumentKey,
   resolveWealthEvents,
@@ -495,17 +495,11 @@ export async function readWealthReportProjection(input: WealthReportProjectionIn
   const filtered = records.filter((record) => (!range.from || record.date >= range.from) && (!range.to || record.date <= range.to));
   const investmentAccounts = accounts.filter((account) => account.kind === 'brokerage');
   const investmentAccountIds = new Set(investmentAccounts.map((account) => account.id));
-  const reportInvestmentAccounts = services.accountsAtDate(investmentAccounts, transitions, range.asOf);
   // Cash-flow classification and Dietz use the complete resolved portfolio
   // ledger. Snapshot replay remains segment-scoped, but a flow before a later
   // representation transition must still be included in the period return.
   const investmentEvents = effectiveEvents.filter((event) => isPortfolioBaseEvent(event, investmentAccountIds));
   const investmentValuations = valuations.filter((valuation) => investmentAccountIds.has(valuation.accountId));
-  // Aggregate brokerage values are already represented by the portfolio
-  // start/end totals. They use the account-value valuation key and have no
-  // instrument; only holding prices belong in the domain report valuation
-  // list, which normalizes instruments while replaying positions.
-  const reportValuations = investmentValuations.filter((valuation) => Boolean(valuation.instrument.exchange));
   const portfolioEventIds = portfolioHistorySourceIds(events, effectiveEvents, investmentAccountIds);
   const portfolioHistoryEvents = events.filter((event) => portfolioEventIds.has(event.sourceId));
   const portfolioHistory = await buildWealthHistory(db, investmentAccounts, transitions, portfolioHistoryEvents, investmentValuations, [], range.asOf, reportingCurrency, dependencies, services);
@@ -522,7 +516,7 @@ export async function readWealthReportProjection(input: WealthReportProjectionIn
     return linked?.kind === 'contribution' || linked?.kind === 'withdrawal';
   });
   const investmentCashFlows = classifyInvestmentCashFlows(investmentRecords, investmentEvents);
-  const report = createWealthReport(investmentEvents, dietzRecords, { asOf: range.asOf, accounts: reportInvestmentAccounts, valuations: reportValuations, startValuation: startPoint?.totals ?? null, endValuation: endPoint?.totals ?? null, periodStart: range.from ?? undefined, periodEnd: range.to ?? undefined });
+  const report = createWealthReportAnalytics(investmentEvents, dietzRecords, { asOf: range.asOf, accounts: investmentAccounts, startValuation: startPoint?.totals ?? null, endValuation: endPoint?.totals ?? null, periodStart: range.from ?? undefined, periodEnd: range.to ?? undefined });
   const dietzByCurrency = modifiedDietzByCurrency({ startValues: startPoint?.totals ?? null, endValues: endPoint?.totals ?? null, flows: investmentCashFlows, periodStart: range.from, periodEnd: range.to });
   const quality = snapshotCoverage(snapshot);
   const householdCashFlows = classifyWealthCashFlows(filtered, effectiveEvents);

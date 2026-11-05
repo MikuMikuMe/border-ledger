@@ -101,14 +101,19 @@ export function calculateModifiedDietz(
 }
 
 export function createWealthReport(events: readonly WealthEvent[], records: readonly WealthCashFlowRecord[], options: WealthReportOptions): WealthReport {
-  const snapshot = createWealthSnapshot(events, options);
+  return { ...createWealthSnapshot(events, options), ...createWealthReportAnalytics(events, records, options) };
+}
+
+/** Classify the complete ledger independently of account-segment snapshot replay. */
+export function createWealthReportAnalytics(events: readonly WealthEvent[], records: readonly WealthCashFlowRecord[], options: WealthReportOptions): Pick<WealthReport, 'cashFlows' | 'modifiedDietz'> {
+  assertDate(options.asOf, 'as-of date');
   const visibleRecords = records.filter((record) => record.date <= options.asOf);
   const visibleEvents = events.filter((event) => event.date <= options.asOf);
   const cashFlows = classifyWealthCashFlows(visibleRecords, visibleEvents);
   const currency = valuationCurrency(options.startValuation, options.endValuation);
   const completeFlows = !cashFlows.some((flow) => flow.classification === 'ambiguous');
   const modifiedDietz = reportDietz(options, currency, completeFlows, cashFlows);
-  return { ...snapshot, cashFlows: Object.freeze(cashFlows), modifiedDietz };
+  return { cashFlows: Object.freeze(cashFlows), modifiedDietz };
 }
 
 function addCashTotals(target: Record<string, number>, status: Record<string, WealthValueAvailability>, cash: readonly WealthCashBalance[], accounts: Readonly<Record<string, WealthAccount>>): void {

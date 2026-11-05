@@ -507,6 +507,27 @@ describe('wealth store integration', () => {
     })).resolves.toMatchObject({ event: { sourceId: 'backdated-correction' } });
   });
 
+  it('keeps report replay segment-scoped after reopening holdings and a reverse split', async () => {
+    const f = fixture();
+    await account(f.db, 'brokerage');
+    await event(f.db, { id: 'old-position', sourceId: 'old-position', date: '2026-01-01', kind: 'opening_position', accountId: 'brokerage', instrument, quantity: '1', basis: money(10000) });
+    await event(f.db, { id: 'old-contribution', sourceId: 'old-contribution', date: '2026-01-02', kind: 'contribution', accountId: 'brokerage', money: money(5000) });
+    await upsertWealthAccount(f.db, owner, { id: 'brokerage', name: 'brokerage', kind: 'brokerage', mode: 'aggregate', currency: 'CAD', effectiveDate: '2026-01-03', openingValueMinor: 15000 });
+    await upsertWealthAccount(f.db, owner, {
+      id: 'brokerage', name: 'brokerage', kind: 'brokerage', mode: 'holdings', currency: 'CAD', effectiveDate: '2026-01-04', openingCashMinor: 0,
+      openingPositions: [{ id: 'new-position', sourceId: 'new-position', instrument, quantity: '3', basis: money(15000) }],
+    });
+    await event(f.db, { id: 'reverse-split', sourceId: 'reverse-split', date: '2026-01-05', kind: 'split', accountId: 'brokerage', instrument, numerator: 1, denominator: 3 });
+    await upsertWealthValuation(f.db, owner, { id: 'post-split-price', accountId: 'brokerage', instrument, asOf: '2026-01-05', priceMinor: 15000, source: 'manual' });
+
+    const snapshot = await readWealthSnapshot(f.db, owner, { asOf: '2026-01-05' });
+    expect(snapshot.positions).toEqual([expect.objectContaining({ accountId: 'brokerage', quantity: '1', marketValueMinor: 15000 })]);
+    const report = await readWealthReport(f.db, owner, { asOf: '2026-01-05', from: '2026-01-01', to: '2026-01-05' });
+    expect(report.positions).toEqual(snapshot.positions);
+    expect(report.totalByCurrency).toEqual({ CAD: 15000 });
+    expect(report.investmentCashFlows).toEqual(expect.arrayContaining([expect.objectContaining({ linkedWealthSourceId: 'old-contribution', classification: 'external_contribution', includedInPerformance: true })]));
+  });
+
   it('does not reuse pre-transition cash when validating a new holdings event', async () => {
     const f = fixture();
     await account(f.db, 'brokerage');
