@@ -1,0 +1,1 @@
+adb logcat -d -b crash returned no entries at the end of final emulator verification.

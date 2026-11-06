@@ -1,0 +1,13 @@
+{
+  "totalByCurrency": {
+    "CAD": 10000
+  },
+  "cash": [
+    {
+      "accountId": "large-preview",
+      "currency": "CAD",
+      "amountMinor": 10000
+    }
+  ],
+  "revision": 1
+}

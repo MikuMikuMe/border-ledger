@@ -116,7 +116,7 @@ function reportQuery(url: URL) {
 }
 
 function historyQuery(url: URL) {
-  return { accountId: url.searchParams.get('accountId'), limit: url.searchParams.get('limit') ? Number(url.searchParams.get('limit')) : undefined };
+  return { accountId: url.searchParams.get('accountId'), instrumentKey: url.searchParams.get('instrumentKey'), limit: url.searchParams.get('limit') ? Number(url.searchParams.get('limit')) : undefined };
 }
 
 function reportDependencies(route: WealthHttpRouteContext): WealthReportDependencies {

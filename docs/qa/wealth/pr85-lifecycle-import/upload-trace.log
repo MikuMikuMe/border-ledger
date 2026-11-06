@@ -1,0 +1,120 @@
+Synthetic Wealth QA http://127.0.0.1:8794/app
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 2
+body 0
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 1
+body 0
+request GET /api/wealth/events
+body-finished 0 0
+body 0
+request GET /api/wealth/quotes/settings
+body-finished 0 0
+body 0
+response 200
+response 200
+response 200
+response 200
+request GET /api/wealth/events
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/events
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/quotes/settings
+body-finished 0 0
+body 0
+response 200
+request POST /api/wealth/imports/preview
+body-finished 1100349 753
+body 1100349
+response 201
+request POST /api/wealth/imports/wealth-preview-768bbdc5-0e44-4039-83de-6c3d8b31b9bb/commit
+body-finished 177 1
+body 177
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 1
+body 0
+response 200
+request GET /api/wealth/report
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/quotes/settings
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/events
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/quotes/settings
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/events
+body-finished 0 0
+body 0
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 200
+request POST /__qa/failures
+body-finished 20 1
+body 20
+response 200
+request GET /api/wealth/events
+body-finished 0 0
+body 0
+response 503
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 503
+request GET /api/wealth/quotes/settings
+body-finished 0 0
+body 0
+response 503
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 0
+body 0
+response 503
+1:38:45 AM [vite] (ssr) page reload worker/wealth-store.ts
+1:38:45 AM [vite] (ssr) page reload worker/wealth-import-types.ts
+1:38:45 AM [vite] (ssr) page reload worker/wealth-import-validation.ts
+request POST /__qa/failures
+body-finished 18 0
+body 18
+response 200
+request GET /api/wealth/report?reportingCurrency=CAD
+body-finished 0 1
+body 0
+response 200

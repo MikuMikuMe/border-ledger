@@ -123,7 +123,7 @@ export interface ImportValidationServices {
   readonly readStoredEvents: (db: import('./db-types').D1Database, context: import('./financial-authority').FinancialContext) => Promise<readonly WealthEvent[]>;
   readonly readStoredValuations: (db: import('./db-types').D1Database, context: import('./financial-authority').FinancialContext) => Promise<readonly StoredHoldingValuation[]>;
   readonly readModeTransitions: (db: import('./db-types').D1Database, context: import('./financial-authority').FinancialContext, accounts?: readonly WealthAccount[]) => Promise<readonly ImportModeTransition[]>;
-  readonly assertBankLinkAvailable: (db: import('./db-types').D1Database, context: import('./financial-authority').FinancialContext, event: WealthEvent) => Promise<void>;
+  readonly assertBankLinkAvailable: (db: import('./db-types').D1Database, context: import('./financial-authority').FinancialContext, event: WealthEvent, proposed?: readonly WealthEvent[]) => Promise<void>;
   readonly mixedTransferMode: (accounts: readonly WealthAccount[], event: WealthEvent) => boolean;
   readonly isBankLinkConflict: (error: unknown) => boolean;
 }

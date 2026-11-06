@@ -1,0 +1,20 @@
+{
+  "totalByCurrency": {
+    "CAD": 0
+  },
+  "cash": [
+    {
+      "accountId": "large-preview",
+      "currency": "CAD",
+      "amountMinor": 0
+    }
+  ],
+  "modifiedDietzByCurrency": {
+    "CAD": {
+      "value": 0,
+      "available": true,
+      "reason": null
+    }
+  },
+  "revision": 2
+}

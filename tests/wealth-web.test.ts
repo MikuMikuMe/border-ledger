@@ -102,8 +102,10 @@ function twoAccountApi(): LedgerApi {
 
 function securityHistoryApi(revision: { value: number } = { value: 7 }): LedgerApi {
   return (async (path: string) => {
-    if (path.startsWith('/api/wealth/events?accountId=brokerage')) return { revision: revision.value, events: [{ sourceId: 'shop-event', date: '2026-10-01', kind: 'buy', accountId: 'brokerage', instrument: { exchange: 'TSX', ticker: 'SHOP', type: 'stock', currency: 'CAD' } }, { sourceId: 'vti-event', date: '2026-10-02', kind: 'buy', accountId: 'brokerage', instrument: { exchange: 'NYSE ARCA', ticker: 'VTI', type: 'etf', currency: 'USD' } }] };
-    if (path.startsWith('/api/wealth/valuations?accountId=brokerage')) return { revision: revision.value, valuations: [{ id: 'shop-value', accountId: 'brokerage', asOf: '2026-10-01', instrument: { exchange: 'TSX', ticker: 'SHOP', type: 'stock', currency: 'CAD' }, priceMinor: 12000, source: 'manual' }, { id: 'vti-value', accountId: 'brokerage', asOf: '2026-10-02', instrument: { exchange: 'NYSE ARCA', ticker: 'VTI', type: 'etf', currency: 'USD' }, priceMinor: 22000, source: 'manual' }] };
+    const selected = new URL(path, 'https://fixture.test').searchParams.get('instrumentKey');
+    const matches = (entry: { instrument: { exchange: string; ticker: string; type: string; currency: string } }) => !selected || Object.values(entry.instrument).join(':') === selected;
+    if (path.startsWith('/api/wealth/events?accountId=brokerage')) return { revision: revision.value, events: [{ sourceId: 'shop-event', date: '2026-10-01', kind: 'buy', accountId: 'brokerage', instrument: { exchange: 'TSX', ticker: 'SHOP', type: 'stock', currency: 'CAD' } }, { sourceId: 'vti-event', date: '2026-10-02', kind: 'buy', accountId: 'brokerage', instrument: { exchange: 'NYSE ARCA', ticker: 'VTI', type: 'etf', currency: 'USD' } }].filter(matches) };
+    if (path.startsWith('/api/wealth/valuations?accountId=brokerage')) return { revision: revision.value, valuations: [{ id: 'shop-value', accountId: 'brokerage', asOf: '2026-10-01', instrument: { exchange: 'TSX', ticker: 'SHOP', type: 'stock', currency: 'CAD' }, priceMinor: 12000, source: 'manual' }, { id: 'vti-value', accountId: 'brokerage', asOf: '2026-10-02', instrument: { exchange: 'NYSE ARCA', ticker: 'VTI', type: 'etf', currency: 'USD' }, priceMinor: 22000, source: 'manual' }].filter(matches) };
     return path.startsWith('/api/wealth/report') ? report : snapshot;
   }) as LedgerApi;
 }
@@ -414,6 +416,24 @@ describe('wealth web view', () => {
       expect(eventTable?.textContent).not.toContain('VTI');
       expect(valuationTable?.textContent).toContain('SHOP');
       expect(valuationTable?.textContent).not.toContain('VTI');
+    } finally { view.close(); }
+  });
+
+  it('requests server-scoped security history and retains its reversal controls', async () => {
+    const paths: string[] = [];
+    const base = securityHistoryApi();
+    const api = (async (path: string) => {
+      paths.push(path);
+      if (path.startsWith('/api/wealth/events?accountId=brokerage')) return { revision: 7, events: [{ id: 'undo', sourceId: 'undo', date: '2026-10-03', kind: 'reversal', targetSourceId: 'shop-event' }] };
+      return base(path);
+    }) as LedgerApi;
+    const view = await mount(api);
+    try {
+      await clickButton(view.node, 'Investments');
+      const security = [...view.node.querySelectorAll('button')].find(button => button.textContent?.includes('SHOP'));
+      await act(async () => { security?.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+      expect(paths.some(path => path.includes('instrumentKey=TSX%3ASHOP%3Astock%3ACAD'))).toBe(true);
+      expect(tableByCaption(view.node, 'Account event history')?.textContent).toContain('Reversal');
     } finally { view.close(); }
   });
 

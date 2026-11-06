@@ -1,0 +1,4 @@
+Budget, Plan and fund your categories [44,290][724,470]
+Accounts, Balances and bank connections [44,470][724,650]
+Recurring, Upcoming bills and subscriptions [44,650][724,830]
+Wealth, Assets, investments and net worth [44,830][724,1010]

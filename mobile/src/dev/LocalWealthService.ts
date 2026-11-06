@@ -8,11 +8,23 @@ const operations = new Map<string, LocalOperation>();
 const csvPreviews = new Map<string, string>();
 const csvSources = new Map<string, string>();
 
-async function request(path: string, init?: RequestInit): Promise<string> {
+async function fixtureResponse(path: string, init: RequestInit = {}) {
   if (typeof __DEV__ === 'undefined' || !__DEV__) throw new Error('Debug fixture only');
-  const response = await fetch(`${root}${path}`, { ...init, headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(`${root}${path}`, { ...init, signal: controller.signal, headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
+    return { status: response.status, ok: response.ok, body: await response.text() };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Local Wealth request timed out. Retry to reconcile the operation.');
+    throw error;
+  } finally { clearTimeout(timeout); }
+}
+
+async function request(path: string, init?: RequestInit): Promise<string> {
+  const response = await fixtureResponse(path, init);
   if (!response.ok) throw new Error(`Local Wealth service unavailable (${response.status}).`);
-  return response.text();
+  return response.body;
 }
 
 function statusFor(status: number) {
@@ -172,7 +184,7 @@ export const localWealthService: WealthService = {
     const plan = wealthWritePlans[action]?.(operationId, payload);
     if (!plan) throw new Error('Unknown Wealth write action.');
     if (action === 'csv-export') return saveFixtureExport(operationId);
-    const response = await fetch(`${root}${plan.path}`, {
+    const response = await fixtureResponse(plan.path, {
       method: plan.method,
       headers: { Accept: 'text/csv, application/json', 'Content-Type': 'application/json' },
       ...(plan.payload === undefined ? {} : { body: JSON.stringify(plan.payload) }),

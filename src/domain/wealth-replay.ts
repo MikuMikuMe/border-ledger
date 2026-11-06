@@ -87,7 +87,7 @@ export function replayWealthEvents(events: readonly WealthEvent[], options: Repl
 
   return {
     positions: Object.freeze([...positions.values()].sort(comparePositions).map(positionView)),
-    cash: Object.freeze([...cash.entries()].filter(([, amount]) => amount !== 0n).sort(([left], [right]) => left.localeCompare(right)).map(cashView)),
+    cash: Object.freeze([...cash.entries()].sort(([left], [right]) => left.localeCompare(right)).map(cashView)),
     appliedSourceIds: Object.freeze(effective.map((item) => item.sourceId)),
     duplicateSourceIds: unique.duplicates,
     reversedSourceIds: Object.freeze([...controls.reversed].sort()),
@@ -181,7 +181,7 @@ function materializeEvent(
   inputOrder: Map<string, number>,
 ): WealthEvent | null {
   if (isControl(event)) return null;
-  const result = resolveBaseEvent(event, controlsByTarget, new Set());
+  const result = resolveBaseEvent(event, controlsByTarget);
   if (result.kind === 'omit') return null;
   if (result.kind === 'replace') {
     reserveReplacementSource(result.event, occupiedSourceIds);
@@ -195,19 +195,21 @@ function reserveReplacementSource(event: WealthEvent, occupiedSourceIds: Set<str
   occupiedSourceIds.add(event.sourceId);
 }
 
-function resolveBaseEvent(base: WealthEvent, controls: ReadonlyMap<string, Extract<WealthEvent, { kind: 'reversal' | 'correction' }>>, seen: ReadonlySet<string>): ControlResult {
-  const control = controls.get(base.sourceId);
+function resolveBaseEvent(base: WealthEvent, controls: ReadonlyMap<string, Extract<WealthEvent, { kind: 'reversal' | 'correction' }>>): ControlResult {
+  const control = effectiveControl(controls.get(base.sourceId), controls);
   if (!control) return { kind: 'include', event: base };
   if (control.kind === 'reversal') return { kind: 'omit' };
-  return resolveCorrection(base, control, controls, seen);
+  return { kind: 'replace', event: replacementEvent(control, base.sequence) };
 }
 
-function resolveCorrection(base: WealthEvent, correction: Extract<WealthEvent, { kind: 'correction' }>, controls: ReadonlyMap<string, Extract<WealthEvent, { kind: 'reversal' | 'correction' }>>, seen: ReadonlySet<string>): ControlResult {
-  if (seen.has(correction.sourceId)) throw new WealthDomainError('invalid_reference', 'Correction lineage contains a cycle.');
-  const next = controls.get(correction.sourceId);
-  if (!next) return { kind: 'replace', event: replacementEvent(correction, base.sequence) };
-  if (next.kind === 'reversal') return { kind: 'include', event: base };
-  return resolveCorrection(base, next, controls, new Set([...seen, correction.sourceId]));
+function effectiveControl(
+  control: Extract<WealthEvent, { kind: 'reversal' | 'correction' }> | undefined,
+  controls: ReadonlyMap<string, Extract<WealthEvent, { kind: 'reversal' | 'correction' }>>,
+): Extract<WealthEvent, { kind: 'reversal' | 'correction' }> | undefined {
+  if (!control) return undefined;
+  const next = effectiveControl(controls.get(control.sourceId), controls);
+  if (!next) return control;
+  return next.kind === 'reversal' ? undefined : next;
 }
 
 function replacementEvent(correction: Extract<WealthEvent, { kind: 'correction' }>, targetSequence: number | undefined): WealthEvent {

@@ -1,3 +1,4 @@
+import { wealthEventLineage } from './wealth-event-lineage';
 import { createWealthAccountRegistry } from '../src/domain/wealth';
 import type { WealthAccount, WealthEvent } from '../src/domain/wealth-types';
 import type { D1Database } from './db-types';
@@ -30,7 +31,6 @@ type BankAliasGroups = ReadonlyMap<string, ReadonlySet<string>>;
 
 interface ImportedBankLink {
   readonly sourceId: string;
-  readonly claimSourceId: string;
   readonly linkedBankSourceId: string;
   readonly event: WealthEvent;
 }
@@ -249,18 +249,14 @@ function appendEventReferenceErrors(record: WealthImportRecord, context: EventRe
 }
 
 function importedBankLinks(events: readonly WealthEvent[]): ImportedBankLink[] {
-  const correctionsByTarget = new Map(events.filter((event): event is Extract<WealthEvent, { kind: 'correction' }> => event.kind === 'correction').map((event) => [event.targetSourceId, event]));
   const links: ImportedBankLink[] = [];
   for (const event of events) {
     if (event.linkedBankSourceId) {
-      const correction = correctionsByTarget.get(event.sourceId);
-      const retainsLink = correction?.replacement.linkedBankSourceId === event.linkedBankSourceId;
-      links.push({ sourceId: event.sourceId, claimSourceId: retainsLink ? correction!.sourceId : event.sourceId, linkedBankSourceId: event.linkedBankSourceId, event });
+      links.push({ sourceId: event.sourceId, linkedBankSourceId: event.linkedBankSourceId, event });
     }
     if (event.kind === 'correction' && event.replacement.linkedBankSourceId) {
       links.push({
         sourceId: `${event.sourceId}:replacement`,
-        claimSourceId: event.sourceId,
         linkedBankSourceId: event.replacement.linkedBankSourceId,
         event: { ...event, linkedBankSourceId: event.replacement.linkedBankSourceId } as WealthEvent,
       });
@@ -301,33 +297,16 @@ function bankAliasGroup(linked: string, aliases: BankAliasGroups): string | null
   return [...transactions][0];
 }
 
-function correctedBankClaim(link: ImportedBankLink, corrections: ReadonlyMap<string, Extract<WealthEvent, { kind: 'correction' }>>, aliases: BankAliasGroups): string {
-  const group = bankAliasGroup(link.linkedBankSourceId, aliases);
-  if (group === null) return link.claimSourceId;
-  let claim = link.claimSourceId;
-  const visited = new Set<string>();
-  while (!visited.has(claim)) {
-    visited.add(claim);
-    const correction = corrections.get(claim);
-    if (!correction) break;
-    const replacementLink = correction.replacement.linkedBankSourceId;
-    if (!replacementLink) break;
-    if (bankAliasGroup(replacementLink, aliases) !== group) break;
-    claim = correction.sourceId;
-  }
-  return claim;
-}
-
 interface ImportedBankClaimContext {
   readonly aliases: BankAliasGroups;
-  readonly corrections: ReadonlyMap<string, Extract<WealthEvent, { kind: 'correction' }>>;
+  readonly events: ReadonlyMap<string, WealthEvent>;
   readonly claimed: Map<string, string>;
 }
 
 function importedBankClaimError(link: ImportedBankLink, context: ImportedBankClaimContext): string | null {
   const group = bankAliasGroup(link.linkedBankSourceId, context.aliases);
   if (group === null) return `Event ${link.sourceId} references an ambiguous bank link; choose a transaction ID or unique source alias.`;
-  const claim = correctedBankClaim(link, context.corrections, context.aliases);
+  const claim = wealthEventLineage(link.event, context.events).at(-1)!.sourceId;
   const prior = context.claimed.get(group);
   if (prior && prior !== claim) return `Event ${link.sourceId} conflicts with another imported bank link.`;
   context.claimed.set(group, claim);
@@ -354,13 +333,13 @@ async function importedLinkErrors(db: D1Database, context: FinancialContext, rec
   });
   const links = importedBankLinks(events);
   const aliasGroups = await readBankAliasGroups(db, context, links);
-  const corrections = new Map(events.filter((event): event is Extract<WealthEvent, { kind: 'correction' }> => event.kind === 'correction').map((event) => [event.targetSourceId, event]));
-  const claims: ImportedBankClaimContext = { aliases: aliasGroups, corrections, claimed: new Map() };
+  const bySource = new Map([...(await services.readStoredEvents(db, context)), ...events].map((event) => [event.sourceId, event]));
+  const claims: ImportedBankClaimContext = { aliases: aliasGroups, events: bySource, claimed: new Map() };
   for (const link of links) {
     const claimError = importedBankClaimError(link, claims);
     if (claimError) { errors.push(claimError); continue; }
     try {
-      await services.assertBankLinkAvailable(db, context, link.event);
+      await services.assertBankLinkAvailable(db, context, link.event, events);
     } catch (error) {
       if (services.isBankLinkConflict(error)) errors.push(`Event ${link.sourceId} conflicts with an existing bank link.`);
       else throw error;

@@ -1,3 +1,4 @@
+import { wealthEventLineage } from './wealth-event-lineage';
 import {
   canonicalEventFingerprint,
   instrumentKey,
@@ -931,39 +932,10 @@ interface BankSourceIdentity {
 
 async function bankSourceCandidates(db: D1Database, context: FinancialContext, linked: string): Promise<BankSourceIdentity> {
   const aliases = await db.prepare(`SELECT transaction_id,id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference
-    FROM transaction_source_records WHERE ledger_id=? AND (? IN (id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference,transaction_id))`).bind(context.ledgerId, linked).all<TransactionAliasRow>();
+    FROM transaction_source_records WHERE ledger_id=? AND transaction_id IN (SELECT transaction_id FROM transaction_source_records WHERE ledger_id=? AND (? IN (id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference,transaction_id)))`).bind(context.ledgerId, context.ledgerId, linked).all<TransactionAliasRow>();
   const candidates = new Set<string>([linked]);
   for (const row of aliases.results) [row.transaction_id, row.id, row.identity_key, row.provider_transaction_id, row.provider_pending_transaction_id, row.bank_source_id, row.bank_row_id, row.event_id, row.bank_reference].forEach((value) => { if (value) candidates.add(value); });
   return { values: [...candidates], transactionIds: [...new Set(aliases.results.map((row) => row.transaction_id))] };
-}
-
-function rowUsesBankSource(row: { linked_bank_source_id: string | null; payload_json: string }, candidates: readonly string[]): boolean {
-  if (row.linked_bank_source_id && candidates.includes(row.linked_bank_source_id)) return true;
-  try {
-    const stored = JSON.parse(row.payload_json) as WealthEvent;
-    const nested = stored.kind === 'correction' ? stored.replacement.linkedBankSourceId : null;
-    return Boolean(nested && candidates.includes(nested));
-  } catch { return false; }
-}
-
-async function existingBankLink(db: D1Database, context: FinancialContext, candidates: readonly string[]): Promise<boolean> {
-  const rows = await db.prepare('SELECT linked_bank_source_id,payload_json FROM wealth_events WHERE ledger_id=?').bind(context.ledgerId).all<{ linked_bank_source_id: string | null; payload_json: string }>();
-  return rows.results.some((row) => rowUsesBankSource(row, candidates));
-}
-
-async function correctionTargetBankLink(db: D1Database, context: FinancialContext, event: WealthEvent): Promise<string | null> {
-  if (event.kind !== 'correction') return null;
-  const row = await db.prepare('SELECT payload_json FROM wealth_events WHERE ledger_id=? AND source_id=?').bind(context.ledgerId, event.targetSourceId).first<{ payload_json: string }>();
-  if (!row) return null;
-  const target = parseJson<WealthEvent>(row.payload_json, 'event');
-  return target.linkedBankSourceId ?? (target.kind === 'correction' ? target.replacement.linkedBankSourceId ?? null : null);
-}
-
-function sameBankTransaction(left: BankSourceIdentity, right: BankSourceIdentity | null): boolean {
-  if (!right) return false;
-  if (left.transactionIds.length !== 1) return false;
-  if (right.transactionIds.length !== 1) return false;
-  return left.transactionIds[0] === right.transactionIds[0];
 }
 
 async function bankSourceForWrite(db: D1Database, context: FinancialContext, linked: string): Promise<BankSourceIdentity> {
@@ -972,31 +944,24 @@ async function bankSourceForWrite(db: D1Database, context: FinancialContext, lin
   return candidates;
 }
 
-export async function assertBankLinkAvailable(db: D1Database, context: FinancialContext, event: WealthEvent): Promise<void> {
-  const targetLink = await correctionTargetBankLink(db, context, event);
-  const targetIdentity = targetLink ? await bankSourceCandidates(db, context, targetLink) : null;
-  for (const linked of linkedBankSources(event)) {
+export async function assertBankLinkAvailable(db: D1Database, context: FinancialContext, event: WealthEvent, proposed: readonly WealthEvent[] = []): Promise<void> {
+  const links = linkedBankSources(event);
+  if (links.length === 0) return;
+  const stored = await loadStoredEvents(db, context);
+  const bySource = new Map([...stored, ...proposed, event].map((item) => [item.sourceId, item]));
+  const root = (item: WealthEvent) => wealthEventLineage(item, bySource).at(-1)!.sourceId;
+  const otherLineages = stored.filter((item) => root(item) !== root(event));
+  for (const linked of links) {
     const candidates = await bankSourceForWrite(db, context, linked);
-    if (linked === targetLink) continue;
-    if (sameBankTransaction(candidates, targetIdentity)) continue;
-    if (await existingBankLink(db, context, candidates.values)) throw new WealthStoreError('bank_link_conflict', 'A bank transaction is already linked to another wealth event.', 409);
+    if (otherLineages.some((item) => linkedBankSources(item).some((source) => candidates.values.includes(source)))) {
+      throw new WealthStoreError('bank_link_conflict', 'A bank transaction is already linked to another wealth event.', 409);
+    }
   }
 }
 
 function correctionLineageEvents(events: readonly WealthEvent[], event: WealthEvent): readonly WealthEvent[] {
-  if (event.kind !== 'correction') return [];
-  const bySourceId = new Map(events.map((candidate) => [candidate.sourceId, candidate]));
-  const lineage: WealthEvent[] = [event];
-  const visited = new Set<string>();
-  let targetSourceId: string | null = event.targetSourceId;
-  while (targetSourceId && !visited.has(targetSourceId)) {
-    visited.add(targetSourceId);
-    const target = bySourceId.get(targetSourceId);
-    if (!target) break;
-    lineage.push(target);
-    targetSourceId = target.kind === 'correction' || target.kind === 'reversal' ? target.targetSourceId : null;
-  }
-  return lineage;
+  if (event.kind !== 'correction' && event.kind !== 'reversal') return [];
+  return wealthEventLineage(event, new Map(events.map((candidate) => [candidate.sourceId, candidate])));
 }
 
 export async function appendWealthEvent(db: D1Database, context: FinancialContext, input: unknown, options: { expectedRevision?: number; operationId?: string } = {}): Promise<{ event: WealthEvent; revision: number; replayed?: boolean }> {
@@ -1058,7 +1023,8 @@ function normalizeHistoryQuery(query: WealthHistoryQuery): { accountId: string |
 
 export async function readWealthEvents(db: D1Database, context: FinancialContext, query: WealthHistoryQuery = {}) {
   const normalized = normalizeHistoryQuery(query); const events = await readStoredEvents(db, context);
-  const filtered = events.filter((event) => (!normalized.accountId || eventAccountMatches(event, normalized.accountId)) && eventMatchesInstrument(event, normalized.instrumentKey));
+  const bySource = new Map(events.map((event) => [event.sourceId, event]));
+  const filtered = events.filter((event) => wealthEventLineage(event, bySource).some((ancestor) => (!normalized.accountId || eventAccountMatches(ancestor, normalized.accountId)) && eventMatchesInstrument(ancestor, normalized.instrumentKey)));
   return { events: filtered.slice(0, normalized.limit), revision: await currentRevision(db, context) };
 }
 export async function readWealthValuations(db: D1Database, context: FinancialContext, query: WealthHistoryQuery = {}) {

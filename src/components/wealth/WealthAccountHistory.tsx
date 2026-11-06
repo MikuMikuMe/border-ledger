@@ -29,10 +29,6 @@ function instrumentKey(instrument: CanonicalInstrument): string {
   return `${instrument.exchange}:${instrument.ticker}:${instrument.type}:${instrument.currency}`;
 }
 
-function scopedHistory<T extends { instrument: CanonicalInstrument | null }>(rows: T[], instrument?: CanonicalInstrument): T[] {
-  return instrument ? rows.filter((row) => sameInstrument(row.instrument, instrument)) : rows;
-}
-
 function isNonNegativeRevision(value: unknown): value is number {
   if (typeof value !== 'number') return false;
   if (!Number.isSafeInteger(value)) return false;
@@ -62,9 +58,9 @@ function useAccountHistory(api: LedgerApi, accountId: string, snapshotRevision: 
   useEffect(() => {
     let cancelled = false;
     setState((current) => ({ ...current, loading: true, error: null }));
-    const suffix = `?accountId=${encodeURIComponent(accountId)}&limit=500`;
+    const suffix = `?accountId=${encodeURIComponent(accountId)}&limit=500${instrument ? `&instrumentKey=${encodeURIComponent(instrumentKey(instrument))}` : ''}`;
     void Promise.all([api(`/api/wealth/events${suffix}`), api(`/api/wealth/valuations${suffix}`)])
-      .then(([eventsResponse, valuationsResponse]) => { assertHistoryRevision(eventsResponse, valuationsResponse, snapshotRevision); if (!cancelled) setState({ events: scopedHistory(normalizeEventHistory(eventsResponse), instrument), valuations: scopedHistory(normalizeValuationHistory(valuationsResponse), instrument), loading: false, error: null }); })
+      .then(([eventsResponse, valuationsResponse]) => { assertHistoryRevision(eventsResponse, valuationsResponse, snapshotRevision); if (!cancelled) setState({ events: normalizeEventHistory(eventsResponse), valuations: normalizeValuationHistory(valuationsResponse), loading: false, error: null }); })
       .catch((cause) => { if (!cancelled) setState((current) => ({ ...current, loading: false, error: cause instanceof Error && cause.message.includes('changed') ? 'Account history changed while loading. Retry to read a consistent revision.' : 'Account history is unavailable right now.' })); });
     return () => { cancelled = true; };
   }, [api, accountId, snapshotRevision, instrument, retryKey]);

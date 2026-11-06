@@ -1,0 +1,37 @@
+
+ RUN  v5.0.5 D:/Projects/border-ledger-sure-wealth
+
+ ❯ tests/wealth-lineage-links.test.ts (4 tests | 1 failed) 265ms
+   ❯ Wealth bank and audit control lineage (4)
+     × includes controls in every affected account and instrument audit history 63ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/wealth-lineage-links.test.ts > Wealth bank and audit control lineage > includes controls in every affected account and instrument audit history
+AssertionError: expected [ 'position', …(3) ] to deeply equal [ 'position', 'move', 'undo' ]
+
+- Expected
++ Received
+
+  [
+    "position",
++   "unrelated-position",
+    "move",
+    "undo",
+  ]
+
+ ❯ tests/wealth-lineage-links.test.ts:64:103
+     62|     const query = '?accountId=brokerage&instrumentKey=TSX%3ARY%3Astock…
+     63|     const eventsResponse = await handleWealthApi(new Request('https://…
+     64|     expect((await eventsResponse!.json() as { events: WealthEvent[] })…
+       |                                                                                                       ^
+     65|     const valuationsResponse = await handleWealthApi(new Request('http…
+     66|     expect((await valuationsResponse!.json() as { valuations: { id: st…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  01:48:48
+   Duration  553ms (tests 63%, transform 22%, import 14%, worker 1%)

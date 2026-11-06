@@ -28,6 +28,20 @@ describe('debug Wealth SAF fixture boundary', () => {
     }));
   });
 
+  it('times out a stalled CSV upload and permits a retry', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      })));
+      const upload = expect(localWealthService.startCsvImport?.('stalled-upload')).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(15000);
+      await upload;
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ previewId: 'retry-preview', revision: 1, rows: [] }), { status: 200 })));
+      await expect(localWealthService.startCsvImport?.('stalled-upload')).resolves.toMatchObject({ status: 'completed' });
+    } finally { vi.useRealTimers(); }
+  });
+
   it('uses only the debug native module for fixture launch and SAF operations', async () => {
     await expect(nativeWealthFixture.getLaunchScene()).resolves.toEqual({ dark: true });
     await expect(nativeWealthFixture.pickCsv()).resolves.toContain('record_type');

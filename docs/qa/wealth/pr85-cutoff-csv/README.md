@@ -1,5 +1,7 @@
 # Historical cash flows and native CSV boundaries
 
+The large-file UI limitation recorded here is resolved by [the later lifecycle/import verification](../pr85-lifecycle-import/README.md). Historical results below are retained.
+
 Follow-up verification for PR 85 against `origin/main` (`1ebfabb`). All financial records, credentials and file contents used for testing are synthetic.
 
 ## Fixes and review

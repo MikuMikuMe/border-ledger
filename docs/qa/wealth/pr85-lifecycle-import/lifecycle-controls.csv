@@ -1,0 +1,4 @@
+record_type,event_json
+event,"{""id"":""qa-withdraw"",""sourceId"":""qa-withdraw"",""date"":""2026-11-02"",""kind"":""withdrawal"",""accountId"":""large-preview"",""money"":{""currency"":""CAD"",""amountMinor"":10000}}"
+event,"{""id"":""qa-undo"",""sourceId"":""qa-undo"",""date"":""2026-11-03"",""kind"":""reversal"",""targetSourceId"":""qa-withdraw""}"
+event,"{""id"":""qa-undo-undo"",""sourceId"":""qa-undo-undo"",""date"":""2026-11-03"",""kind"":""reversal"",""targetSourceId"":""qa-undo""}"
