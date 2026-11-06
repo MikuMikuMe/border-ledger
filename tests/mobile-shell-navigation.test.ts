@@ -26,7 +26,7 @@ describe('Android shell navigation', () => {
     const tabs = tree.root.findAllByType('Pressable').filter((node: any) => node.props.accessibilityRole === 'tab');
     expect(tabs.map(label)).toEqual(['Overview', 'Activity', 'Review', 'More']);
     expect(tree.root.findByType('ScrollView').findAll((node: any) => node.props.accessibilityRole === 'tab')).toHaveLength(0);
-    for (const [name, page] of [['Accounts', 'accounts'], ['Recurring', 'recurring'], ['Import and export', 'files']]) {
+    for (const [name, page] of [['Accounts', 'accounts'], ['Recurring', 'recurring'], ['Wealth', 'wealth'], ['Import and export', 'files']]) {
       press('More'); press(name); expect(current()).toBe(page);
       expect(tree.root.findAllByType('Pressable').find((node: any) => label(node) === 'More').props.accessibilityState.selected).toBe(true);
     }

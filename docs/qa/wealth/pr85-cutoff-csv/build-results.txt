@@ -1,0 +1,8 @@
+Final native verification (2026-11-06)
+Tasks: lintDebug testDebugUnitTest sharedCore:testAndroidHostTest assembleDebug assembleDebugAndroidTest assembleRelease
+Result: BUILD SUCCESSFUL in 5m 4s; 708 tasks
+Native/shared XML totals: 378 tests, 0 failures, 0 errors
+Targeted emulator instrumentation: 16 tests passed in 92.128 seconds
+API 35; app heap growth limit: 192m (unchanged)
+Debug APK SHA256: 45FE872CF45B94BF316F465DE2EE192247B27463F6C4A13803D5C22181D86A58
+Web/mobile typechecks and production web build passed; existing large-chunk advisory retained.

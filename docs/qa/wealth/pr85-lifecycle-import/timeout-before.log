@@ -1,0 +1,27 @@
+
+ RUN  v5.0.5 D:/Projects/border-ledger-sure-wealth
+
+ ❯ tests/mobile-wealth-fixture.test.ts (8 tests | 1 failed | 7 skipped) 30022ms
+   ❯ debug Wealth SAF fixture boundary (8)
+     × times out a stalled CSV upload and permits a retry 30020ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/mobile-wealth-fixture.test.ts > debug Wealth SAF fixture boundary > times out a stalled CSV upload and permits a retry
+Error: Test timed out in 30000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ tests/mobile-wealth-fixture.test.ts:31:3
+     29|   });
+     30|
+     31|   it('times out a stalled CSV upload and permits a retry', async () =>…
+       |   ^
+     32|     vi.useFakeTimers();
+     33|     try {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 skipped (2)
+      Tests  1 failed | 58 skipped (59)
+   Start at  01:40:26
+   Duration  32.66s (tests 93%, environment 6%, import 1%)

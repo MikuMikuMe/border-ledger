@@ -1,0 +1,163 @@
+
+ RUN  v5.0.5 D:/Projects/border-ledger-sure-wealth
+
+ ❯ tests/wealth-lifecycle-contracts.test.ts (11 tests | 7 failed) 190ms
+   ❯ Wealth lifecycle contracts (11)
+     × resolves the complete control chain [] to 0 20ms
+     × resolves the complete control chain [ 'reversal', 'reversal' ] to 0 2ms
+     × resolves the complete control chain [ 6000, 2000, 'reversal' ] to 4000 1ms
+     × resolves the complete control chain [ 6000, 'reversal', 'reversal' ] to 4000 1ms
+     × resolves the complete control chain [ 'reversal', 2500 ] to 7500 1ms
+     × keeps known zero coverage and zero returns after withdrawing all cash 58ms
+     × replays accepted controls consistently through reports, historical cutoffs and CSV round trips 102ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/wealth-lifecycle-contracts.test.ts > Wealth lifecycle contracts > resolves the complete control chain [] to 0
+AssertionError: expected [] to deeply equal [ { accountId: 'brokerage', …(2) } ]
+
+- Expected
++ Received
+
+- [
+-   {
+-     "accountId": "brokerage",
+-     "amountMinor": 0,
+-     "currency": "CAD",
+-   },
+- ]
++ []
+
+ ❯ tests/wealth-lifecycle-contracts.test.ts:33:45
+     31|     const events = [opening, withdrawal, ...controls(value.controls)];
+     32|     const expected = [{ accountId: 'brokerage', currency: 'CAD', amoun…
+     33|     expect(replayWealthEvents(events).cash).toEqual(expected);
+       |                                             ^
+     34|     expect(replayWealthEvents([...events].reverse()).cash).toEqual(exp…
+     35|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  tests/wealth-lifecycle-contracts.test.ts > Wealth lifecycle contracts > resolves the complete control chain [ 'reversal', 'reversal' ] to 0
+AssertionError: expected [ { accountId: 'brokerage', …(2) } ] to deeply equal [ { accountId: 'brokerage', …(2) } ]
+
+- Expected
++ Received
+
+  [
+    {
+      "accountId": "brokerage",
+-     "amountMinor": 0,
++     "amountMinor": 10000,
+      "currency": "CAD",
+    },
+  ]
+
+ ❯ tests/wealth-lifecycle-contracts.test.ts:33:45
+     31|     const events = [opening, withdrawal, ...controls(value.controls)];
+     32|     const expected = [{ accountId: 'brokerage', currency: 'CAD', amoun…
+     33|     expect(replayWealthEvents(events).cash).toEqual(expected);
+       |                                             ^
+     34|     expect(replayWealthEvents([...events].reverse()).cash).toEqual(exp…
+     35|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  tests/wealth-lifecycle-contracts.test.ts > Wealth lifecycle contracts > resolves the complete control chain [ 6000, 2000, 'reversal' ] to 4000
+ FAIL  tests/wealth-lifecycle-contracts.test.ts > Wealth lifecycle contracts > resolves the complete control chain [ 6000, 'reversal', 'reversal' ] to 4000
+AssertionError: expected [] to deeply equal [ { accountId: 'brokerage', …(2) } ]
+
+- Expected
++ Received
+
+- [
+-   {
+-     "accountId": "brokerage",
+-     "amountMinor": 4000,
+-     "currency": "CAD",
+-   },
+- ]
++ []
+
+ ❯ tests/wealth-lifecycle-contracts.test.ts:33:45
+     31|     const events = [opening, withdrawal, ...controls(value.controls)];
+     32|     const expected = [{ accountId: 'brokerage', currency: 'CAD', amoun…
+     33|     expect(replayWealthEvents(events).cash).toEqual(expected);
+       |                                             ^
+     34|     expect(replayWealthEvents([...events].reverse()).cash).toEqual(exp…
+     35|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  tests/wealth-lifecycle-contracts.test.ts > Wealth lifecycle contracts > resolves the complete control chain [ 'reversal', 2500 ] to 7500
+AssertionError: expected [ { accountId: 'brokerage', …(2) } ] to deeply equal [ { accountId: 'brokerage', …(2) } ]
+
+- Expected
++ Received
+
+  [
+    {
+      "accountId": "brokerage",
+-     "amountMinor": 7500,
++     "amountMinor": 10000,
+      "currency": "CAD",
+    },
+  ]
+
+ ❯ tests/wealth-lifecycle-contracts.test.ts:33:45
+     31|     const events = [opening, withdrawal, ...controls(value.controls)];
+     32|     const expected = [{ accountId: 'brokerage', currency: 'CAD', amoun…
+     33|     expect(replayWealthEvents(events).cash).toEqual(expected);
+       |                                             ^
+     34|     expect(replayWealthEvents([...events].reverse()).cash).toEqual(exp…
+     35|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  tests/wealth-lifecycle-contracts.test.ts > Wealth lifecycle contracts > keeps known zero coverage and zero returns after withdrawing all cash
+AssertionError: expected {} to deeply equal { CAD: +0 }
+
+- Expected
++ Received
+
+- {
+-   "CAD": 0,
+- }
++ {}
+
+ ❯ tests/wealth-lifecycle-contracts.test.ts:42:36
+     40|     for (const event of [opening, withdrawal]) await appendWealthEvent…
+     41|     const report = await readWealthReport(f.db, scope, { asOf: '2026-0…
+     42|     expect(report.totalByCurrency).toEqual({ CAD: 0 });
+       |                                    ^
+     43|     expect(report.modifiedDietzByCurrency.CAD).toMatchObject({ availab…
+     44|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  tests/wealth-lifecycle-contracts.test.ts > Wealth lifecycle contracts > replays accepted controls consistently through reports, historical cutoffs and CSV round trips
+AssertionError: expected {} to deeply equal { CAD: +0 }
+
+- Expected
++ Received
+
+- {
+-   "CAD": 0,
+- }
++ {}
+
+ ❯ tests/wealth-lifecycle-contracts.test.ts:58:42
+     56|         const snapshot = await readWealthSnapshot(db, scope, { asOf });
+     57|         const report = await readWealthReport(db, scope, { asOf });
+     58|         expect(snapshot.totalByCurrency).toEqual({ CAD: amount });
+       |                                          ^
+     59|         expect(report.totalByCurrency).toEqual(snapshot.totalByCurrenc…
+     60|       }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 4 passed (11)
+   Start at  01:21:35
+   Duration  559ms (tests 49%, transform 30%, import 20%, worker 1%)

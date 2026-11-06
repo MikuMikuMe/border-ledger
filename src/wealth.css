@@ -1,0 +1,177 @@
+/* Wealth extends the existing paper-and-ink shell without changing global tokens. */
+.wealth-page { display: grid; gap: 22px; color: var(--ink); }
+.wealth-overview-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.wealth-page-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+.wealth-page-intro h1 { margin-bottom: 10px; }
+.wealth-page-intro p { max-width: 58ch; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.wealth-page-actions, .wealth-toolbar-actions, .wealth-form-actions, .wealth-import-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.wealth-date-field { display: grid; gap: 5px; color: var(--muted); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
+.wealth-date-field input { min-height: 40px; padding: 8px 10px; border: 1px solid var(--deep-rule); border-radius: 8px; background: var(--panel); color: var(--ink); font: 12px 'IBM Plex Mono', monospace; letter-spacing: 0; text-transform: none; }
+.wealth-subnav { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--deep-rule); }
+.wealth-subnav button { min-height: 44px; padding: 10px 15px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.wealth-subnav button:hover { color: var(--ink); background: rgba(251,249,244,.55); }
+.wealth-subnav button.is-active { border-bottom-color: var(--cad); color: var(--ink); font-weight: 700; }
+.wealth-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 0; border-bottom: 1px solid var(--rule); }
+.wealth-toolbar > div:first-child { display: grid; gap: 4px; }
+.wealth-toolbar strong { font: 600 15px 'IBM Plex Sans', sans-serif; }
+.wealth-toolbar span { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; }
+.wealth-management-view { display: grid; gap: 16px; }
+.wealth-management-heading { display: grid; gap: 9px; padding-bottom: 5px; border-bottom: 1px solid var(--rule); }
+.wealth-management-heading h2 { margin: 0; font: 600 21px/1.2 'IBM Plex Sans', sans-serif; letter-spacing: -.035em; }
+.wealth-management-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.wealth-management-heading .quiet-button { justify-self: start; }
+.wealth-tools { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--panel); }
+.wealth-tools button { min-height: 44px; padding: 9px 13px; border: 1px solid var(--deep-rule); border-radius: 8px; background: var(--canvas); color: var(--ink); font-size: 12px; font-weight: 600; }
+.wealth-tools button:hover { border-color: var(--cad); color: var(--cad); }
+.wealth-state { max-width: 700px; margin: 36px auto; padding: 34px; border: 1px solid var(--rule); border-radius: 14px; background: var(--panel); text-align: center; }
+.wealth-state.is-error { border-color: #e1bebe; background: #fff8f5; }
+.wealth-state-mark { width: 42px; height: 42px; display: grid; place-items: center; margin: 0 auto 18px; border: 1px solid var(--cad); border-radius: 50%; color: var(--cad); }
+.wealth-state.is-error .wealth-state-mark { border-color: var(--danger); color: var(--danger); }
+.wealth-state h1 { margin: 0 auto 10px; font-size: clamp(27px, 4vw, 42px); }
+.wealth-state p { max-width: 55ch; margin: 0 auto 20px; color: var(--muted); line-height: 1.55; }
+.wealth-state-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 9px; }
+.wealth-notice, .wealth-coverage { display: flex; align-items: flex-start; gap: 9px; padding: 12px 14px; border: 1px solid var(--cad-soft); border-radius: 8px; background: #edf6f0; color: var(--cad); font-size: 12px; line-height: 1.45; }
+.wealth-notice { align-items: center; }
+.wealth-notice span { flex: 1; }
+.wealth-coverage { border-color: #ddcfaa; background: #fff9e9; color: var(--review); }
+.wealth-coverage.is-stale { border-color: #e7cfbd; background: #fff7ef; color: #8e561e; }
+.wealth-coverage.is-unavailable { border-color: var(--rule); background: var(--panel); color: var(--muted); }
+.wealth-coverage strong { color: var(--ink); }
+.wealth-metric-grid { display: grid; grid-template-columns: 1.25fr repeat(2, minmax(0, .875fr)); border-block: 1px solid var(--rule); }
+.wealth-metric-grid > div { min-width: 0; padding: 21px 22px 19px; }
+.wealth-metric-grid > div + div { border-left: 1px solid var(--rule); }
+.wealth-lead-metric { background: #20302c; color: #f7f1e4; }
+.wealth-lead-metric span, .wealth-source-metric span { display: block; color: var(--muted); font-size: 12px; }
+.wealth-lead-metric span { color: #c5d1ca; }
+.wealth-lead-metric strong, .wealth-source-metric strong { display: block; margin: 7px 0 8px; font: 600 clamp(24px, 3.2vw, 38px)/1.05 'IBM Plex Sans', sans-serif; letter-spacing: -.05em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wealth-source-metric strong { font-size: clamp(22px, 2.7vw, 31px); }
+.wealth-lead-metric small, .wealth-source-metric small { display: block; color: var(--muted); font: 10px/1.45 'IBM Plex Mono', monospace; }
+.wealth-lead-metric small { color: #c5d1ca; }
+.wealth-view-options { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; color: var(--muted); font: 10px 'IBM Plex Mono', monospace; }
+.wealth-fx-context { display: grid; min-width: 0; gap: 3px; text-align: right; }
+.wealth-fx-provenance { color: var(--ink); overflow-wrap: anywhere; }
+.wealth-switch { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; cursor: pointer; }
+.wealth-switch input { position: absolute; opacity: 0; }
+.wealth-switch span { width: 34px; height: 20px; position: relative; border: 1px solid var(--deep-rule); border-radius: 12px; background: var(--rule); transition: background .2s ease; }
+.wealth-switch span::after { content: ''; width: 14px; height: 14px; position: absolute; top: 2px; left: 2px; border-radius: 50%; background: var(--panel); box-shadow: 0 1px 3px rgba(24,32,31,.2); transition: transform .2s ease; }
+.wealth-switch input:checked + span { border-color: var(--cad); background: var(--cad); }
+.wealth-switch input:checked + span::after { transform: translateX(14px); }
+.wealth-overview-grid, .wealth-investment-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: 18px; }
+.wealth-panel { min-width: 0; padding: 23px 25px; border: 1px solid var(--rule); border-radius: 14px; background: var(--panel); }
+.wealth-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.wealth-section-heading h2, .wealth-section-heading h3 { margin: 0; font: 600 18px/1.2 'IBM Plex Sans', sans-serif; letter-spacing: -.035em; }
+.wealth-section-heading h3 { font-size: 16px; }
+.wealth-section-heading p { max-width: 55ch; margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.wealth-section-heading > svg { flex: 0 0 auto; color: var(--cad); }
+.wealth-history-panel { display: grid; gap: 21px; }
+.wealth-history-chart { min-height: 222px; display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; padding-top: 5px; }
+.wealth-history-axis { display: flex; flex-direction: column; justify-content: space-between; padding: 3px 0 25px; color: var(--muted); font: 9px 'IBM Plex Mono', monospace; text-align: right; }
+.wealth-history-bars { min-width: 0; display: flex; align-items: stretch; gap: 9px; border-bottom: 1px solid var(--deep-rule); }
+.wealth-history-column { min-width: 23px; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.wealth-history-track { width: 100%; height: 187px; display: flex; align-items: flex-end; padding: 0 3px; background: linear-gradient(to top, transparent 0, transparent calc(50% - 1px), var(--rule) 50%, transparent calc(50% + 1px)); }
+.wealth-history-track.is-signed { position: relative; align-items: stretch; }
+.wealth-history-bar { width: min(32px, 80%); display: block; border-radius: 4px 4px 0 0; background: var(--cad); transition: height .28s ease; }
+.wealth-history-track.is-signed .wealth-history-bar { position: absolute; left: 50%; transform: translateX(-50%); }
+.wealth-history-track.is-signed .wealth-history-bar:not(.is-negative):not(.is-unavailable) { bottom: 50%; }
+.wealth-history-track.is-signed .wealth-history-bar.is-negative { top: 50%; border-radius: 0 0 4px 4px; }
+.wealth-history-bar.is-incomplete { background: repeating-linear-gradient(135deg, var(--cad) 0 5px, var(--rule) 5px 8px); }
+.wealth-history-bar.is-unavailable { background: var(--rule); border: 1px dashed var(--deep-rule); }
+.wealth-history-date { color: var(--muted); font: 9px 'IBM Plex Mono', monospace; white-space: nowrap; }
+.wealth-data-details { color: var(--muted); font-size: 11px; }
+.wealth-data-details summary { width: fit-content; min-height: 44px; display: inline-flex; align-items: center; cursor: pointer; color: var(--cad); text-decoration: underline; text-underline-offset: 3px; }
+.wealth-table-wrap { min-width: 0; overflow-x: auto; }
+.wealth-table-wrap table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.wealth-table-wrap caption { padding: 10px 0; color: var(--muted); font-size: 11px; text-align: left; }
+.wealth-table-wrap th, .wealth-table-wrap td { padding: 11px 9px; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
+.wealth-table-wrap th { color: var(--muted); font-weight: 600; }
+.wealth-table-wrap tbody th { color: var(--ink); }
+.wealth-table-wrap td:not(:first-child), .wealth-table-wrap th:not(:first-child) { text-align: right; }
+.wealth-chart-note { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 0; color: var(--muted); font: 10px/1.4 'IBM Plex Mono', monospace; }
+.wealth-chart-note svg:last-of-type { margin-left: 8px; color: var(--cny); }
+.wealth-account-breakdown { min-width: 0; }
+.wealth-account-list { display: grid; gap: 0; margin-top: 18px; }
+.wealth-account-row, .wealth-holding-row { width: 100%; min-height: 68px; display: flex; align-items: center; gap: 12px; padding: 13px 0; border: 0; border-bottom: 1px solid var(--rule); background: transparent; color: var(--ink); text-align: left; }
+.wealth-account-row:hover, .wealth-holding-row:hover { color: var(--cad); }
+.wealth-account-row.is-selected { color: var(--cad); }
+.wealth-account-row-main, .wealth-account-row-value, .wealth-holding-row > span { min-width: 0; display: grid; gap: 4px; }
+.wealth-account-row-main, .wealth-holding-row > span:first-child { flex: 1; }
+.wealth-account-row strong, .wealth-holding-row strong { overflow-wrap: anywhere; font-size: 13px; }
+.wealth-account-row small, .wealth-holding-row small, .wealth-detail-row small { color: var(--muted); font: 10px/1.4 'IBM Plex Mono', monospace; }
+.wealth-account-row-value { justify-items: end; font: 12px 'IBM Plex Mono', monospace; text-align: right; }
+.wealth-account-row-value small { white-space: nowrap; }
+.wealth-account-management-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--rule); }
+.wealth-account-management-row .wealth-account-row { border-bottom: 0; }
+.wealth-account-edit { min-height: 44px; white-space: nowrap; }
+.wealth-investment-metrics { grid-template-columns: 1.2fr repeat(2, .9fr); }
+.wealth-investment-grid { grid-template-columns: minmax(0, 1.1fr) minmax(300px, .9fr); }
+.wealth-holdings-list { display: grid; margin-top: 15px; }
+.wealth-holding-row > span:nth-child(2) { justify-items: end; text-align: right; }
+.wealth-performance-result { margin-top: 23px; padding: 17px; border: 1px solid var(--cad); border-radius: 10px; background: var(--cad-soft); }
+.wealth-performance-result span { display: block; color: var(--muted); font-size: 12px; }
+.wealth-performance-result strong { display: block; margin: 7px 0; font: 600 30px 'IBM Plex Sans', sans-serif; font-variant-numeric: tabular-nums; }
+.wealth-performance-result small { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; }
+.wealth-allocation { margin-top: 23px; padding-top: 17px; border-top: 1px solid var(--rule); }
+.wealth-allocation h3 { margin: 0 0 10px; font: 600 13px 'IBM Plex Sans', sans-serif; }
+.wealth-allocation-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--rule); font-size: 12px; }
+.wealth-allocation-row span { display: grid; gap: 3px; }
+.wealth-allocation-row small { color: var(--muted); font: 9px 'IBM Plex Mono', monospace; }
+.wealth-drilldown { padding: 22px 25px; border: 1px solid var(--cad); border-radius: 14px; background: #f4faf5; }
+.wealth-drilldown-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; margin-top: 21px; }
+.wealth-drilldown h3 { margin: 0 0 8px; font: 600 13px 'IBM Plex Sans', sans-serif; }
+.wealth-detail-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 10px 0; border-bottom: 1px solid var(--cad-soft); font: 12px 'IBM Plex Mono', monospace; }
+.wealth-detail-row span:first-child { display: grid; gap: 3px; }
+.wealth-detail-row span:last-child { white-space: nowrap; }
+.wealth-cashflow-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.wealth-cashflow-panel { display: grid; gap: 15px; }
+.wealth-status-mark { display: inline-flex; min-height: 24px; align-items: center; padding: 3px 7px; border: 1px solid var(--deep-rule); border-radius: 4px; color: var(--muted); font: 10px 'IBM Plex Mono', monospace; text-transform: capitalize; }
+.wealth-status-mark.is-external_contribution { border-color: var(--cad); color: var(--cad); }
+.wealth-status-mark.is-external_withdrawal { border-color: var(--cny); color: var(--cny); }
+.wealth-record-details { position: relative; min-width: 120px; }
+.wealth-record-link { padding: 0; border: 0; background: transparent; color: var(--cad); font: 10px 'IBM Plex Mono', monospace; text-decoration: underline; cursor: pointer; }
+.wealth-record-link:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.wealth-record-unavailable { color: var(--faint); font: 10px 'IBM Plex Mono', monospace; }
+.wealth-record-popover { position: absolute; z-index: 2; top: calc(100% + 8px); right: 0; display: grid; min-width: 220px; gap: 5px; padding: 12px; border: 1px solid var(--deep-rule); border-radius: 8px; background: var(--paper); box-shadow: 0 8px 20px rgb(23 42 35 / 14%); color: var(--ink); font-size: 11px; }
+.wealth-record-popover small { color: var(--muted); font: 9px 'IBM Plex Mono', monospace; }
+.wealth-record-popover .icon-button { position: absolute; top: 4px; right: 4px; width: 22px; min-height: 22px; padding: 0; }
+.wealth-status-mark.is-ambiguous { border-color: var(--review); color: var(--review); }
+.wealth-source-panel { display: grid; gap: 14px; }
+.wealth-import-panel, .wealth-quote-panel { display: grid; gap: 16px; padding: 22px 25px; border: 1px solid var(--rule); border-radius: 14px; background: var(--panel); }
+.wealth-import-actions { justify-content: space-between; }
+.wealth-file-button { min-height: 44px; display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px; border: 1px solid var(--cad); border-radius: 8px; background: var(--cad); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
+.wealth-file-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.wealth-import-file { margin: 0; color: var(--muted); font: 10px 'IBM Plex Mono', monospace; }
+.wealth-import-errors { display: flex; align-items: flex-start; gap: 8px; padding: 11px 13px; border: 1px solid #e1bebe; border-radius: 8px; background: #fff1ef; color: var(--danger); font-size: 11px; }
+.wealth-import-errors div { display: grid; gap: 5px; }
+.wealth-import-mapping { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--rule); border-radius: 10px; background: color-mix(in srgb, var(--paper) 70%, var(--panel)); }
+.wealth-import-mapping summary { color: var(--ink); cursor: pointer; font-size: 12px; font-weight: 700; }
+.wealth-import-mapping-help { max-width: 760px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.wealth-import-mapping-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.wealth-import-mapping-field { display: grid; gap: 5px; min-width: 0; color: var(--muted); font-size: 10px; font-weight: 600; }
+.wealth-import-mapping-field select { width: 100%; min-width: 0; }
+.wealth-quote-form { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.wealth-quote-form > label { min-width: min(100%, 330px); display: grid; gap: 6px; color: var(--muted); font: 10px 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: .08em; }
+.wealth-quote-form input { min-height: 44px; padding: 9px 11px; border: 1px solid var(--deep-rule); border-radius: 8px; background: var(--canvas); color: var(--ink); font-size: 13px; letter-spacing: 0; text-transform: none; }
+.wealth-boundary-note { display: flex; align-items: flex-start; gap: 7px; margin: 0; color: var(--muted); font: 10px/1.5 'IBM Plex Mono', monospace; }
+.wealth-form { display: grid; gap: 17px; padding: 22px 25px; border: 1px solid var(--cad); border-radius: 14px; background: #f4faf5; }
+.wealth-form-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
+.wealth-form-heading h3 { margin: 0; font: 600 17px 'IBM Plex Sans', sans-serif; }
+.wealth-form-heading p { max-width: 65ch; margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.wealth-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
+.wealth-form-grid label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font: 10px 'IBM Plex Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
+.wealth-form-grid input, .wealth-form-grid select { width: 100%; min-height: 44px; min-width: 0; padding: 9px 10px; border: 1px solid var(--deep-rule); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 13px; letter-spacing: 0; text-transform: none; }
+.wealth-form-wide { grid-column: 1 / -1; }
+.wealth-form fieldset { min-width: 0; margin: 0; padding: 13px; border: 1px solid var(--deep-rule); border-radius: 8px; }
+.wealth-form fieldset legend { padding: 0 5px; color: var(--ink); font: 600 11px 'IBM Plex Mono', monospace; letter-spacing: .05em; text-transform: uppercase; }
+.wealth-form-error { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--danger); font-size: 12px; }
+.wealth-empty-copy { display: grid; gap: 7px; margin: 18px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.wealth-empty-copy strong { color: var(--ink); }
+.wealth-page ::selection { background: var(--cad-soft); color: var(--ink); }
+.wealth-page input { caret-color: var(--cad); }
+.wealth-page .is-spinning { animation: wealth-spin 1s linear infinite; }
+@keyframes wealth-spin { to { transform: rotate(360deg); } }
+@media (max-width: 980px) { .wealth-overview-grid, .wealth-investment-grid { grid-template-columns: 1fr; } .wealth-drilldown-grid, .wealth-cashflow-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .wealth-quote-form { align-items: stretch; flex-direction: column; } .wealth-quote-form > label { min-width: 0; } }
+@media (max-width: 900px) { .wealth-import-mapping-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .wealth-page-intro, .wealth-toolbar { align-items: stretch; flex-direction: column; } .wealth-page-actions, .wealth-toolbar-actions { justify-content: flex-start; } .wealth-metric-grid { grid-template-columns: 1fr; } .wealth-metric-grid > div + div { border-top: 1px solid var(--rule); border-left: 0; } .wealth-view-options { align-items: flex-start; flex-direction: column; } .wealth-fx-context { width: 100%; text-align: left; } .wealth-panel, .wealth-form, .wealth-import-panel, .wealth-quote-panel { padding: 18px 16px; } .wealth-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .wealth-drilldown-grid { grid-template-columns: 1fr; gap: 16px; } .wealth-history-chart { grid-template-columns: 61px minmax(0, 1fr); gap: 7px; } .wealth-history-bars { gap: 5px; overflow-x: auto; } .wealth-history-column { min-width: 34px; } .wealth-history-track { height: 158px; } .wealth-import-actions .outline-button, .wealth-file-button { flex: 1 1 180px; justify-content: center; } .wealth-state { margin: 18px 0; padding: 25px 18px; } }
+@media (max-width: 520px) { .wealth-import-mapping-grid { grid-template-columns: 1fr; } }
+@media (max-width: 420px) { .wealth-form-grid { grid-template-columns: 1fr; } .wealth-form-wide { grid-column: auto; } .wealth-holding-row { align-items: flex-start; flex-wrap: wrap; } .wealth-holding-row > span:nth-child(2) { justify-items: start; text-align: left; } .wealth-account-row { min-width: 0; align-items: flex-start; } .wealth-account-row-main { flex: 1 1 auto; } .wealth-account-row-value { flex: 0 1 48%; max-width: 48%; } .wealth-account-row-value small { white-space: normal; overflow-wrap: anywhere; } .wealth-account-row > svg { flex: 0 0 auto; margin-top: 4px; } .wealth-account-management-row { grid-template-columns: 1fr; gap: 0; } .wealth-account-edit { justify-self: start; margin-bottom: 8px; } .wealth-page-actions .outline-button, .wealth-toolbar-actions button { flex: 1 1 140px; justify-content: center; } .wealth-history-chart { grid-template-columns: 54px minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .wealth-page *, .wealth-page *::before, .wealth-page *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

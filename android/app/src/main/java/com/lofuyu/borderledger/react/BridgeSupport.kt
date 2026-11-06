@@ -56,8 +56,11 @@ internal class BridgeSupport(private val runtime: NativeServiceRuntime) {
             is TransportFailure.Offline,
             is com.lofuyu.borderledger.ui.settings.ReportingPreferencesRepository.Offline -> "offline|The service is offline."
             is com.lofuyu.borderledger.recurring.RecurringRevisionConflict,
-            is com.lofuyu.borderledger.review.ReviewRevisionConflict -> "revision_conflict|Refresh before saving."
+            is com.lofuyu.borderledger.review.ReviewRevisionConflict,
+            is com.lofuyu.borderledger.wealth.WealthRevisionConflict -> "revision_conflict|Refresh before saving."
+            is com.lofuyu.borderledger.wealth.WealthAuthorizationRequired -> "wealth_scope_required|Wealth access changed. Sign in again to continue."
             is com.lofuyu.borderledger.accounts.AccountRequestRejected -> "request_rejected|The server rejected this request. Refresh the data and review before trying again."
+            is com.lofuyu.borderledger.wealth.WealthRequestRejected -> "request_rejected|The server rejected this request. Refresh the data and review before trying again."
             else -> "native_unavailable|The native service could not complete the request. Reconcile submitted operations before continuing."
         }
         val separator = failure.indexOf('|')

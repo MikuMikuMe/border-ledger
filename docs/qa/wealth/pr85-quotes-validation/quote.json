@@ -1,0 +1,19 @@
+{
+  "status": "refreshed",
+  "quote": {
+    "ledgerId": "personal",
+    "instrumentKey": "TSX\u0000RY\u0000stock\u0000CAD",
+    "instrument": {
+      "exchange": "TSX",
+      "ticker": "RY",
+      "type": "stock",
+      "currency": "CAD"
+    },
+    "provider": "alpha_vantage",
+    "providerSymbol": "RY.TRT",
+    "quoteDate": "2026-11-02",
+    "priceMinor": 10000,
+    "observedAt": "2026-11-03T12:00:00Z",
+    "revision": "fea938b8-3ada-4185-964d-0b28f8468fa8"
+  }
+}

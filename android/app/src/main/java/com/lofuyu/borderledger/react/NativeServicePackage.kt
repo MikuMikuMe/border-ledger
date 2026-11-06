@@ -13,19 +13,38 @@ class NativeServicePackage(private val runtime: NativeServiceRuntime): BaseReact
         "NativeLedger" -> LedgerModule(context,runtime)
         "NativeRecurring" -> RecurringModule(context,runtime)
         "NativeBudget" -> BudgetModule(context,runtime)
+        "NativeWealth" -> WealthModule(context,runtime)
         "NativeAnalysis" -> AnalysisModule(context,runtime)
         "NativeReview" -> ReviewModule(context,runtime)
         "NativeAccounts" -> AccountsModule(context,runtime)
         "NativeCaptureDevices" -> CaptureDevicesModule(context,runtime)
         "NativeFiles" -> FilesModule(context,runtime)
         "NativePreferences" -> PreferencesModule(context,runtime)
+        "NativeWealthFixture" -> debugWealthFixture(context)
         else -> null
     }
     override fun getReactModuleInfoProvider() = ReactModuleInfoProvider {
-        mapOf("NativeSession" to SessionModule::class.java, "NativeLedger" to LedgerModule::class.java,
-            "NativeBudget" to BudgetModule::class.java, "NativeAnalysis" to AnalysisModule::class.java, "NativeRecurring" to RecurringModule::class.java, "NativeReview" to ReviewModule::class.java,
+        val modules = mapOf(
+            "NativeSession" to SessionModule::class.java, "NativeLedger" to LedgerModule::class.java,
+            "NativeBudget" to BudgetModule::class.java, "NativeWealth" to WealthModule::class.java, "NativeAnalysis" to AnalysisModule::class.java, "NativeRecurring" to RecurringModule::class.java, "NativeReview" to ReviewModule::class.java,
             "NativeAccounts" to AccountsModule::class.java, "NativeCaptureDevices" to CaptureDevicesModule::class.java,
-            "NativeFiles" to FilesModule::class.java, "NativePreferences" to PreferencesModule::class.java)
-            .mapValues { (name,type) -> ReactModuleInfo(name,type.name,false,false,false,true) }
+            "NativeFiles" to FilesModule::class.java, "NativePreferences" to PreferencesModule::class.java,
+        )
+        modules.mapValues { (name, type) -> ReactModuleInfo(name, type.name, false, false, false, true) }
+            .toMutableMap().apply {
+                debugWealthFixtureClass()?.let { type -> put("NativeWealthFixture", ReactModuleInfo("NativeWealthFixture", type.name, false, false, false, false)) }
+            }
     }
+
+    private fun debugWealthFixture(context: ReactApplicationContext): NativeModule? =
+        if (!com.lofuyu.borderledger.BuildConfig.DEBUG) null else runCatching {
+            val type = debugWealthFixtureClass() ?: return@runCatching null
+            type.getConstructor(ReactApplicationContext::class.java).newInstance(context) as NativeModule
+        }.getOrNull()
+
+    @Suppress("UNCHECKED_CAST")
+    private fun debugWealthFixtureClass(): Class<out NativeModule>? =
+        if (!com.lofuyu.borderledger.BuildConfig.DEBUG) null else runCatching {
+            Class.forName("com.lofuyu.borderledger.debug.WealthFixtureModule") as Class<out NativeModule>
+        }.getOrNull()
 }

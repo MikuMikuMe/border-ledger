@@ -1,0 +1,40 @@
+{
+  "hostedArgumentRule": {
+    "actual": 3,
+    "maximum": 4,
+    "function": "eventsForCurrentModeSegment"
+  },
+  "checkedAt": "2026-11-04",
+  "files": [
+    {
+      "review": [],
+      "file": "worker/wealth-store.ts",
+      "score": 10
+    },
+    {
+      "review": [],
+      "file": "worker/wealth-store-reports.ts",
+      "score": 10
+    },
+    {
+      "review": [],
+      "file": "worker/wealth-segment-projection.ts",
+      "score": 10
+    },
+    {
+      "review": [],
+      "file": "worker/wealth-import-validation.ts",
+      "score": 10
+    },
+    {
+      "review": [],
+      "file": "tests/wealth-review-regressions.test.ts",
+      "score": 10
+    }
+  ],
+  "notes": [
+    "Local MCP analyzer is older than the hosted analyzer; the reported hosted argument limit was checked explicitly.",
+    "No rules or thresholds were suppressed. Hosted rerun is not assumed passing from local results."
+  ],
+  "scope": "PR85 historical writes, reset holdings and hosted argument limit"
+}

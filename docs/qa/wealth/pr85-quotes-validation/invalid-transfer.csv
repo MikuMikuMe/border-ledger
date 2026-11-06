@@ -1,0 +1,2 @@
+record_type,id,source_id,date,kind,transfer_kind,from_account_id,to_account_id,currency,amount_minor,transfer_id
+event,negative,negative,2026-11-03,transfer,cash,outside,aggregate-broker,CAD,-100,negative

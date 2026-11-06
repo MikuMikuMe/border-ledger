@@ -4,19 +4,19 @@ import {SafeAreaView} from 'react-native-safe-area-context';
 
 import type {ShellDestination} from '@/features/auth/authModel';
 
-export type Page = ShellDestination | 'more' | 'devices' | 'files' | 'budget';
+export type Page = ShellDestination | 'more' | 'devices' | 'files' | 'budget' | 'wealth';
 const titles: Record<Page, string> = {
   budget: 'Budget', overview: 'Overview', activity: 'Activity', review: 'Review', more: 'More',
   accounts: 'Accounts', recurring: 'Recurring', settings: 'Settings',
-  capture: 'Notification capture', devices: 'Connected devices', files: 'Import and export',
+  capture: 'Notification capture', devices: 'Connected devices', files: 'Import and export', wealth: 'Wealth',
 };
 const primary: Page[] = ['overview', 'activity', 'review', 'more'];
-const ledgerLinks: Page[] = ['budget', 'accounts', 'recurring', 'files'];
+const ledgerLinks: Page[] = ['budget', 'accounts', 'recurring', 'wealth', 'files'];
 const settingsLinks: Page[] = ['capture', 'devices'];
 const descriptions: Partial<Record<Page, string>> = {
   budget: 'Plan and fund your categories', accounts: 'Balances and bank connections', recurring: 'Upcoming bills and subscriptions',
   files: 'Import statements or save your ledger', settings: 'Appearance, reporting and devices',
-  capture: 'Set up automatic notification capture', devices: 'Manage access to your ledger',
+  capture: 'Set up automatic notification capture', devices: 'Manage access to your ledger', wealth: 'Assets, investments and net worth',
 };
 export function initialPath(destination: Page): Page[] {
   return primary.includes(destination) ? [destination] : ['more', destination];

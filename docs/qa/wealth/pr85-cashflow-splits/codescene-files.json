@@ -1,0 +1,49 @@
+{
+  "date": "2026-11-04",
+  "files": [
+    {
+      "file": "src/domain/wealth-report.ts",
+      "review": [],
+      "score": 10
+    },
+    {
+      "file": "worker/wealth-store-cashflows.ts",
+      "review": [],
+      "score": 10
+    },
+    {
+      "file": "worker/wealth-store-reports.ts",
+      "review": [],
+      "score": 10
+    },
+    {
+      "file": "worker/wealth-store.ts",
+      "review": [],
+      "score": 10
+    },
+    {
+      "file": "worker/wealth-import-validation.ts",
+      "review": [],
+      "score": 10
+    },
+    {
+      "file": "tests/wealth-cashflow-review.test.ts",
+      "review": [],
+      "score": 10
+    },
+    {
+      "file": "tests/wealth-split-transfers.test.ts",
+      "review": [],
+      "score": 10
+    },
+    {
+      "file": "tests/wealth-store.test.ts",
+      "review": [],
+      "score": 10
+    }
+  ],
+  "notes": [
+    "No rules or thresholds suppressed.",
+    "New helpers keep four or fewer arguments to respect the hosted limit."
+  ]
+}

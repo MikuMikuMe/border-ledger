@@ -1,0 +1,76 @@
+{
+  "asOf": "2026-11-03",
+  "accounts": [
+    {
+      "id": "corrected-opening",
+      "name": "Corrected opening QA",
+      "kind": "brokerage",
+      "mode": "aggregate",
+      "currency": "CAD",
+      "linkedBankAccountId": null,
+      "active": true,
+      "amountMinor": null,
+      "revision": 2,
+      "valueMinor": 20000,
+      "valueState": "fresh",
+      "valueObservedAt": "2026-11-02"
+    }
+  ],
+  "positions": [],
+  "cash": [],
+  "totalByCurrency": {
+    "CAD": 20000
+  },
+  "totalStatusByCurrency": {
+    "CAD": "complete"
+  },
+  "balanceStatuses": [
+    {
+      "accountId": "corrected-opening",
+      "state": "fresh",
+      "observedAt": "2026-11-02"
+    }
+  ],
+  "allocations": [
+    {
+      "currency": "CAD",
+      "accountId": "corrected-opening",
+      "kind": "aggregate",
+      "instrument": null,
+      "valueMinor": 20000,
+      "available": true,
+      "share": 1
+    }
+  ],
+  "history": [
+    {
+      "date": "2026-11-02",
+      "totals": {
+        "CAD": 20000
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    }
+  ],
+  "cashFlows": [],
+  "cashFlowTotals": {},
+  "modifiedDietz": {
+    "value": null,
+    "available": false,
+    "reason": "missing_end_valuation"
+  },
+  "stale": false,
+  "missingData": [],
+  "revision": 4,
+  "fx": {
+    "convertedCadMinor": null,
+    "complete": false,
+    "unavailable": [],
+    "effectiveDate": null,
+    "provider": null,
+    "baseCurrency": null,
+    "rates": {}
+  }
+}

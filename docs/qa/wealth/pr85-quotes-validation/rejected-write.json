@@ -1,0 +1,4 @@
+{
+  "status": 400,
+  "body": "{\"code\":\"invalid_money\",\"error\":\"cash transfer must be a non-negative integer minor amount.\",\"message\":\"cash transfer must be a non-negative integer minor amount.\",\"retryable\":false}"
+}

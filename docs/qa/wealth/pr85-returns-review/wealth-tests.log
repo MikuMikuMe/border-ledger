@@ -1,0 +1,9 @@
+
+ RUN  v5.0.5 D:/Projects/border-ledger-sure-wealth
+
+
+ Test Files  17 passed (17)
+      Tests  332 passed (332)
+   Start at  01:47:20
+   Duration  116.03s (tests 98%, import 1%, environment 1%)
+

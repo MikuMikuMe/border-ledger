@@ -1,0 +1,94 @@
+
+ RUN  v5.0.5 D:/Projects/border-ledger-sure-wealth
+
+ ❯ tests/wealth-lineage-links.test.ts (4 tests | 4 failed) 237ms
+   ❯ Wealth bank and audit control lineage (4)
+     × allows bank-link reuse only within its control lineage (reversal=false) 64ms
+     × allows bank-link reuse only within its control lineage (reversal=true) 46ms
+     × validates a batch control chain that extends stored linked history 60ms
+     × includes controls in every affected account and instrument audit history 66ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/wealth-lineage-links.test.ts > Wealth bank and audit control lineage > allows bank-link reuse only within its control lineage (reversal=false)
+ FAIL  tests/wealth-lineage-links.test.ts > Wealth bank and audit control lineage > allows bank-link reuse only within its control lineage (reversal=true)
+WealthStoreError: A bank transaction is already linked to another wealth event.
+ ❯ assertBankLinkAvailable worker/wealth-store.ts:982:71
+    980|     if (linked === targetLink) continue;
+    981|     if (sameBankTransaction(candidates, targetIdentity)) continue;
+    982|     if (await existingBankLink(db, context, candidates.values)) throw …
+       |                                                                       ^
+    983|   }
+    984| }
+ ❯ appendWealthEvent worker/wealth-store.ts:1011:207
+ ❯ tests/wealth-lineage-links.test.ts:33:52
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  tests/wealth-lineage-links.test.ts > Wealth bank and audit control lineage > validates a batch control chain that extends stored linked history
+AssertionError: expected [ { rowId: 'row-1', …(2) }, …(3) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "error": "Event c2:replacement conflicts with another imported bank link.",
++     "rowId": "row-1",
++     "rowIndex": 0,
++   },
++   {
++     "error": "Event c2:replacement conflicts with another imported bank link.",
++     "rowId": "row-2",
++     "rowIndex": 1,
++   },
++   {
++     "error": "Event c2:replacement conflicts with another imported bank link.",
++     "rowId": "row-3",
++     "rowIndex": 2,
++   },
++   {
++     "error": "Event c2:replacement conflicts with another imported bank link.",
++     "rowId": "__portfolio__",
++     "rowIndex": -1,
++   },
++ ]
+
+ ❯ tests/wealth-lineage-links.test.ts:44:28
+     42|     await appendWealthEvent(f.db, scope, chain[0]);
+     43|     const preview = await createWealthImportPreview(f.db, scope, { csv…
+     44|     expect(preview.errors).toEqual([]);
+       |                            ^
+     45|     await expect(commitWealthImport(f.db, scope, preview.previewId, { …
+     46|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  tests/wealth-lineage-links.test.ts > Wealth bank and audit control lineage > includes controls in every affected account and instrument audit history
+AssertionError: expected [ 'position' ] to deeply equal [ 'position', 'move', 'undo' ]
+
+- Expected
++ Received
+
+  [
+    "position",
+-   "move",
+-   "undo",
+  ]
+
+ ❯ tests/wealth-lineage-links.test.ts:57:144
+     55|       { id: 'undo', sourceId: 'undo', kind: 'reversal', date: '2026-01…
+     56|     ] as WealthEvent[]) await appendWealthEvent(f.db, scope, event);
+     57|     expect((await readWealthEvents(f.db, scope, { accountId: 'brokerag…
+       |                                                                                                                                                ^
+     58|     expect((await readWealthEvents(f.db, scope, { accountId: 'other', …
+     59|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed (4)
+   Start at  01:37:05
+   Duration  637ms (tests 51%, transform 29%, import 18%, worker 1%)

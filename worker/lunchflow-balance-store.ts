@@ -24,12 +24,18 @@ function validateBalanceRevision(input:BalancePublication):void {
 export async function publishLunchFlowBalance(db:D1Database,context:LunchFlowBinding,input:BalancePublication):Promise<boolean> {
   validatePublication(input);
   const binding=connectionBinding(context), fence=lunchFlowScopePredicate(context);
-  const result=await db.prepare(`INSERT INTO lunchflow_account_balances(ledger_id,account_id,connection_id,connection_generation,provider_account_id,account_revision,currency,amount_minor,observed_at)
+  const balanceStatement=db.prepare(`INSERT INTO lunchflow_account_balances(ledger_id,account_id,connection_id,connection_generation,provider_account_id,account_revision,currency,amount_minor,observed_at)
     SELECT ?,?,?,?,?,?,?,?,? WHERE ${fence.sql} AND EXISTS (SELECT 1 FROM lunchflow_accounts a WHERE a.ledger_id=? AND a.connection_id=? AND a.provider_account_id=? AND a.account_id=? AND a.revision=? AND a.currency=? AND a.enabled=1)
     ON CONFLICT(ledger_id,account_id) DO UPDATE SET connection_id=excluded.connection_id,connection_generation=excluded.connection_generation,provider_account_id=excluded.provider_account_id,account_revision=excluded.account_revision,currency=excluded.currency,amount_minor=excluded.amount_minor,observed_at=excluded.observed_at,refresh_failed=0
     WHERE excluded.observed_at>=lunchflow_account_balances.observed_at`)
-    .bind(context.ledgerId,input.accountId,binding.id,binding.generation,input.providerAccountId,input.revision,input.currency,input.amountMinor,input.observedAt,...fence.bindings,context.ledgerId,binding.id,input.providerAccountId,input.accountId,input.revision,input.currency).run();
-  return (result.meta?.changes??0)>=1;
+    .bind(context.ledgerId,input.accountId,binding.id,binding.generation,input.providerAccountId,input.revision,input.currency,input.amountMinor,input.observedAt,...fence.bindings,context.ledgerId,binding.id,input.providerAccountId,input.accountId,input.revision,input.currency);
+  const wealthHistory=await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='wealth_linked_balance_observations'").first<{present:number}>();
+  const statements=[balanceStatement];
+  if(wealthHistory) statements.push(db.prepare(`INSERT OR IGNORE INTO wealth_linked_balance_observations(ledger_id,account_id,currency,amount_minor,observed_at,source_revision)
+    SELECT ?,?,?,?,?,? WHERE ${fence.sql} AND EXISTS (SELECT 1 FROM lunchflow_accounts a WHERE a.ledger_id=? AND a.connection_id=? AND a.provider_account_id=? AND a.account_id=? AND a.revision=? AND a.currency=? AND a.enabled=1)`)
+    .bind(context.ledgerId,input.accountId,input.currency,input.amountMinor,input.observedAt,input.revision,...fence.bindings,context.ledgerId,binding.id,input.providerAccountId,input.accountId,input.revision,input.currency));
+  const result=await db.batch(statements);
+  return result.some((item)=>Number(item.meta?.changes??0)>=1);
 }
 
 

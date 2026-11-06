@@ -1,0 +1,61 @@
+{
+  "revision": 3,
+  "investmentCashFlows": [
+    {
+      "sourceId": "qa-capital-alias",
+      "transactionId": "qa-capital-bank",
+      "merchant": "Synthetic capital bank",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-02",
+      "accountId": "qa-cash",
+      "category": "Investment",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 5000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": "review-capital-correction:replacement",
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "Bank flow does not agree with the explicitly linked wealth event."
+    }
+  ],
+  "modifiedDietzByCurrency": {
+    "CAD": {
+      "value": null,
+      "available": false,
+      "reason": "incomplete_flows"
+    }
+  },
+  "positions": [
+    {
+      "accountId": "split-dest",
+      "quantity": "2",
+      "marketValueMinor": 10000,
+      "costBasisMinor": 10000,
+      "unrealizedGainMinor": 0
+    },
+    {
+      "accountId": "split-source",
+      "quantity": "0",
+      "marketValueMinor": 0,
+      "costBasisMinor": 0,
+      "unrealizedGainMinor": 0
+    }
+  ],
+  "totalStatusByCurrency": {
+    "CAD": "complete"
+  },
+  "modifiedDietz": {
+    "value": null,
+    "available": false,
+    "reason": "incomplete_flows"
+  },
+  "totalByCurrency": {
+    "CAD": 30000
+  }
+}

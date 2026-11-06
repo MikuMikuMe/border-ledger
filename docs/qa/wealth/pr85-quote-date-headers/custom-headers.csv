@@ -1,0 +1,4 @@
+record_type,id,source_id,name,account_kind,account_mode,active,date,kind,account_id,exchange,ticker,type,currency,quantité,amount (cad),price_minor
+account,custom-headers,,Custom headers QA,brokerage,holdings,1,,,,,,,CAD,,,
+event,custom-opening,custom-opening,,,,,2026-11-01,opening_position,custom-headers,TSX,SHOP,stock,CAD,0.5,10000,
+valuation,custom-price,,,,,,2026-11-02,,custom-headers,TSX,SHOP,stock,CAD,,,10000

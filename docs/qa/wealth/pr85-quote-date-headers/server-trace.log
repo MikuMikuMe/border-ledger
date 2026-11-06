@@ -1,0 +1,25 @@
+Synthetic Wealth QA: http://127.0.0.1:18094
+POST /api/wealth/imports/preview bytes 892 receivedMs 1
+response 201 elapsedMs 19
+POST /api/wealth/imports/wealth-preview-94f1e25b-05fe-41bb-b944-13270be155a3/commit bytes 185 receivedMs 1
+response 200 elapsedMs 4
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 1
+response 200 elapsedMs 7
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 3
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 2
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 0
+GET /api/wealth/report bytes 0 receivedMs 1
+response 200 elapsedMs 3
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 1
+response 200 elapsedMs 3
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 3
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 1

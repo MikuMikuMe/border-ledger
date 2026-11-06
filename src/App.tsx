@@ -45,10 +45,12 @@ import { formatReportingDay, getReportWindows, type ReportingTimezone, type Week
 import type { Account, ReportWindow, Transaction } from './domain/types';
 import { getCurrencyMeta, supportedCurrencyCodes, type CurrencyCode } from './domain/currencies';
 import RecurringView from './components/RecurringView';
+import { WealthView } from './components/wealth/WealthView';
+import './wealth.css';
 import MobileAuthorizationPage from './MobileAuthorizationPage';
 import { LunchFlowSection } from './lunchflow';
 
-type View = 'overview' | 'budget' | 'recurring' | 'transactions' | 'imports' | 'accounts';
+type View = 'overview' | 'budget' | 'recurring' | 'wealth' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
 type ChartRange = 'daily' | 'weekly' | 'monthly';
 type AppRoute = 'landing' | 'workspace' | 'mobile-authorization';
@@ -148,6 +150,7 @@ const navItems: Array<{ id: View; label: string; icon: typeof LayoutDashboard }>
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'budget', label: 'Budget', icon: WalletCards },
   { id: 'recurring', label: 'Recurring payments', icon: Repeat2 },
+  { id: 'wealth', label: 'Wealth', icon: BarChart3 },
   { id: 'transactions', label: 'Transactions', icon: ListFilter },
   { id: 'imports', label: 'Import & review', icon: FileUp },
   { id: 'accounts', label: 'Accounts & settings', icon: Landmark },
@@ -982,6 +985,7 @@ function WorkspaceApp() {
           ) : null}
           {activeView === 'budget' ? <BudgetView api={ledgerApi} initialMonth={monthWindow.end.slice(0,7)} accounts={accounts.filter(account=>account.kind==='chequing'||account.kind==='savings').map(account=>({id:account.id,name:account.name,currency:account.currency}))} /> : null}
           {activeView === 'recurring' ? <RecurringView today={monthWindow.end} startDate={monthWindow.start} endDate={monthWindow.end} accounts={accounts} /> : null}
+          {activeView === 'wealth' ? <WealthView api={ledgerApi} linkedAccounts={accounts} /> : null}
           {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} /> : null}
           {activeView === 'imports' ? (
             <ImportsView
@@ -1318,7 +1322,7 @@ function Overview({
       <section className="insight-strip">
         <div className="insight-mark"><Sparkles size={17} /></div>
         <div><strong>One calm check-in at a time.</strong><p>{reportingCurrency && monthConvertedTotal !== null ? `You have ${formatMoney(monthConvertedTotal, insightCurrency)} in ${includeProvisional ? 'confirmed and provisional' : 'confirmed'} converted ${insightCurrency} spending this month. ` : reportingCurrency ? `The converted ${insightCurrency} total is unavailable for this month; ` : `You have ${formatMoney(monthSummary[insightCurrency] ?? 0, insightCurrency)} in ${includeProvisional ? 'confirmed and provisional' : 'confirmed'} ${insightCurrency} spending this month. `}A future exchange rate will be shown with its date—never silently blended in.</p></div>
-        <button className="text-button" onClick={() => onNavigate('accounts')}>Set reporting rules <Settings2 size={14} /></button>
+        <div className="wealth-overview-actions"><button className="text-button" onClick={() => onNavigate('wealth')}>Open Wealth <BarChart3 size={14} /></button><button className="text-button" onClick={() => onNavigate('accounts')}>Set reporting rules <Settings2 size={14} /></button></div>
       </section>
     </>
   );

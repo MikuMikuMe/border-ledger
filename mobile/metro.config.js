@@ -2,6 +2,8 @@ const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
 const { withUniwindConfig } = require('uniwind/metro');
 const fs = require('node:fs');
 const path = require('node:path');
+const metroConfigRoot = path.dirname(require.resolve('metro-config'));
+const exclusionList = require(path.join(metroConfigRoot, 'defaults', 'exclusionList.js')).default;
 
 const mobileRoot = __dirname;
 const nodeModulesPath = path.resolve(mobileRoot, 'node_modules');
@@ -10,6 +12,13 @@ const relativeNodeModulesPath = path.relative(mobileRoot, resolvedNodeModulesPat
 const nodeModulesOutsideProject = relativeNodeModulesPath === '..'
   || relativeNodeModulesPath.startsWith(`..${path.sep}`)
   || path.isAbsolute(relativeNodeModulesPath);
+const escapeRegExp = value => value.replaceAll(path.sep, `\\${path.sep}`).replaceAll('.', '\\.');
+const separatorPattern = path.sep === '\\' ? '\\\\' : '/';
+const generatedBuildOutputs = [
+  path.resolve(mobileRoot, '..', 'shared', 'core', 'build'),
+  path.resolve(mobileRoot, '..', 'android', 'build'),
+  path.resolve(mobileRoot, '..', 'android', 'app', 'build'),
+].map(directory => new RegExp(`${escapeRegExp(directory)}${separatorPattern}.*`));
 
 module.exports = withUniwindConfig(mergeConfig(getDefaultConfig(__dirname), {
   // Metro's file map does not follow a node_modules junction unless its real
@@ -22,6 +31,10 @@ module.exports = withUniwindConfig(mergeConfig(getDefaultConfig(__dirname), {
     path.resolve(mobileRoot, '..', 'contracts'),
   ],
   resolver: {
+    // Gradle/codegen output lives under watched shared and Android roots. It
+    // is never a Metro dependency and can otherwise trigger repeated HMR
+    // invalidations while an emulator is attached.
+    blockList: exclusionList(generatedBuildOutputs),
     nodeModulesPaths: [nodeModulesPath],
     // Resolve source aliases at the module graph boundary.
     resolveRequest(context, moduleName, platform) {

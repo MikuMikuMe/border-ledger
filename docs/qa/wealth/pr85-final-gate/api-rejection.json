@@ -1,0 +1,38 @@
+{
+  "beforeRevision": 1,
+  "status": 400,
+  "positions": [
+    {
+      "accountId": "reset-dest",
+      "quantity": "1",
+      "costBasisMinor": 10000,
+      "marketValueMinor": 10000
+    },
+    {
+      "accountId": "reset-source",
+      "quantity": "1",
+      "costBasisMinor": 10000,
+      "marketValueMinor": 10000
+    }
+  ],
+  "afterRevision": 1,
+  "response": {
+    "code": "negative_cash",
+    "error": "Cash balance cannot become negative without explicit incomplete-history allowance.",
+    "message": "Cash balance cannot become negative without explicit incomplete-history allowance.",
+    "retryable": false
+  },
+  "cash": [
+    {
+      "accountId": "backdate-cash",
+      "currency": "CAD",
+      "amountMinor": 2000
+    }
+  ],
+  "beforeTotals": {
+    "CAD": 22000
+  },
+  "afterTotals": {
+    "CAD": 22000
+  }
+}

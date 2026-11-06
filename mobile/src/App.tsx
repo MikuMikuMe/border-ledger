@@ -201,7 +201,8 @@ export default function App() {
     const {FinanceFixtureHost}=require('./dev/FinanceFixtureHost') as typeof import('./dev/FinanceFixtureHost');
     const {DetailsFixtureHost}=require('./dev/DetailsFixtureHost') as typeof import('./dev/DetailsFixtureHost');
     const {ToolsFixtureHost}=require('./dev/ToolsFixtureHost') as typeof import('./dev/ToolsFixtureHost');
-    return <SafeAreaProvider><BudgetFixtureHost><ShellFixtureHost><LoginFixtureHost><ToolsFixtureHost><DetailsFixtureHost><FinanceFixtureHost><MobileRoot /></FinanceFixtureHost></DetailsFixtureHost></ToolsFixtureHost></LoginFixtureHost></ShellFixtureHost></BudgetFixtureHost></SafeAreaProvider>;
+    const {WealthFixtureHost}=require('./dev/WealthFixtureHost') as typeof import('./dev/WealthFixtureHost');
+    return <SafeAreaProvider><BudgetFixtureHost><WealthFixtureHost><ShellFixtureHost><LoginFixtureHost><ToolsFixtureHost><DetailsFixtureHost><FinanceFixtureHost><MobileRoot /></FinanceFixtureHost></DetailsFixtureHost></ToolsFixtureHost></LoginFixtureHost></ShellFixtureHost></WealthFixtureHost></BudgetFixtureHost></SafeAreaProvider>;
   }
   return <SafeAreaProvider><MobileRoot /></SafeAreaProvider>;
 }

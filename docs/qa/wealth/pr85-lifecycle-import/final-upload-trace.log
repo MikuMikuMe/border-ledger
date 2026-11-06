@@ -1,0 +1,109 @@
+Synthetic Wealth QA: http://127.0.0.1:18094
+GET /api/wealth/report bytes 0 receivedMs 1
+response 200 elapsedMs 11
+POST /__qa/failures bytes 21 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 2
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/events bytes 0 receivedMs 1
+response 200 elapsedMs 1
+POST /api/wealth/imports/preview bytes 1100349 receivedMs 139
+response 201 elapsedMs 16217
+POST /__qa/failures bytes 2 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 2
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 2
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 2
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 0
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 1
+POST /api/wealth/imports/preview bytes 1100349 receivedMs 232
+response 201 elapsedMs 304
+POST /api/wealth/imports/preview bytes 1100635 receivedMs 219
+response 201 elapsedMs 287
+POST /api/wealth/imports/wealth-preview-efd501b6-2ac0-4a23-950c-cbf76c843f2b/commit bytes 177 receivedMs 1
+response 200 elapsedMs 12
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 1
+response 200 elapsedMs 20
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 5
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 16
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 0
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 20
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 18
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 6
+POST /api/wealth/imports/preview bytes 722 receivedMs 0
+response 201 elapsedMs 22
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 6
+GET /api/wealth/quotes/settings bytes 0 receivedMs 1
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 19
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 18
+POST /api/wealth/imports/wealth-preview-e55aef9d-bc22-488a-ba8b-54522e8bf029/commit bytes 185 receivedMs 0
+response 200 elapsedMs 14
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 34
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 36
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 5
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 33
+GET /api/wealth/report bytes 0 receivedMs 0
+response 200 elapsedMs 39
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 0
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 37
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 5
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 38
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 42
+GET /api/wealth/report?reportingCurrency=CAD bytes 0 receivedMs 0
+response 200 elapsedMs 41
+GET /api/wealth/quotes/settings bytes 0 receivedMs 0
+response 200 elapsedMs 1
+GET /api/wealth/events bytes 0 receivedMs 0
+response 200 elapsedMs 5

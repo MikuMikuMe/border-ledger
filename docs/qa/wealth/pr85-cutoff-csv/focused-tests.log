@@ -1,0 +1,12 @@
+
+> cross-border-spending-tracker@0.1.0 test
+> vitest run tests/wealth-csv-payload.test.ts tests/wealth-cashflow-review.test.ts
+
+
+ RUN  v5.0.5 D:/Projects/border-ledger-sure-wealth
+
+
+ Test Files  2 passed (2)
+      Tests  38 passed (38)
+   Start at  23:47:17
+   Duration  3.94s (tests 90%, import 5%, transform 5%)

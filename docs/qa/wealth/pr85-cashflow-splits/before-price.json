@@ -1,0 +1,79 @@
+{
+  "modifiedDietz": {
+    "value": null,
+    "available": false,
+    "reason": "incomplete_flows"
+  },
+  "totalStatusByCurrency": {
+    "CAD": "incomplete"
+  },
+  "totalByCurrency": {
+    "CAD": 20000
+  },
+  "investmentCashFlows": [
+    {
+      "sourceId": "qa-capital-alias",
+      "transactionId": "qa-capital-bank",
+      "merchant": "Synthetic capital bank",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-02",
+      "accountId": "qa-cash",
+      "category": "Investment",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 5000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": "review-contribution",
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "Bank flow does not agree with the explicitly linked wealth event."
+    }
+  ],
+  "positions": [
+    {
+      "accountId": "split-dest",
+      "quantity": "2",
+      "marketValueMinor": null,
+      "valuation": null
+    },
+    {
+      "accountId": "split-source",
+      "quantity": "0",
+      "marketValueMinor": 0,
+      "valuation": {
+        "id": "split-source-old-price",
+        "accountId": "split-source",
+        "instrument": {
+          "exchange": "TSX",
+          "ticker": "RY",
+          "type": "stock",
+          "currency": "CAD"
+        },
+        "asOf": "2026-10-31",
+        "priceMinor": 10000,
+        "source": "manual",
+        "provider": null
+      }
+    }
+  ],
+  "revision": 1,
+  "modifiedDietzByCurrency": {
+    "CAD": {
+      "value": null,
+      "available": false,
+      "reason": "incomplete_flows"
+    }
+  },
+  "householdLinks": {
+    "transactionId": "qa-capital-bank",
+    "sourceId": "qa-capital-alias",
+    "linkedWealthSourceId": "review-contribution",
+    "classification": "ambiguous",
+    "includedInPerformance": false
+  }
+}

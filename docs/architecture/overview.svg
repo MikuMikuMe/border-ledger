@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="bl-architecture-title bl-architecture-desc" id="overview-root">
+<title id="bl-architecture-title">Border Ledger architecture</title>
+<desc id="bl-architecture-desc">The React web app and React Native Android app authenticate to a Cloudflare Worker. The Worker reads and writes ledger-scoped records in D1, schedules and consumes bank synchronization through Queues, and calls financial providers. Optional user-initiated AI requests go directly from the Worker to fixed official provider APIs. A separate egress service exists in the repository but is not wired into this runtime. The accompanying README explains authentication, data boundaries, features, and deployment.</desc>
+<defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #overview-root { --paper:#f3efe6;--surface:#fbf9f4;--ink:#18201f;--muted:#656d6a;--rule:#d2ccc0;--accent:#1b6b5b;--tint:#dcebe3 }
+      #overview-root { color: var(--ink); font-family: 'DM Sans',Arial,sans-serif; }
+      #overview-root .diagram-container { overflow-x:auto;max-width:1280px;margin:0 auto }
+      #overview-root .canvas { fill:var(--paper) }
+      #overview-root .zone { fill:none;stroke:var(--rule);stroke-width:1 }
+      #overview-root .node { fill:var(--surface);stroke:var(--muted);stroke-width:1.5 }
+      #overview-root .focus { fill:var(--tint);stroke:var(--accent);stroke-width:2 }
+      #overview-root .heading { font-family:'IBM Plex Sans',Arial,sans-serif;font-size:40px;font-weight:600;fill:var(--ink) }
+      #overview-root .name { font-family:'DM Sans',Arial,sans-serif;font-size:20px;font-weight:600;fill:var(--ink) }
+      #overview-root .detail { font-family:'DM Sans',Arial,sans-serif;font-size:16px;fill:var(--ink) }
+      #overview-root .group { font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;letter-spacing:1px;fill:var(--muted) }
+      #overview-root .label { font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.6px;fill:var(--ink) }
+      #overview-root .note { font-family:'DM Sans',Arial,sans-serif;font-size:14px;fill:var(--muted) }
+      #overview-root .edge { fill:none;stroke:var(--muted);stroke-width:1.8;marker-end:url(#overview-bl-arrow) }
+      #overview-root .optional { stroke-dasharray:6 5 }
+      #overview-root .label-bg { fill:var(--paper) }
+      @media print {
+#overview-root .diagram-container { overflow:visible }
+}</style><marker id="overview-bl-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L8 4 L0 8 Z" fill="#656d6a"/></marker></defs>
+<rect class="canvas" width="1280" height="720"/>
+<text class="heading" x="48" y="68">Border Ledger architecture</text>
+<text class="note" x="48" y="96">One ledger API for the web workspace and Android companion.</text>
+<rect class="zone" x="24" y="120" width="304" height="408" rx="8"/>
+<rect class="zone" x="416" y="120" width="328" height="344" rx="8"/>
+<text class="group" x="48" y="144">CLIENTS</text><text class="group" x="440" y="144">CLOUDFLARE COMPUTE</text>
+<text class="group" x="944" y="144">STORAGE &amp; EXTERNAL SERVICES</text>
+<!-- Connections precede nodes; every bend uses an 8px elbow. -->
+<path class="edge" d="M304 212 H360 Q368 212 368 220 V328 Q368 336 376 336 H440"/>
+<path class="edge" d="M304 444 H380 Q388 444 388 436 V392 Q388 384 396 384 H440"/>
+<path class="edge optional" d="M532 288 V240"/><path class="edge optional" d="M628 240 V288"/>
+<path class="edge" d="M720 336 H824 Q832 336 832 328 V224 Q832 216 840 216 H944"/>
+<path class="edge" d="M720 384 H856 Q864 384 864 392 V404 Q864 412 872 412 H944"/>
+<path class="edge optional" d="M580 432 V588 Q580 596 588 596 H944"/>
+
+<!-- Arrow labels sit beside their strokes with opaque paper masks. -->
+<rect class="label-bg" x="376" y="260" width="56" height="20"/><text class="label" x="380" y="274">ACCESS</text>
+<rect class="label-bg" x="316" y="404" width="64" height="20"/><text class="label" x="320" y="418">SESSION</text>
+<rect class="label-bg" x="444" y="256" width="80" height="20"/><text class="label" x="448" y="270">SYNC JOBS</text>
+<rect class="label-bg" x="636" y="256" width="68" height="20"/><text class="label" x="640" y="270">CONSUME</text>
+<rect class="label-bg" x="840" y="264" width="92" height="20"/><text class="label" x="844" y="278">LEDGER I/O</text>
+<rect class="label-bg" x="784" y="396" width="72" height="20"/><text class="label" x="788" y="410">API DATA</text>
+<rect class="label-bg" x="588" y="492" width="88" height="20"/><text class="label" x="592" y="506">OPTIONAL AI</text>
+<rect class="label-bg" x="776" y="568" width="112" height="20"/><text class="label" x="780" y="582">FIXED HTTPS</text>
+<rect class="node" x="48" y="160" width="256" height="104" rx="8"/>
+<text class="name" x="72" y="196">Web workspace</text><text class="detail" x="72" y="224">React · TypeScript · Vite</text><text class="detail" x="72" y="248">Cloudflare Access session</text>
+<rect class="node" x="48" y="392" width="256" height="104" rx="8"/>
+<text class="name" x="72" y="428">Android companion</text><text class="detail" x="72" y="456">React Native + Kotlin bridge</text><text class="detail" x="72" y="480">Scoped mobile session</text>
+<rect class="node" x="440" y="160" width="280" height="80" rx="8"/>
+<text class="name" x="464" y="192">Sync queues</text><text class="detail" x="464" y="220">Plaid · Lunch Flow jobs</text>
+<rect class="focus" x="440" y="288" width="280" height="144" rx="8"/>
+<text class="name" x="464" y="324">Ledger Worker</text><text class="detail" x="464" y="352">Authentication · APIs · reports</text><text class="detail" x="464" y="380">Imports · budgets · wealth</text><text class="detail" x="464" y="408">Static web assets + webhooks</text>
+<rect class="focus" x="944" y="160" width="288" height="112" rx="8"/>
+<text class="name" x="968" y="196">D1 database</text><text class="detail" x="968" y="224">Ledger-scoped financial records</text><text class="detail" x="968" y="252">Encrypted provider credentials</text>
+<rect class="node" x="944" y="352" width="288" height="120" rx="8"/>
+<text class="name" x="968" y="388">Financial providers</text><text class="detail" x="968" y="416">Plaid · Lunch Flow</text><text class="detail" x="968" y="444">Frankfurter · Alpha Vantage</text>
+
+
+<rect class="node" x="944" y="544" width="288" height="104" rx="8"/>
+<text class="name" x="968" y="580">Official AI APIs</text><text class="detail" x="968" y="608">OpenAI · Anthropic · DeepSeek</text><text class="detail" x="968" y="632">User-supplied provider key</text>
+<path d="M48 680 H1232" fill="none" stroke="#d2ccc0"/>
+<text class="note" x="48" y="704">Solid: request / data path</text><text class="note" x="344" y="704">Dashed: queued or optional path</text><text class="note" x="816" y="704">Component overview · details in README</text>
+</svg>

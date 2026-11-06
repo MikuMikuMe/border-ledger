@@ -1,0 +1,34 @@
+[
+  {
+    "file": "worker/wealth-quotes.ts",
+    "sha256": "E27487B1AD79981919242BA6D29D7DF90FFBBEA982007E6C682874118A0651F2"
+  },
+  {
+    "file": "android/app/src/main/java/com/lofuyu/borderledger/react/WealthExternalDocumentOperations.kt",
+    "sha256": "C887167EA0EE311A8C00CFFE666932F43AF56728410F1542CDD43281ED6B9AC6"
+  },
+  {
+    "file": "android/app/src/androidTest/java/com/lofuyu/borderledger/react/WealthCsvMappingTest.kt",
+    "sha256": "B8B717E2D7A9BF75713F2AF6B72F77CFDFCF7DE22C4A1FC2EF7660652E904E1B"
+  },
+  {
+    "file": "tests/wealth-quote-mode-date.test.ts",
+    "sha256": "49EA4CEEE6845DE74A43768112FB0E280E91111F9DF0B3218201151A3577CDE6"
+  },
+  {
+    "file": "tests/wealth-csv-payload.test.ts",
+    "sha256": "0E2308267B183AEA834280792DC0A3D1B1B987F69845171D6EDC36704D200C6D"
+  },
+  {
+    "file": "worker/wealth-import-csv.ts",
+    "sha256": "DD54DC5B54F574630C4EA16575BB19DB48FB2E716855257AAFC11F43398BFBEC"
+  },
+  {
+    "file": "worker/wealth-import-types.ts",
+    "sha256": "27B9AC2D69BAC5DB100F00564D1F4842D897978262308F7305D78E5FE6ECD09E"
+  },
+  {
+    "file": "worker/wealth-import-preview.ts",
+    "sha256": "ABADC6B702772166FA50ABA54795BF48E894B0D89E56B7039152895727E36873"
+  }
+]

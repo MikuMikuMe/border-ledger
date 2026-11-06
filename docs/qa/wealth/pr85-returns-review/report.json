@@ -1,0 +1,399 @@
+{
+  "cashFlows": [
+    {
+      "sourceId": "qa-fee",
+      "transactionId": "qa-fee",
+      "merchant": "Synthetic Fee",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Bank fees",
+      "bankKind": "fee",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 500
+      },
+      "direction": "outflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-refund",
+      "transactionId": "qa-refund",
+      "merchant": "Synthetic Refund",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Housing",
+      "bankKind": "refund",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 1000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-rent",
+      "transactionId": "qa-rent",
+      "merchant": "Synthetic Rent",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Housing",
+      "bankKind": "expense",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 75000
+      },
+      "direction": "outflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-salary",
+      "transactionId": "qa-salary",
+      "merchant": "Synthetic Salary",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Income",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 250000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    }
+  ],
+  "modifiedDietz": {
+    "value": 0,
+    "available": true,
+    "reason": null
+  },
+  "asOf": "2026-11-03",
+  "accounts": [
+    {
+      "id": "outside",
+      "name": "Outside portfolio",
+      "kind": "manual_asset",
+      "mode": "aggregate",
+      "currency": "CAD",
+      "linkedBankAccountId": null,
+      "active": true,
+      "amountMinor": null,
+      "revision": 4,
+      "valueMinor": 10000,
+      "valueState": "fresh",
+      "valueObservedAt": "2026-11-03"
+    },
+    {
+      "id": "portfolio",
+      "name": "Investment capital QA",
+      "kind": "brokerage",
+      "mode": "aggregate",
+      "currency": "CAD",
+      "linkedBankAccountId": null,
+      "active": true,
+      "amountMinor": null,
+      "revision": 1,
+      "valueMinor": 20000,
+      "valueState": "fresh",
+      "valueObservedAt": "2026-11-03"
+    },
+    {
+      "id": "unknown-gain",
+      "name": "Historical gain QA",
+      "kind": "brokerage",
+      "mode": "holdings",
+      "currency": "CAD",
+      "linkedBankAccountId": null,
+      "active": true,
+      "amountMinor": null,
+      "revision": 8
+    }
+  ],
+  "positions": [
+    {
+      "accountId": "unknown-gain",
+      "instrument": {
+        "exchange": "TSX",
+        "ticker": "RY",
+        "type": "stock",
+        "currency": "CAD"
+      },
+      "quantity": "0",
+      "costBasisMinor": 0,
+      "basisKnown": true,
+      "realizedGainMinor": null,
+      "valuation": {
+        "id": "opening-market",
+        "accountId": "unknown-gain",
+        "instrument": {
+          "exchange": "TSX",
+          "ticker": "RY",
+          "type": "stock",
+          "currency": "CAD"
+        },
+        "asOf": "2026-11-01",
+        "priceMinor": 120,
+        "source": "manual",
+        "provider": null
+      },
+      "marketValueMinor": 0,
+      "unrealizedGainMinor": 0
+    }
+  ],
+  "cash": [
+    {
+      "accountId": "unknown-gain",
+      "currency": "CAD",
+      "amountMinor": 120
+    }
+  ],
+  "totalByCurrency": {
+    "CAD": 30120
+  },
+  "totalStatusByCurrency": {
+    "CAD": "complete"
+  },
+  "balanceStatuses": [
+    {
+      "accountId": "outside",
+      "state": "fresh",
+      "observedAt": "2026-11-03"
+    },
+    {
+      "accountId": "portfolio",
+      "state": "fresh",
+      "observedAt": "2026-11-03"
+    }
+  ],
+  "allocations": [
+    {
+      "currency": "CAD",
+      "accountId": "portfolio",
+      "kind": "aggregate",
+      "instrument": null,
+      "valueMinor": 20000,
+      "available": true,
+      "share": 0.9940357852882704
+    },
+    {
+      "currency": "CAD",
+      "accountId": "unknown-gain",
+      "kind": "cash",
+      "instrument": null,
+      "valueMinor": 120,
+      "available": true,
+      "share": 0.005964214711729622
+    }
+  ],
+  "cashFlowTotals": {
+    "CAD": {
+      "inflowMinor": 251000,
+      "outflowMinor": 75500,
+      "netMinor": 175500,
+      "incomeMinor": 250000,
+      "expenseMinor": 75000,
+      "refundMinor": 1000,
+      "feeMinor": 500
+    }
+  },
+  "householdCashFlows": [
+    {
+      "sourceId": "qa-fee",
+      "transactionId": "qa-fee",
+      "merchant": "Synthetic Fee",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Bank fees",
+      "bankKind": "fee",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 500
+      },
+      "direction": "outflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-refund",
+      "transactionId": "qa-refund",
+      "merchant": "Synthetic Refund",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Housing",
+      "bankKind": "refund",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 1000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-rent",
+      "transactionId": "qa-rent",
+      "merchant": "Synthetic Rent",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Housing",
+      "bankKind": "expense",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 75000
+      },
+      "direction": "outflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    },
+    {
+      "sourceId": "qa-salary",
+      "transactionId": "qa-salary",
+      "merchant": "Synthetic Salary",
+      "accountName": "Synthetic chequing",
+      "date": "2026-11-01",
+      "accountId": "qa-cash",
+      "category": "Income",
+      "bankKind": "income",
+      "source": "manual",
+      "status": "confirmed",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 250000
+      },
+      "direction": "inflow",
+      "kind": "bank",
+      "linkedWealthSourceId": null,
+      "classification": "ambiguous",
+      "includedInPerformance": false,
+      "reason": "External flow requires an explicit contribution or withdrawal link."
+    }
+  ],
+  "investmentCashFlows": [
+    {
+      "sourceId": "boundary-capital",
+      "date": "2026-11-02",
+      "accountId": "portfolio",
+      "money": {
+        "currency": "CAD",
+        "amountMinor": 10000
+      },
+      "direction": "inflow",
+      "kind": "contribution",
+      "linkedWealthSourceId": "boundary-capital",
+      "classification": "external_contribution",
+      "includedInPerformance": true,
+      "reason": "Explicitly linked external capital flow."
+    }
+  ],
+  "investmentCashFlowTotals": {
+    "CAD": {
+      "inflowMinor": 10000,
+      "outflowMinor": 0,
+      "netMinor": 10000,
+      "incomeMinor": 0,
+      "expenseMinor": 0,
+      "refundMinor": 0,
+      "feeMinor": 0
+    }
+  },
+  "modifiedDietzByCurrency": {
+    "CAD": {
+      "value": 0,
+      "available": true,
+      "reason": null
+    }
+  },
+  "history": [
+    {
+      "date": "2026-11-01",
+      "totals": {
+        "CAD": 30120
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    },
+    {
+      "date": "2026-11-02",
+      "totals": {
+        "CAD": 30170
+      },
+      "convertedCadMinor": null,
+      "complete": false,
+      "stale": false,
+      "missingData": [
+        "account:outside:observation",
+        "account:portfolio:observation",
+        "position:unknown-gain:TSX:RY:stock:CAD:observation"
+      ]
+    },
+    {
+      "date": "2026-11-03",
+      "totals": {
+        "CAD": 30120
+      },
+      "convertedCadMinor": null,
+      "complete": true,
+      "stale": false,
+      "missingData": []
+    }
+  ],
+  "revision": 13,
+  "stale": false,
+  "missingData": [],
+  "fx": {
+    "convertedCadMinor": null,
+    "complete": false,
+    "unavailable": [],
+    "effectiveDate": null,
+    "provider": null,
+    "baseCurrency": null,
+    "rates": {}
+  }
+}

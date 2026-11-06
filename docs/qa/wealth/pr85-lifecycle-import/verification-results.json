@@ -1,0 +1,26 @@
+{
+  "repository": {
+    "files": 223,
+    "tests": 1696,
+    "failures": 0,
+    "durationSeconds": 536.44
+  },
+  "nativeSharedUnit": {
+    "tests": 378,
+    "failures": 0,
+    "errors": 0
+  },
+  "instrumentation": {
+    "tests": 16,
+    "failures": 0,
+    "durationSeconds": 23.398,
+    "appHeapGrowthLimit": "192m"
+  },
+  "nativeBuild": "lintDebug, testDebugUnitTest, sharedCore:testAndroidHostTest, assembleDebug, assembleDebugAndroidTest, assembleRelease: BUILD SUCCESSFUL in 3m 44s",
+  "web": "typecheck and production build passed; existing large-chunk advisory",
+  "mobile": "typecheck passed",
+  "apkSha256": "e547d2353a71b437d927f29720b743a1021871d710b18e8417284d311272f1cf",
+  "embeddedBundleSha256": "58fd8108af4b1e730e5a95869819c0cf46cb5cb380e17a5e150d71d71b1be0c2",
+  "timeoutPresentInPackagedBundle": true,
+  "codeScenePerFile": "13 supported files, all 10.0"
+}

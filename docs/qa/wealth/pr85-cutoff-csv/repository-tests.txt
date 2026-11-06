@@ -1,0 +1,9 @@
+Fresh complete repository regression run (2026-11-06)
+Command: npm test -- --reporter=verbose
+Test Files: 221 passed (221)
+Tests: 1678 passed (1678)
+Start: 00:52:33
+Duration: 907.61 seconds
+Exit code: 0
+Emulator and QA service stopped before this run.
+The earlier Windows-memory-aborted attempt is not counted as passing.

@@ -1,0 +1,7 @@
+{
+  "results": [
+    {
+      "payload_json": "{\"fromMode\":\"holdings\",\"toMode\":\"aggregate\",\"effectiveDate\":\"2026-11-02\",\"openingCashMinor\":null,\"openingValueMinor\":10000,\"openingPositions\":[]}"
+    }
+  ]
+}

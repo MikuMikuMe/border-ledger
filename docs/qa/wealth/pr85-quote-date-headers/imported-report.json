@@ -1,0 +1,37 @@
+{
+  "totalByCurrency": {
+    "CAD": 5000
+  },
+  "positions": [
+    {
+      "accountId": "custom-headers",
+      "instrument": {
+        "exchange": "TSX",
+        "ticker": "SHOP",
+        "type": "stock",
+        "currency": "CAD"
+      },
+      "quantity": "0.5",
+      "costBasisMinor": 10000,
+      "basisKnown": true,
+      "realizedGainMinor": 0,
+      "valuation": {
+        "id": "custom-price",
+        "accountId": "custom-headers",
+        "instrument": {
+          "exchange": "TSX",
+          "ticker": "SHOP",
+          "type": "stock",
+          "currency": "CAD"
+        },
+        "asOf": "2026-11-02",
+        "priceMinor": 10000,
+        "source": "manual",
+        "provider": null
+      },
+      "marketValueMinor": 5000,
+      "unrealizedGainMinor": -5000
+    }
+  ],
+  "revision": 1
+}

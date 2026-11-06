@@ -58,6 +58,15 @@ class BridgeOperationJournalTest {
         assertEquals("revision_conflict",result.status)
         assertNull(result.resultId)
     }
+    @Test fun wealthRejectionReceiptPreservesTheServerReason()=runTest {
+        val result=BridgeOperationJournal(MemoryRecords()).start(BridgeOperationRequest("wealth-guard-1","wealth_account","p","owner")) {
+            throw com.lofuyu.borderledger.wealth.WealthRequestRejected("Only brokerage accounts support holdings plus cash representation.")
+        }
+        assertEquals("rejected", result.status)
+        val receipt = JSONObject(requireNotNull(result.resultId))
+        assertEquals("request_rejected", receipt.getString("code"))
+        assertEquals("Only brokerage accounts support holdings plus cash representation.", receipt.getString("reason"))
+    }
     @Test fun aNewJsRequestIdCannotRetryAnUnresolvedIdenticalWrite() = runTest {
         val disk=MemoryRecords(); var writes=0
         BridgeOperationJournal(disk).start(BridgeOperationRequest("original-1","review","payload","owner")) { writes++; error("timeout") }

@@ -1,0 +1,75 @@
+
+com.lofuyu.borderledger.wealth.WealthCsvPayloadTest:...
+com.lofuyu.borderledger.wealth.WealthCsvResponseTest:
+Error in expandedPreviewResponseSurvivesTransportAndEncryptedReopen(com.lofuyu.borderledger.wealth.WealthCsvResponseTest):
+Unavailable
+	at com.lofuyu.borderledger.accounts.UrlConnectionAccountHttpTransport.<clinit>(AccountRepository.kt:378)
+	at com.lofuyu.borderledger.accounts.HttpWorkerAccountConnectionGateway.<init>(AccountRepository.kt:210)
+	at com.lofuyu.borderledger.AppContainer.<init>(AppContainer.kt:170)
+	at com.lofuyu.borderledger.AppContainer.<init>(AppContainer.kt:59)
+	at com.lofuyu.borderledger.BorderLedgerApplication.onCreate(BorderLedgerApplication.kt:33)
+	at android.app.Instrumentation.callApplicationOnCreate(Instrumentation.java:1386)
+	at androidx.test.runner.MonitoringInstrumentation.callApplicationOnCreate(MonitoringInstrumentation.java:470)
+	at android.app.ActivityThread.handleBindApplication(ActivityThread.java:7504)
+	at android.app.ActivityThread.-$$Nest$mhandleBindApplication(Unknown Source:0)
+	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2416)
+	at android.os.Handler.dispatchMessage(Handler.java:107)
+	at android.os.Looper.loopOnce(Looper.java:232)
+	at android.os.Looper.loop(Looper.java:317)
+	at android.app.ActivityThread.main(ActivityThread.java:8705)
+	at java.lang.reflect.Method.invoke(Native Method)
+	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:580)
+	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:886)
+
+Error in previewEncryptionCanReopenAboveTheOldEnvelopeLimit(com.lofuyu.borderledger.wealth.WealthCsvResponseTest):
+com.lofuyu.borderledger.local.SecureStorageException: Encrypted storage record is too large.
+	at com.lofuyu.borderledger.local.FileEncryptedRecordStore.write(EncryptedRecordStore.kt:47)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest$previewEncryptionCanReopenAboveTheOldEnvelopeLimit$1.invokeSuspend(WealthCsvResponseTest.kt:56)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.previewEncryptionCanReopenAboveTheOldEnvelopeLimit(WealthCsvResponseTest.kt:52)
+...
+
+Time: 10.746
+There were 2 failures:
+1) expandedPreviewResponseSurvivesTransportAndEncryptedReopen(com.lofuyu.borderledger.wealth.WealthCsvResponseTest)
+Unavailable
+	at com.lofuyu.borderledger.accounts.UrlConnectionAccountHttpTransport.<clinit>(AccountRepository.kt:378)
+	at com.lofuyu.borderledger.accounts.HttpWorkerAccountConnectionGateway.<init>(AccountRepository.kt:210)
+	at com.lofuyu.borderledger.AppContainer.<init>(AppContainer.kt:170)
+	at com.lofuyu.borderledger.AppContainer.<init>(AppContainer.kt:59)
+	at com.lofuyu.borderledger.BorderLedgerApplication.onCreate(BorderLedgerApplication.kt:33)
+	at android.app.Instrumentation.callApplicationOnCreate(Instrumentation.java:1386)
+	at androidx.test.runner.MonitoringInstrumentation.callApplicationOnCreate(MonitoringInstrumentation.java:470)
+	at android.app.ActivityThread.handleBindApplication(ActivityThread.java:7504)
+	at android.app.ActivityThread.-$$Nest$mhandleBindApplication(Unknown Source:0)
+	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2416)
+	at android.os.Handler.dispatchMessage(Handler.java:107)
+	at android.os.Looper.loopOnce(Looper.java:232)
+	at android.os.Looper.loop(Looper.java:317)
+	at android.app.ActivityThread.main(ActivityThread.java:8705)
+	at java.lang.reflect.Method.invoke(Native Method)
+	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:580)
+	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:886)
+2) previewEncryptionCanReopenAboveTheOldEnvelopeLimit(com.lofuyu.borderledger.wealth.WealthCsvResponseTest)
+com.lofuyu.borderledger.local.SecureStorageException: Encrypted storage record is too large.
+	at com.lofuyu.borderledger.local.FileEncryptedRecordStore.write(EncryptedRecordStore.kt:47)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest$previewEncryptionCanReopenAboveTheOldEnvelopeLimit$1.invokeSuspend(WealthCsvResponseTest.kt:56)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.previewEncryptionCanReopenAboveTheOldEnvelopeLimit(WealthCsvResponseTest.kt:52)
+
+FAILURES!!!
+Tests run: 8,  Failures: 2

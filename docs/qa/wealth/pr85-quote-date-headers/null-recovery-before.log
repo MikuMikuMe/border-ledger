@@ -1,0 +1,33 @@
+
+ RUN  v5.0.5 D:/Projects/border-ledger-sure-wealth
+
+ ❯ tests/wealth-csv-payload.test.ts (10 tests | 1 failed | 9 skipped) 47ms
+   ❯ Wealth CSV HTTP payload boundaries (10)
+     × persists an explicit unmapped field without restoring its canonical source 46ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/wealth-csv-payload.test.ts > Wealth CSV HTTP payload boundaries > persists an explicit unmapped field without restoring its canonical source
+AssertionError: expected undefined to be null
+
+- Expected:
+null
+
++ Received:
+undefined
+
+ ❯ tests/wealth-csv-payload.test.ts:42:36
+     40|     expect(first.rows[0].event?.memo).toBeFalsy();
+     41|     const recovered = await createWealthImportPreview(f.db, context, {…
+     42|     expect(recovered.mapping.memo).toBeNull();
+       |                                    ^
+     43|     const retry = await createWealthImportPreview(f.db, context, { csv…
+     44|     expect(retry.mapping.memo).toBeNull();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 9 skipped (10)
+   Start at  02:39:03
+   Duration  323ms (transform 46%, import 29%, tests 23%, worker 2%)
