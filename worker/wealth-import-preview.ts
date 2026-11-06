@@ -20,12 +20,17 @@ export async function readWealthPreview(db: D1Database, context: FinancialContex
     sourceHeaders: storedMetadata.metadata.sourceHeaders,
     canonicalHeaders: storedMetadata.metadata.canonicalHeaders,
     mapping: storedMetadata.metadata.mapping,
-    errors: [...result.filter((row) => row.error), ...storedMetadata.validationErrors.map((error) => ({ rowId: '__portfolio__', rowIndex: -1, error }))],
-    duplicates: result.filter((row) => row.duplicateOf),
+    ...previewDiagnostics(result, storedMetadata.validationErrors),
     validationErrors: storedMetadata.validationErrors,
   };
 }
 
+export function previewDiagnostics(rows: readonly CsvPreviewRow[], validationErrors: readonly string[]) {
+  return {
+    errors: [...rows.filter((row) => row.error).map(({ rowId, rowIndex, error }) => ({ rowId, rowIndex, error })), ...validationErrors.map((error) => ({ rowId: '__portfolio__', rowIndex: -1, error }))],
+    duplicates: rows.filter((row) => row.duplicateOf).map(({ rowId, rowIndex, duplicateOf }) => ({ rowId, rowIndex, duplicateOf })),
+  };
+}
 function materializePreviewRow(row: ImportReadRow, parseJson: PreviewReadServices['parseJson']) {
   const record = row.payload_json === 'null' ? null : parseJson<WealthImportRecord>(row.payload_json, 'import row');
   const error = row.error_json ? parseJson<{ message: string }>(row.error_json, 'import error').message : null;

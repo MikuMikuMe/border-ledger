@@ -82,7 +82,7 @@ data class WealthWriteCommand(val operationId: String, val action: String, val p
     init {
         require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
         require(action in ALLOWED_ACTIONS)
-        require(payload.toByteArray(Charsets.UTF_8).size <= MAX_PAYLOAD_BYTES)
+        require(payload.toByteArray(Charsets.UTF_8).size <= if (actionType == WealthAction.CSV_PREVIEW) MAX_CSV_PREVIEW_PAYLOAD_BYTES else MAX_PAYLOAD_BYTES)
         JSONObject(payload)
     }
 
@@ -92,6 +92,8 @@ data class WealthWriteCommand(val operationId: String, val action: String, val p
 
     private companion object {
         const val MAX_PAYLOAD_BYTES = 256 * 1024
+        // A 2 MiB CSV can expand sixfold in JSON; leave bounded mapping/envelope space.
+        const val MAX_CSV_PREVIEW_PAYLOAD_BYTES = 6 * 2 * 1024 * 1024 + MAX_PAYLOAD_BYTES
         val ALLOWED_ACTIONS = WealthAction.entries.map { it.wireValue }.toSet()
     }
 }

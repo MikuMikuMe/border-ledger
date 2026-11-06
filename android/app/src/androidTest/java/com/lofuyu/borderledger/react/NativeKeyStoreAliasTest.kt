@@ -40,8 +40,22 @@ class NativeKeyStoreAliasTest {
         assertEquals(12, encrypted[1].toInt())
     }
 
+    @Test fun maximumRecordNameFitsTheAliasPrefixWithoutRenaming() {
+        val alias = "border_ledger_v1_" + "x".repeat(96)
+        val encrypted = vault.encrypt(alias, value, aad)
+        assertArrayEquals(value, vault.decrypt(alias, encrypted, aad))
+    }
+    @Test fun truncatedAndOversizedCiphertextMetadataRemainRejected() {
+        val alias = "border_ledger_v1_preview_bounds"
+        val encrypted = vault.encrypt(alias, value, aad)
+        val oversized = encrypted.copyOf().also { ByteBuffer.wrap(it, 14, 4).putInt(Int.MAX_VALUE) }
+        for (invalid in listOf(encrypted.copyOf(encrypted.size - 1), oversized)) {
+            assertThrows(SecureStorageException::class.java) { vault.decrypt(alias, invalid, aad) }
+        }
+    }
+
     @Test fun unrelatedInvalidAliasNamesRemainRejected() {
-        for (alias in listOf("", "x".repeat(98), "task8/invalid", "task8 invalid")) {
+        for (alias in listOf("", "x".repeat(114), "task8/invalid", "task8 invalid")) {
             try { vault.encrypt(alias, value, aad); fail("Invalid alias accepted") }
             catch (_: SecureStorageException) { /* No invalid alias reaches the Keystore. */ }
         }

@@ -59,17 +59,24 @@ class AndroidKeyStoreVault(
             if (version != ENVELOPE_VERSION || ivSize != GCM_IV_BYTES) throw SecureStorageException("Encrypted storage format is not supported.")
             val iv = ByteArray(ivSize).also(input::readFully)
             val ciphertextSize = input.readInt()
-            if (ciphertextSize <= 0 || ciphertextSize > MAX_ENVELOPE_BYTES) throw SecureStorageException("Encrypted storage payload is not valid.")
-            val ciphertext = ByteArray(ciphertextSize).also(input::readFully)
+            val ciphertextOffset = validatedCiphertextOffset(input, envelope.size, ciphertextSize)
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, keyFor(alias), GCMParameterSpec(GCM_TAG_BITS, iv))
             cipher.updateAAD(associatedData)
-            cipher.doFinal(ciphertext)
+            cipher.doFinal(envelope, ciphertextOffset, ciphertextSize)
         } catch (error: SecureStorageException) {
             throw error
         } catch (error: Exception) {
             throw SecureStorageException("Encrypted storage could not be opened.", error)
         }
+    }
+
+    private fun validatedCiphertextOffset(input: DataInputStream, envelopeSize: Int, ciphertextSize: Int): Int {
+        val remaining = input.available()
+        if (ciphertextSize !in 1..minOf(MAX_ENVELOPE_BYTES, remaining)) {
+            throw SecureStorageException("Encrypted storage payload is not valid.")
+        }
+        return envelopeSize - remaining
     }
 
     private fun keyFor(alias: String): SecretKey {
@@ -103,9 +110,10 @@ class AndroidKeyStoreVault(
         const val GCM_IV_BYTES = 12
         const val GCM_TAG_BITS = 128
         const val ENVELOPE_VERSION = 1
-        const val MAX_ENVELOPE_BYTES = 16 * 1024 * 1024
-        // Existing RN journal aliases are 17 + 16 + 64 characters. Do not rename
-        // those persisted keys or broaden the accepted alphabet to fit them.
-        val SAFE_ALIAS = Regex("[A-Za-z0-9._-]{1,97}")
+        // The largest permitted record is a 32 MiB preview, followed by its GCM tag.
+        const val MAX_ENVELOPE_BYTES = 32 * 1024 * 1024 + GCM_TAG_BITS / 8
+        // Record names allow 96 characters plus the 17-character alias prefix.
+        // Preserve persisted names and the existing accepted alphabet.
+        val SAFE_ALIAS = Regex("[A-Za-z0-9._-]{1,113}")
     }
 }

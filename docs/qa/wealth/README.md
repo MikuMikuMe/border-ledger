@@ -1,5 +1,7 @@
 # Wealth verification record
 
+Follow-up: [historical cash flows and native CSV boundaries](pr85-cutoff-csv/README.md), 2026-11-06. Native boundary checks pass; large-file fixture confirmation remains unverified.
+
 Newest: [corrected transition export and collision validation](pr85-transition-export/README.md), verified 2026-11-05.
 
 Newest: [provider quote identity and aggregate transfer validation](pr85-quotes-validation/README.md), verified 2026-11-05.

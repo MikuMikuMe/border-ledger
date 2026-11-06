@@ -234,7 +234,8 @@ async function handleEventWrite(route: WealthHttpRouteContext): Promise<Response
 }
 
 async function handleImportPreview(route: WealthHttpRouteContext): Promise<Response> {
-  const body = bodyRecord(await readJsonBody<unknown>(route.request, 2 * 1024 * 1024));
+  // JSON can encode each CSV byte as six bytes, plus bounded mapping/envelope overhead.
+  const body = bodyRecord(await readJsonBody<unknown>(route.request, 6 * 2 * 1024 * 1024 + 256 * 1024));
   if (typeof body.csv !== 'string') throw new WealthStoreError('invalid_request', 'The CSV body is required.');
   return json(await createWealthImportPreview(route.db, route.financialContext, { csv: body.csv, mapping: body.mapping, operationId: operationId(route.request, body) }), { status: 201 });
 }

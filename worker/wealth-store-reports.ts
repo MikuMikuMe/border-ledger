@@ -507,7 +507,7 @@ export async function readWealthReportProjection(input: WealthReportProjectionIn
   const history = await buildWealthHistory(db, accounts, transitions, events, valuations, balances, range.asOf, reportingCurrency, dependencies, services);
   const snapshot = await domainSnapshot(accounts, transitions, events, valuations, balances, range.asOf, services);
   const records = await cashFlowRecords(db, context, effectiveEvents, { includeTransfers: true });
-  const filtered = records.filter((record) => (!range.from || record.date >= range.from) && (!range.to || record.date <= range.to));
+  const filtered = records.filter((record) => record.date <= range.asOf && (!range.from || record.date >= range.from) && (!range.to || record.date <= range.to));
   const investmentAccounts = accounts.filter((account) => account.kind === 'brokerage');
   const investmentAccountIds = new Set(investmentAccounts.map((account) => account.id));
   // Cash-flow classification and Dietz use the complete resolved portfolio

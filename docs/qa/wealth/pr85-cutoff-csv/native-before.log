@@ -1,0 +1,17 @@
+
+com.lofuyu.borderledger.wealth.WealthCsvPayloadTest:
+Error in fullSizeEscapedCsvSurvivesPreviewAndRemapCommands(com.lofuyu.borderledger.wealth.WealthCsvPayloadTest):
+java.lang.IllegalArgumentException: Failed requirement.
+	at com.lofuyu.borderledger.wealth.WealthWriteCommand.<init>(WealthRepository.kt:85)
+	at com.lofuyu.borderledger.wealth.WealthCsvPayloadTest.fullSizeEscapedCsvSurvivesPreviewAndRemapCommands(WealthCsvPayloadTest.kt:18)
+..
+
+Time: 34.575
+There was 1 failure:
+1) fullSizeEscapedCsvSurvivesPreviewAndRemapCommands(com.lofuyu.borderledger.wealth.WealthCsvPayloadTest)
+java.lang.IllegalArgumentException: Failed requirement.
+	at com.lofuyu.borderledger.wealth.WealthWriteCommand.<init>(WealthRepository.kt:85)
+	at com.lofuyu.borderledger.wealth.WealthCsvPayloadTest.fullSizeEscapedCsvSurvivesPreviewAndRemapCommands(WealthCsvPayloadTest.kt:18)
+
+FAILURES!!!
+Tests run: 3,  Failures: 1

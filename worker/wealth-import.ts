@@ -36,7 +36,7 @@ import {
   recordMap,
   type RecordIdentityTools,
 } from './wealth-import-records';
-import { readWealthPreview, previewStatements } from './wealth-import-preview';
+import { previewDiagnostics, readWealthPreview, previewStatements } from './wealth-import-preview';
 import { validateImportPortfolio } from './wealth-import-validation';
 import { readImportModeTransitions } from './wealth-import-transitions';
 import { WEALTH_ACCOUNT_VALUE_KEY } from './wealth-import-types';
@@ -159,8 +159,7 @@ async function persistImportPreview(db: D1Database, context: FinancialContext, i
     sourceHeaders: input.mapping.sourceHeaders,
     canonicalHeaders: input.mapping.canonicalHeaders,
     mapping: input.mapping.mapping,
-    errors: [...input.rows.filter((row) => row.error), ...input.validationErrors.map((error) => ({ rowId: '__portfolio__', rowIndex: -1, error }))],
-    duplicates: input.rows.filter((row) => row.duplicateOf),
+    ...previewDiagnostics(input.rows, input.validationErrors),
     validationErrors: input.validationErrors,
   };
 }

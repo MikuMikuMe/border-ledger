@@ -6,6 +6,8 @@ import com.lofuyu.borderledger.wealth.WealthWriteCommand
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import org.json.JSONObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Owner-fenced SAF operations for Wealth CSV import, template, and export. */
 internal class WealthExternalDocumentOperations(private val runtime: NativeServiceRuntime) {
@@ -13,10 +15,12 @@ internal class WealthExternalDocumentOperations(private val runtime: NativeServi
 
     fun changeTopic(kind: String): String = if (kind.startsWith("wealth_")) "wealth" else "files"
 
-    suspend fun process(handoff: HandoffContext, uri: Uri): String = when (WealthDocumentKind.from(handoff.value.getString("kind"))) {
-        WealthDocumentKind.EXPORT_PICKER -> export(handoff, uri)
-        WealthDocumentKind.TEMPLATE_PICKER -> exportTemplate(handoff, uri)
-        WealthDocumentKind.IMPORT_PICKER -> preview(handoff, uri)
+    suspend fun process(handoff: HandoffContext, uri: Uri): String = withContext(Dispatchers.IO) {
+        when (WealthDocumentKind.from(handoff.value.getString("kind"))) {
+            WealthDocumentKind.EXPORT_PICKER -> export(handoff, uri)
+            WealthDocumentKind.TEMPLATE_PICKER -> exportTemplate(handoff, uri)
+            WealthDocumentKind.IMPORT_PICKER -> preview(handoff, uri)
+        }
     }
 
     suspend fun preview(handoff: HandoffContext, uri: Uri): String {
@@ -69,16 +73,16 @@ internal class WealthExternalDocumentOperations(private val runtime: NativeServi
         return records.read(previewKey(key))?.decodeToString()
     }
 
-    suspend fun readCompletedPreview(operation: WealthOperationId): String? {
-        if (completedCsvOperation(operation) == null) return null
-        return readPreview(operation)
+    suspend fun readCompletedPreview(operation: WealthOperationId): String? = withContext(Dispatchers.IO) {
+        if (completedCsvOperation(operation) == null) return@withContext null
+        readPreview(operation)
     }
 
-    suspend fun remapCompleted(request: WealthCsvRemapRequest): String {
+    suspend fun remapCompleted(request: WealthCsvRemapRequest): String = withContext(Dispatchers.IO) {
         check(completedCsvOperation(request.sourceOperation) != null) {
             "The selected Wealth CSV is not ready for remapping; choose it again."
         }
-        return remap(request)
+        remap(request)
     }
 
     suspend fun export(handoff: HandoffContext, destination: Uri): String {

@@ -64,6 +64,26 @@ async function transferredSplitFixture() {
 const bankAliases = ['tx-1', 'source-row-1', 'identity-1', 'provider-1', 'pending-1', 'bank-source-1', 'bank-row-1', 'event-1', 'reference-1'];
 
 describe('PR 85 bank links and performance review', () => {
+  it.each([
+    { asOf: '2026-01-01', to: undefined },
+    { asOf: '2026-01-01', to: '2026-01-05' },
+    { asOf: '2026-01-02', to: '2026-01-01' },
+  ])('excludes bank cash flows after the effective report cutoff ($asOf, $to)', async ({ asOf, to }) => {
+    const f = await fixture();
+    const result = await readWealthReport(f.db, scope, { asOf, to, from: '2026-01-01' });
+    expect(result.householdCashFlows).toEqual([]);
+    expect(result.cashFlows).toEqual([]);
+    expect(result.cashFlowTotals).toEqual({});
+    expect(result.investmentCashFlows).toEqual([]);
+  });
+
+  it('includes bank cash flows on the as-of date within the requested period', async () => {
+    const f = await fixture();
+    const result = await readWealthReport(f.db, scope, { asOf: '2026-01-02', from: '2026-01-02', to: '2026-01-05' });
+    expect(result.householdCashFlows).toEqual([expect.objectContaining({ transactionId: 'tx-1', date: '2026-01-02' })]);
+    expect(result.cashFlowTotals.CAD).toMatchObject({ incomeMinor: 100 });
+  });
+
   it.each(bankAliases.map(alias => ({ alias })))('recognizes $alias as the same bank transaction and counts the contribution once', async ({ alias }) => {
     const f = await fixture();
     await appendWealthEvent(f.db, scope, { id: 'capital', sourceId: 'capital', kind: 'contribution', date: '2026-01-02', accountId: 'brokerage', money: money(100), linkedBankSourceId: alias });

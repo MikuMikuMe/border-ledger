@@ -43,7 +43,11 @@ class FileEncryptedRecordStore(
     }
 
     override suspend fun write(record: String, value: ByteArray) = synchronized(this) {
-        val maximum = if (record == LedgerRecord.CAPTURE_INTAKE || record.startsWith("${LedgerRecord.CAPTURE_INTAKE}_")) MAX_CAPTURE_INTAKE_RECORD_BYTES else MAX_RECORD_BYTES
+        val maximum = when {
+            record.startsWith("rn_wealth_preview_v1_") -> MAX_WEALTH_PREVIEW_RECORD_BYTES
+            record == LedgerRecord.CAPTURE_INTAKE || record.startsWith("${LedgerRecord.CAPTURE_INTAKE}_") -> MAX_CAPTURE_INTAKE_RECORD_BYTES
+            else -> MAX_RECORD_BYTES
+        }
         if (value.size > maximum) throw SecureStorageException("Encrypted storage record is too large.")
         ensureDirectory()
         val encrypted = vault.encrypt(aliasFor(record), value, record.encodeToByteArray())
@@ -81,6 +85,7 @@ class FileEncryptedRecordStore(
 
     private companion object {
         const val MAX_RECORD_BYTES = 2 * 1024 * 1024
+        const val MAX_WEALTH_PREVIEW_RECORD_BYTES = 32 * 1024 * 1024
         // The bounded 5,000-event capture cap is stored as one encrypted
         // atomic record so observation/event/queue state cannot diverge.
         const val MAX_CAPTURE_INTAKE_RECORD_BYTES = 16 * 1024 * 1024

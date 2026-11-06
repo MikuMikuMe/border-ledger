@@ -23,7 +23,7 @@ internal class UrlWealthHttpTransport(private val readTimeoutMillis: Int = 15_00
             request.body?.let { bytes -> connection.outputStream.use { it.write(bytes) } }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            WealthHttpResponse(status, readResponse(stream))
+            WealthHttpResponse(status, readResponse(stream, responseByteLimit(request.method, connection.url.path)))
         } catch (failure: TransportFailure) { throw failure }
         catch (_: IOException) { throw TransportFailure.Offline }
         finally { connection.disconnect() }
@@ -40,17 +40,22 @@ internal class UrlWealthHttpTransport(private val readTimeoutMillis: Int = 15_00
             if (request.body != null) doOutput = true
         }
 
-    private fun readResponse(input: InputStream?): String = input?.use { stream ->
+    private fun responseByteLimit(method: String, path: String): Int =
+        if (method == "POST" && path == "$WEALTH_ROOT/imports/preview") MAX_PREVIEW_RESPONSE_BYTES else MAX_RESPONSE_BYTES
+    private fun readResponse(input: InputStream?, maximum: Int): String = input?.use { stream ->
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(8192)
         while (true) {
             val count = stream.read(buffer)
             if (count < 0) break
-            if (output.size() + count > MAX_RESPONSE_BYTES) throw TransportFailure.Unavailable
+            if (output.size() + count > maximum) throw TransportFailure.Unavailable
             output.write(buffer, 0, count)
         }
         output.toString(Charsets.UTF_8.name())
     } ?: ""
 
-    private companion object { const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024 }
+    private companion object {
+        const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+        const val MAX_PREVIEW_RESPONSE_BYTES = 32 * 1024 * 1024
+    }
 }

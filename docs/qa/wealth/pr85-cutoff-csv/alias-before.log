@@ -1,0 +1,39 @@
+
+com.lofuyu.borderledger.wealth.WealthCsvResponseTest:
+Error in fullSizeSourceCsvSurvivesItsRealHashedRecordName(com.lofuyu.borderledger.wealth.WealthCsvResponseTest):
+com.lofuyu.borderledger.local.SecureStorageException: Encrypted storage key name is not valid.
+	at com.lofuyu.borderledger.local.AndroidKeyStoreVault.keyFor(KeyStoreVault.kt:76)
+	at com.lofuyu.borderledger.local.AndroidKeyStoreVault.encrypt(KeyStoreVault.kt:29)
+	at com.lofuyu.borderledger.local.FileEncryptedRecordStore.write(EncryptedRecordStore.kt:53)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest$fullSizeSourceCsvSurvivesItsRealHashedRecordName$1.invokeSuspend(WealthCsvResponseTest.kt:87)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.fullSizeSourceCsvSurvivesItsRealHashedRecordName(WealthCsvResponseTest.kt:83)
+
+
+Time: 0.932
+There was 1 failure:
+1) fullSizeSourceCsvSurvivesItsRealHashedRecordName(com.lofuyu.borderledger.wealth.WealthCsvResponseTest)
+com.lofuyu.borderledger.local.SecureStorageException: Encrypted storage key name is not valid.
+	at com.lofuyu.borderledger.local.AndroidKeyStoreVault.keyFor(KeyStoreVault.kt:76)
+	at com.lofuyu.borderledger.local.AndroidKeyStoreVault.encrypt(KeyStoreVault.kt:29)
+	at com.lofuyu.borderledger.local.FileEncryptedRecordStore.write(EncryptedRecordStore.kt:53)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest$fullSizeSourceCsvSurvivesItsRealHashedRecordName$1.invokeSuspend(WealthCsvResponseTest.kt:87)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.fullSizeSourceCsvSurvivesItsRealHashedRecordName(WealthCsvResponseTest.kt:83)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1

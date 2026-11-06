@@ -1,0 +1,53 @@
+
+com.lofuyu.borderledger.wealth.WealthCsvPayloadTest:...
+com.lofuyu.borderledger.wealth.WealthCsvResponseTest:..
+Error in previewEncryptionCanReopenAtThePlaintextLimit(com.lofuyu.borderledger.wealth.WealthCsvResponseTest):
+java.lang.OutOfMemoryError: Failed to allocate a 33554448 byte allocation with 25165824 free bytes and 29MB until OOM, target footprint 195638896, growth limit 201326592
+	at java.util.Arrays.copyOf(Arrays.java:3585)
+	at java.io.ByteArrayOutputStream.toByteArray(ByteArrayOutputStream.java:211)
+	at android.security.keystore2.AndroidKeyStoreAuthenticatedAESCipherSpi$BufferAllOutputUntilDoFinalStreamer.doFinal(AndroidKeyStoreAuthenticatedAESCipherSpi.java:404)
+	at android.security.keystore2.AndroidKeyStoreCipherSpiBase.engineDoFinal(AndroidKeyStoreCipherSpiBase.java:624)
+	at javax.crypto.Cipher.doFinal(Cipher.java:2074)
+	at com.lofuyu.borderledger.local.AndroidKeyStoreVault.decrypt(KeyStoreVault.kt:67)
+	at com.lofuyu.borderledger.local.FileEncryptedRecordStore.read(EncryptedRecordStore.kt:37)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.assertStoredRoundTrip(WealthCsvResponseTest.kt:76)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.access$assertStoredRoundTrip(WealthCsvResponseTest.kt:21)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest$previewEncryptionCanReopenAtThePlaintextLimit$1.invokeSuspend(WealthCsvResponseTest.kt:47)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.previewEncryptionCanReopenAtThePlaintextLimit(WealthCsvResponseTest.kt:46)
+.....
+com.lofuyu.borderledger.react.NativeKeyStoreAliasTest:....
+
+Time: 36.487
+There was 1 failure:
+1) previewEncryptionCanReopenAtThePlaintextLimit(com.lofuyu.borderledger.wealth.WealthCsvResponseTest)
+java.lang.OutOfMemoryError: Failed to allocate a 33554448 byte allocation with 25165824 free bytes and 29MB until OOM, target footprint 195638896, growth limit 201326592
+	at java.util.Arrays.copyOf(Arrays.java:3585)
+	at java.io.ByteArrayOutputStream.toByteArray(ByteArrayOutputStream.java:211)
+	at android.security.keystore2.AndroidKeyStoreAuthenticatedAESCipherSpi$BufferAllOutputUntilDoFinalStreamer.doFinal(AndroidKeyStoreAuthenticatedAESCipherSpi.java:404)
+	at android.security.keystore2.AndroidKeyStoreCipherSpiBase.engineDoFinal(AndroidKeyStoreCipherSpiBase.java:624)
+	at javax.crypto.Cipher.doFinal(Cipher.java:2074)
+	at com.lofuyu.borderledger.local.AndroidKeyStoreVault.decrypt(KeyStoreVault.kt:67)
+	at com.lofuyu.borderledger.local.FileEncryptedRecordStore.read(EncryptedRecordStore.kt:37)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.assertStoredRoundTrip(WealthCsvResponseTest.kt:76)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.access$assertStoredRoundTrip(WealthCsvResponseTest.kt:21)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest$previewEncryptionCanReopenAtThePlaintextLimit$1.invokeSuspend(WealthCsvResponseTest.kt:47)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lofuyu.borderledger.wealth.WealthCsvResponseTest.previewEncryptionCanReopenAtThePlaintextLimit(WealthCsvResponseTest.kt:46)
+
+FAILURES!!!
+Tests run: 15,  Failures: 1
