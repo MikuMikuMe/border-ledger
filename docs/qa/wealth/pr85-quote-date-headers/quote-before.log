@@ -1,0 +1,93 @@
+
+ RUN  v5.0.5 D:/Projects/border-ledger-sure-wealth
+
+ ❯ tests/wealth-quote-mode-date.test.ts (7 tests | 4 failed) 388ms
+   ❯ provider quote effective representation (7)
+     × publishes 2026-11-02 only into its holdings segment (aggregate/[ [ '2026-11-03', 'holdings' ] ]) 72ms
+     × publishes 2026-11-02 only into its holdings segment (holdings/[ [ '2026-11-03', 'aggregate' ] ]) 33ms
+     × publishes 2026-11-03 only into its holdings segment (aggregate/[ [Array], [Array], [Array] ]) 34ms
+     × publishes 2026-11-04 only into its holdings segment (aggregate/[ [Array], [Array], [Array] ]) 35ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/wealth-quote-mode-date.test.ts > provider quote effective representation > publishes 2026-11-02 only into its holdings segment (aggregate/[ [ '2026-11-03', 'holdings' ] ])
+AssertionError: expected [ { as_of: '2026-11-02' } ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ tests/wealth-quote-mode-date.test.ts:35:34
+     33|     expect((await f.db.prepare('SELECT quote_date FROM wealth_quote_ob…
+     34|     const observations = await f.db.prepare("SELECT as_of FROM wealth_…
+     35|     expect(observations.results).toHaveLength(value.expected);
+       |                                  ^
+     36|     const restored = fixture();
+     37|     const preview = await createWealthImportPreview(restored.db, scope…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  tests/wealth-quote-mode-date.test.ts > provider quote effective representation > publishes 2026-11-02 only into its holdings segment (holdings/[ [ '2026-11-03', 'aggregate' ] ])
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ tests/wealth-quote-mode-date.test.ts:35:34
+     33|     expect((await f.db.prepare('SELECT quote_date FROM wealth_quote_ob…
+     34|     const observations = await f.db.prepare("SELECT as_of FROM wealth_…
+     35|     expect(observations.results).toHaveLength(value.expected);
+       |                                  ^
+     36|     const restored = fixture();
+     37|     const preview = await createWealthImportPreview(restored.db, scope…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  tests/wealth-quote-mode-date.test.ts > provider quote effective representation > publishes 2026-11-03 only into its holdings segment (aggregate/[ [Array], [Array], [Array] ])
+AssertionError: expected [ { as_of: '2026-11-03' } ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ tests/wealth-quote-mode-date.test.ts:35:34
+     33|     expect((await f.db.prepare('SELECT quote_date FROM wealth_quote_ob…
+     34|     const observations = await f.db.prepare("SELECT as_of FROM wealth_…
+     35|     expect(observations.results).toHaveLength(value.expected);
+       |                                  ^
+     36|     const restored = fixture();
+     37|     const preview = await createWealthImportPreview(restored.db, scope…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  tests/wealth-quote-mode-date.test.ts > provider quote effective representation > publishes 2026-11-04 only into its holdings segment (aggregate/[ [Array], [Array], [Array] ])
+AssertionError: expected [ { as_of: '2026-11-04' } ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ tests/wealth-quote-mode-date.test.ts:35:34
+     33|     expect((await f.db.prepare('SELECT quote_date FROM wealth_quote_ob…
+     34|     const observations = await f.db.prepare("SELECT as_of FROM wealth_…
+     35|     expect(observations.results).toHaveLength(value.expected);
+       |                                  ^
+     36|     const restored = fixture();
+     37|     const preview = await createWealthImportPreview(restored.db, scope…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 3 passed (7)
+   Start at  02:23:54
+   Duration  639ms (tests 74%, transform 15%, import 10%, worker 1%)

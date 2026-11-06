@@ -49,13 +49,7 @@ internal class WealthExternalDocumentOperations(private val runtime: NativeServi
 
     suspend fun remap(request: WealthCsvRemapRequest): String {
         val owner = WealthOwnerId(runtime.ownerGeneration())
-        val mappingJson = request.mapping.value
-        require(mappingJson.toByteArray(Charsets.UTF_8).size <= MAX_MAPPING_BYTES)
-        val mapping = JSONObject(mappingJson)
-        mapping.keys().forEach { key ->
-            val value = mapping.get(key)
-            require(key.matches(HEADER_NAME) && (value == JSONObject.NULL || (value is String && value.matches(HEADER_NAME))))
-        }
+        val mapping = parseWealthCsvMapping(request.mapping.value)
         val sourceDocumentKey = WealthDocumentKey(owner, request.sourceOperation)
         val destinationKey = WealthDocumentKey(owner, request.operation)
         val csv = records.read(sourceKey(sourceDocumentKey))?.decodeToString()
@@ -124,7 +118,18 @@ internal class WealthExternalDocumentOperations(private val runtime: NativeServi
 
     private companion object {
         const val MAX_CSV_BYTES = 2 * 1024 * 1024
-        const val MAX_MAPPING_BYTES = 64 * 1024
-        val HEADER_NAME = Regex("[A-Za-z0-9_. -]{1,128}")
     }
 }
+
+internal fun parseWealthCsvMapping(mappingJson: String): JSONObject {
+    require(mappingJson.toByteArray(Charsets.UTF_8).size <= MAX_MAPPING_BYTES)
+    val mapping = JSONObject(mappingJson)
+    mapping.keys().forEach { key ->
+        val value = mapping.get(key)
+        require(key.matches(HEADER_NAME) && (value == JSONObject.NULL || (value is String && value.isNotBlank())))
+    }
+    return mapping
+}
+
+private const val MAX_MAPPING_BYTES = 64 * 1024
+private val HEADER_NAME = Regex("[A-Za-z0-9_. -]{1,128}")

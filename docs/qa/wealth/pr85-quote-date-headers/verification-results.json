@@ -1,0 +1,31 @@
+{
+  "nativeSharedUnit": {
+    "tests": 378,
+    "failures": 0,
+    "errors": 0
+  },
+  "instrumentation": {
+    "tests": 20,
+    "failures": 0,
+    "durationSeconds": 23.515
+  },
+  "nativeBuild": "lintDebug, testDebugUnitTest, sharedCore:testAndroidHostTest, assembleDebug, assembleDebugAndroidTest, assembleRelease: BUILD SUCCESSFUL in 2m 42s",
+  "web": "typecheck and production build passed; existing chunk-size advisory",
+  "mobile": "typecheck passed",
+  "codeScenePerFile": "8 files, all 10.0",
+  "apkSha256": "090e3df7611f22dcbcb18198b857f7972660769c612264a4047ace2beaa54bc1",
+  "embeddedBundleSha256": "58fd8108af4b1e730e5a95869819c0cf46cb5cb380e17a5e150d71d71b1be0c2",
+  "providerTesting": "mocked transport; no live key or provider call",
+  "repository": {
+    "files": 224,
+    "tests": 1707,
+    "failures": 0,
+    "exitCode": 0,
+    "durationSeconds": 469.99,
+    "sourceFreezeVerified": true
+  },
+  "codeScenePreCommit": {
+    "qualityGates": "passed",
+    "checkedFiles": 8
+  }
+}

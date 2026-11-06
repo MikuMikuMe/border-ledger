@@ -1,5 +1,7 @@
 # Wealth verification record
 
+Newest: [provider quote dates and custom CSV headers](pr85-quote-date-headers/README.md), verified 2026-11-06.
+
 Newest: [lifecycle contracts and completed large-import verification](pr85-lifecycle-import/README.md), verified 2026-11-06. Supersedes the stalled fixture limitation below.
 
 Follow-up: [historical cash flows and native CSV boundaries](pr85-cutoff-csv/README.md), 2026-11-06. Native boundary checks pass; large-file fixture confirmation remains unverified.

@@ -44,7 +44,7 @@ function previewMetadata(mappingJson: string | null, parseJson: PreviewReadServi
     const stored = parseJson<{ sourceHeaders?: unknown; canonicalHeaders?: unknown; mapping?: unknown; validationErrors?: unknown }>(mappingJson, 'import mapping');
     const sourceHeaders = Array.isArray(stored.sourceHeaders) ? stored.sourceHeaders.filter((item): item is string => typeof item === 'string') : [];
     const canonicalHeaders = Array.isArray(stored.canonicalHeaders) ? stored.canonicalHeaders.filter((item): item is string => typeof item === 'string') : [];
-    const mapping = stored.mapping && typeof stored.mapping === 'object' && !Array.isArray(stored.mapping) ? Object.fromEntries(Object.entries(stored.mapping as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : {};
+    const mapping = stored.mapping && typeof stored.mapping === 'object' && !Array.isArray(stored.mapping) ? Object.fromEntries(Object.entries(stored.mapping as Record<string, unknown>).filter((entry): entry is [string, string | null] => entry[1] === null || typeof entry[1] === 'string')) : {};
     const validationErrors = Array.isArray(stored.validationErrors) ? stored.validationErrors.filter((item): item is string => typeof item === 'string') : [];
     return { metadata: { sourceHeaders, canonicalHeaders, mapping }, validationErrors };
   } catch {

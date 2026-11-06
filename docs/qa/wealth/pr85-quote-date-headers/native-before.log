@@ -1,0 +1,17 @@
+
+com.lofuyu.borderledger.react.WealthCsvMappingTest:
+Error in supportedSourceHeadersSurviveNativeRemapping(com.lofuyu.borderledger.react.WealthCsvMappingTest):
+java.lang.IllegalArgumentException: Failed requirement.
+	at com.lofuyu.borderledger.react.WealthExternalDocumentOperationsKt.parseWealthCsvMapping(WealthExternalDocumentOperations.kt:129)
+	at com.lofuyu.borderledger.react.WealthCsvMappingTest.supportedSourceHeadersSurviveNativeRemapping(WealthCsvMappingTest.kt:19)
+...
+
+Time: 0.045
+There was 1 failure:
+1) supportedSourceHeadersSurviveNativeRemapping(com.lofuyu.borderledger.react.WealthCsvMappingTest)
+java.lang.IllegalArgumentException: Failed requirement.
+	at com.lofuyu.borderledger.react.WealthExternalDocumentOperationsKt.parseWealthCsvMapping(WealthExternalDocumentOperations.kt:129)
+	at com.lofuyu.borderledger.react.WealthCsvMappingTest.supportedSourceHeadersSurviveNativeRemapping(WealthCsvMappingTest.kt:19)
+
+FAILURES!!!
+Tests run: 4,  Failures: 1

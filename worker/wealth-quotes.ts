@@ -903,12 +903,20 @@ async function appendQuoteValuationHistory(db: D1Database, context: FinancialCon
   const payload = JSON.stringify({ id: `quote:${quote.revision}`, accountId: '', instrument: quote.instrument, asOf: quote.quoteDate, priceMinor: quote.priceMinor, source: 'provider', provider: quote.provider });
   await db.prepare(`INSERT INTO wealth_valuations(ledger_id,id,account_id,instrument_key,as_of,price_minor,source,provider,payload_json,revision)
     SELECT ?,? || ':' || a.id,a.id,?,?,?,'provider',?, ?,0
-    FROM wealth_accounts a WHERE a.ledger_id=? AND a.kind='brokerage' AND a.mode='holdings'
+    FROM wealth_accounts a WHERE a.ledger_id=? AND a.kind='brokerage'
+      AND COALESCE(
+        (SELECT t.to_mode FROM wealth_account_mode_transitions t
+          WHERE t.ledger_id=a.ledger_id AND t.account_id=a.id AND t.effective_date<=?
+          ORDER BY t.effective_date DESC,t.revision DESC LIMIT 1),
+        (SELECT t.from_mode FROM wealth_account_mode_transitions t
+          WHERE t.ledger_id=a.ledger_id AND t.account_id=a.id
+          ORDER BY t.effective_date,t.revision LIMIT 1),
+        a.mode)='holdings'
       AND EXISTS (SELECT 1 FROM wealth_events e WHERE e.ledger_id=a.ledger_id AND (e.account_id=a.id OR json_extract(e.payload_json,'$.toAccountId')=a.id)
         AND json_extract(e.payload_json,'$.instrument.exchange')=? AND json_extract(e.payload_json,'$.instrument.ticker')=? AND json_extract(e.payload_json,'$.instrument.type')=? AND json_extract(e.payload_json,'$.instrument.currency')=?)
       AND ${authority.sql}
     ON CONFLICT(ledger_id,account_id,instrument_key,as_of) DO NOTHING`)
-    .bind(context.ledgerId, `quote:${quote.revision}`, instrumentKey(quote.instrument), quote.quoteDate, quote.priceMinor, quote.provider, payload, context.ledgerId, quote.instrument.exchange, quote.instrument.ticker, quote.instrument.type, quote.instrument.currency, ...authority.bindings).run();
+    .bind(context.ledgerId, `quote:${quote.revision}`, instrumentKey(quote.instrument), quote.quoteDate, quote.priceMinor, quote.provider, payload, context.ledgerId, quote.quoteDate, quote.instrument.exchange, quote.instrument.ticker, quote.instrument.type, quote.instrument.currency, ...authority.bindings).run();
 }
 
 interface NormalizedRefreshInput {

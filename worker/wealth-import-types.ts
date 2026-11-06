@@ -14,7 +14,7 @@ export const CANONICAL_CSV_HEADERS = [
 export interface CsvMappingMetadata {
   readonly sourceHeaders: readonly string[];
   readonly canonicalHeaders: readonly string[];
-  readonly mapping: Readonly<Record<string, string>>;
+  readonly mapping: Readonly<Record<string, string | null>>;
 }
 
 export interface ImportAccount {

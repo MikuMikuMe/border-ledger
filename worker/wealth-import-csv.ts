@@ -97,36 +97,41 @@ function mappingObject(rawMapping: unknown, tools: CsvParserTools): Record<strin
   return rawMapping as Record<string, unknown>;
 }
 
-function mappingSource(rawCanonical: string, rawSource: unknown, sourceHeaders: ReadonlySet<string>, tools: CsvParserTools): [string, string] {
+function mappingSource(rawCanonical: string, rawSource: unknown, sourceHeaders: ReadonlySet<string>, tools: CsvParserTools): [string, string | null] {
   const canonical = canonicalField(rawCanonical, tools);
+  if (rawSource === null) return [canonical, null];
   if (typeof rawSource !== 'string' || normalizedHeader(rawSource) === '') throw tools.invalidCsv(`CSV mapping for ${canonical} must name a source header.`);
   const source = normalizedHeader(rawSource);
   if (!sourceHeaders.has(source)) throw tools.invalidCsv(`CSV mapping source header ${rawSource} was not found.`);
   return [canonical, source];
 }
 
-function explicitMapping(rawMapping: unknown, sourceHeaders: readonly string[], tools: CsvParserTools): Map<string, string> {
-  const mapping = new Map<string, string>();
+function explicitMapping(rawMapping: unknown, sourceHeaders: readonly string[], tools: CsvParserTools): Map<string, string | null> {
+  const mapping = new Map<string, string | null>();
   const usedSources = new Set<string>();
   const availableSources = new Set(sourceHeaders);
   for (const [rawCanonical, rawSource] of Object.entries(mappingObject(rawMapping, tools))) {
     const [canonical, source] = mappingSource(rawCanonical, rawSource, availableSources, tools);
     if (mapping.has(canonical)) throw tools.invalidCsv(`CSV mapping repeats canonical field ${canonical}.`);
-    if (usedSources.has(source)) throw tools.invalidCsv(`CSV mapping assigns source header ${source} more than once.`);
+    if (source !== null && usedSources.has(source)) throw tools.invalidCsv(`CSV mapping assigns source header ${source} more than once.`);
     mapping.set(canonical, source);
-    usedSources.add(source);
+    if (source !== null) usedSources.add(source);
   }
   return mapping;
 }
 
-function resolvedMapping(sourceHeaders: readonly string[], rawMapping: unknown, tools: CsvParserTools): Record<string, string> {
+function defaultMappingSource(canonical: string, sourceSet: ReadonlySet<string>, explicitSources: ReadonlySet<string | null>): string | undefined {
+  return sourceSet.has(canonical) && !explicitSources.has(canonical) ? canonical : undefined;
+}
+
+function resolvedMapping(sourceHeaders: readonly string[], rawMapping: unknown, tools: CsvParserTools): Record<string, string | null> {
   const explicit = explicitMapping(rawMapping, sourceHeaders, tools);
   const sourceSet = new Set(sourceHeaders);
   const explicitSources = new Set(explicit.values());
-  const resolved: Record<string, string> = {};
+  const resolved: Record<string, string | null> = Object.fromEntries(explicit);
   const used = new Map<string, string>();
   for (const canonical of CANONICAL_CSV_HEADERS) {
-    const source = explicit.get(canonical) ?? (sourceSet.has(canonical) && !explicitSources.has(canonical) ? canonical : undefined);
+    const source = explicit.has(canonical) ? explicit.get(canonical) : defaultMappingSource(canonical, sourceSet, explicitSources);
     if (!source) continue;
     const prior = used.get(source);
     if (prior && prior !== canonical) throw tools.invalidCsv(`CSV mapping assigns source header ${source} more than once.`);
@@ -142,7 +147,7 @@ export function applyCsvMapping(parsed: readonly (readonly string[])[], rawMappi
   const mapping = resolvedMapping(sourceHeaders, rawMapping, tools);
   const canonicalHeaders = CANONICAL_CSV_HEADERS.filter((canonical) => mapping[canonical]);
   if (!options.allowUnmapped && !canonicalHeaders.includes('record_type') && !(canonicalHeaders.includes('date') && canonicalHeaders.includes('kind'))) throw tools.invalidCsv('CSV mapping must provide record_type or both date and kind fields.');
-  const sourceIndexes = canonicalHeaders.map((canonical) => sourceHeaders.indexOf(mapping[canonical]));
+  const sourceIndexes = canonicalHeaders.map((canonical) => sourceHeaders.indexOf(mapping[canonical]!));
   const rows = parsed.slice(1).map((row) => sourceIndexes.map((index) => row[index] ?? ''));
   return {
     parsed: [canonicalHeaders, ...rows],
