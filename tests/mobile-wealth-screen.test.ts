@@ -35,6 +35,15 @@ const reactNativeAccessibilityRoles = new Set([
 ]);
 
 describe('Android Wealth views', () => {
+  it('shows a failed initial load message once with a retry action', async () => {
+    const service = { read: vi.fn(async () => { throw new Error('unavailable'); }), startWrite: vi.fn(), onChanged: () => ({ remove() {} }) };
+    let tree: any;
+    await act(async () => { tree = create(React.createElement(WealthScreen, { dark: false, service })); await Promise.resolve(); await Promise.resolve(); });
+    const messages = tree.root.findAll((node: any) => node.type === 'Text' && node.children.join('') === 'The native service could not load this view. Try again.');
+    expect(messages).toHaveLength(1);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Retry Wealth' })).toHaveLength(1);
+  });
+
   it('shows stale and missing-value explanations instead of zeroes', () => {
     let tree: any;
     act(() => { tree = create(React.createElement(WealthOverview, { dark: false, data, onAction: vi.fn() })); });

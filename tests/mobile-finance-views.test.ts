@@ -3,7 +3,8 @@ import {describe,expect,it,vi} from 'vitest';
 const require=createRequire(new URL('../mobile/package.json',import.meta.url));
 const React=require('react');
 const {create,act}=require('react-test-renderer');
-vi.mock('../mobile/node_modules/react-native/index.js',()=>({Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
+const pickDate=vi.hoisted(()=>vi.fn());
+vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{NativeDatePicker:{pick:pickDate}},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
 // Runtime import keeps RN ambient declarations out of the independent React 18 web typecheck.
 const viewModule='../mobile/src/features/finance/FinanceViews';
 const {OverviewView,ActivityView,RecurringView}=await import(viewModule);
@@ -50,6 +51,36 @@ describe('native financial view fixtures and accessibility',()=>{
     expect(text(tree)).toContain('purchase_date');expect(text(tree)).toContain('Excluded');
     const week=tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report window: Week')[0];
     expect(week.props.accessibilityRole).toBe('radio');expect(week.props.style.minHeight).toBeGreaterThanOrEqual(48);
+  });
+  it('applies a custom range only after valid dates are entered',()=>{
+    const onLens=vi.fn();
+    const tree=render(OverviewView,{...actions,onLens,dark:false,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Report window: Custom'}).props.onPress());
+    const start=tree.root.findByProps({accessibilityLabel:'Start date (YYYY-MM-DD)'});
+    const end=tree.root.findByProps({accessibilityLabel:'End date (YYYY-MM-DD)'});
+    act(()=>{start.props.onChangeText('2026-02-30');end.props.onChangeText('2026-03-01');});
+    expect(tree.root.findByProps({accessibilityLabel:'Apply range'}).props.disabled).toBe(true);
+    act(()=>start.props.onChangeText('2026-02-28'));
+    act(()=>tree.root.findByProps({accessibilityLabel:'Apply range'}).props.onPress());
+    expect(onLens).toHaveBeenCalledWith(expect.objectContaining({window:'Custom',startDate:'2026-02-28',endDate:'2026-03-01'}));
+  });
+  it('lets the user pick a start date while keeping typed input available',async()=>{
+    pickDate.mockResolvedValueOnce('2026-09-15');
+    const tree=render(OverviewView,{...actions,dark:false,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Report window: Custom'}).props.onPress());
+    await act(async()=>{tree.root.findByProps({accessibilityLabel:'Choose start date'}).props.onPress();});
+    expect(pickDate).toHaveBeenCalledWith('2026-10-01');
+    expect(tree.root.findByProps({accessibilityLabel:'Start date (YYYY-MM-DD)'}).props.value).toBe('2026-09-15');
+  });
+  it('keeps the typed date when the calendar is canceled or unavailable',async()=>{
+    pickDate.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('unavailable'));
+    const tree=render(OverviewView,{...actions,dark:false,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Report window: Custom'}).props.onPress());
+    await act(async()=>{tree.root.findByProps({accessibilityLabel:'Choose end date'}).props.onPress();});
+    expect(tree.root.findByProps({accessibilityLabel:'End date (YYYY-MM-DD)'}).props.value).toBe('2026-10-17');
+    await act(async()=>{tree.root.findByProps({accessibilityLabel:'Choose end date'}).props.onPress();});
+    expect(text(tree)).toContain('Could not open the calendar');
+    expect(tree.root.findByProps({accessibilityLabel:'End date (YYYY-MM-DD)'}).props.value).toBe('2026-10-17');
   });
   it('reveals reporting currencies in report filters',()=>{
     const tree=render(OverviewView,{...actions,dark:true,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD','CNY']});
@@ -140,6 +171,17 @@ describe('native financial view fixtures and accessibility',()=>{
   it.each(states)('renders recurring %s source state without inventing estimates',state=>{
     const tree=render(RecurringView,{...actions,dark:false,state:ready({page:{items:[],nextCursor:null,limit:50,state,checkedAt:null,sourceUpdatedAt:null,lastError:null,coverageWarnings:[]},summary:null}),filters:{},currencies:['CAD','CNY','JPY']});
     expect(text(tree)).toContain(state==='empty'?'No recurring streams':state==='waiting'?'still being prepared':state==='incomplete'?'incomplete':state==='stale'?'last good':state==='unavailable'?'unavailable':'reported an error');
+  });
+  it('shows only non-zero recurring summary amounts and explains empty sections',()=>{
+    const money=[{currency:'CAD',amountMinor:'0'},{currency:'CNY',amountMinor:'-1250'},{currency:'JPY',amountMinor:'0'}];
+    const summary={monthlyByCurrency:money,yearlyByCurrency:money,subscriptionByCurrency:[{currency:'CAD',amountMinor:'0'}],actualCostByCurrency:[{currency:'JPY',amountMinor:'700'},{currency:'CAD',amountMinor:'0'}],upcoming:[],latestPaymentChanges:[],streamCount:1,coverageWarnings:[],checkedAt:null,sourceUpdatedAt:null,lastError:null,state:'ready'};
+    const page={items:[],nextCursor:null,limit:50,state:'ready',coverageWarnings:[],checkedAt:null,sourceUpdatedAt:null,lastError:null};
+    const tree=render(RecurringView,{...actions,dark:false,state:ready({page,summary}),filters:{},currencies:['CAD','CNY','JPY']});
+    const labels=tree.root.findAll((n:any)=>n.type==='Text').map((n:any)=>n.children.join(''));
+    expect(labels.filter((v:string)=>v.endsWith(' CNY'))).toHaveLength(2);
+    expect(labels.filter((v:string)=>v.endsWith(' JPY'))).toHaveLength(1);
+    expect(labels.filter((v:string)=>v.endsWith(' CAD'))).toHaveLength(0);
+    expect(labels).toContain('No non-zero totals.');
   });
   it('renders recurring monthly/yearly/subscription/actual separately and opens the stream',()=>{
     let id='';

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { getReportWindows } from '../src/domain/reporting';
+import { getReportWindows, validDateRange } from '../src/domain/reporting';
 
 describe('reporting windows', () => {
+  it('accepts real inclusive custom ranges and rejects impossible or reversed dates', () => {
+    expect(validDateRange('2024-02-29', '2024-03-01')).toBe(true);
+    expect(validDateRange('2026-02-29', '2026-03-01')).toBe(false);
+    expect(validDateRange('2026-03-02', '2026-03-01')).toBe(false);
+    expect(validDateRange('', '2026-03-01')).toBe(false);
+  });
   it('uses the configured Toronto calendar for today, week, and month', () => {
     const windows = getReportWindows(new Date('2026-10-13T16:00:00.000Z'), 'America/Toronto', 'monday');
 

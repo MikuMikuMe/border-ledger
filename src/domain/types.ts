@@ -49,7 +49,7 @@ export interface Transaction<Code extends CurrencyCode = CurrencyCode> {
 }
 
 export interface ReportWindow {
-  key: 'today' | 'week' | 'month';
+  key: 'today' | 'week' | 'month' | 'custom';
   label: string;
   start: string;
   end: string;

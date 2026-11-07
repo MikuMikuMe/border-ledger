@@ -20,6 +20,7 @@ class NativeServicePackage(private val runtime: NativeServiceRuntime): BaseReact
         "NativeCaptureDevices" -> CaptureDevicesModule(context,runtime)
         "NativeFiles" -> FilesModule(context,runtime)
         "NativePreferences" -> PreferencesModule(context,runtime)
+        "NativeDatePicker" -> DatePickerModule(context)
         "NativeWealthFixture" -> debugWealthFixture(context)
         else -> null
     }
@@ -32,6 +33,7 @@ class NativeServicePackage(private val runtime: NativeServiceRuntime): BaseReact
         )
         modules.mapValues { (name, type) -> ReactModuleInfo(name, type.name, false, false, false, true) }
             .toMutableMap().apply {
+                put("NativeDatePicker", ReactModuleInfo("NativeDatePicker", DatePickerModule::class.java.name, false, false, false, false))
                 debugWealthFixtureClass()?.let { type -> put("NativeWealthFixture", ReactModuleInfo("NativeWealthFixture", type.name, false, false, false, false)) }
             }
     }

@@ -1,6 +1,7 @@
 import React,{useContext,useEffect,useRef,useState} from 'react';
+import {validDateRange} from '../../../../src/domain/reporting';
 import {ReducedMotionContext} from '../auth/presentationPolicy';
-import {AccessibilityInfo,ActivityIndicator,findNodeHandle,KeyboardAvoidingView,Modal,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
+import {AccessibilityInfo,ActivityIndicator,findNodeHandle,KeyboardAvoidingView,Modal,NativeModules,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
 import type {ActivityQuery,Report,Snapshot,Transaction,Transactions,Stream,Lens,RecurringData,MutationState} from './contracts';
 import {comparableTotals,fillReportDays,filterActivity,formatMoney,recurringMessage,reportingCurrencies,reportView,type LoadState,type Window} from './model';
 
@@ -64,11 +65,11 @@ function shortDate(value:string|null) {
 }
 function RecurringMoneySummary({dark,summary}:Theme&{summary:RecurringData['summary']}) {
   if(!summary)return null;
-  const groups=[{label:'Expected monthly',values:summary.monthlyByCurrency},{label:'Expected yearly',values:summary.yearlyByCurrency},{label:'Subscriptions',values:summary.subscriptionByCurrency},{label:'Actual posted cost',values:summary.actualCostByCurrency}];
+  const groups=[{label:'Expected monthly',values:summary.monthlyByCurrency},{label:'Expected yearly',values:summary.yearlyByCurrency},{label:'Subscriptions',values:summary.subscriptionByCurrency},{label:'Actual posted cost',values:summary.actualCostByCurrency}].map(group=>({...group,values:group.values.filter(value=>BigInt(value.amountMinor)!==0n)}));
   const p=palette(dark);
   return <Card dark={dark}>{groups.map((group,index)=><View key={group.label} style={[styles.moneySummaryRow,index>0&&{borderTopWidth:1,borderColor:p.border}]}>
     <Text accessibilityRole="header" style={[styles.copy,{color:p.muted}]}>{group.label}</Text>
-    {group.values.length?group.values.map(value=><Text key={value.currency} style={[styles.moneySummaryValue,{color:p.text}]}>{formatMoney(value.amountMinor,value.currency)} {value.currency}</Text>):<Text style={[styles.ledgerMeta,{color:p.muted}]}>Unavailable</Text>}
+    {group.values.length?group.values.map(value=><Text key={value.currency} style={[styles.moneySummaryValue,{color:p.text}]}>{formatMoney(value.amountMinor,value.currency)} {value.currency}</Text>):<Text style={[styles.ledgerMeta,{color:p.muted}]}>No non-zero totals.</Text>}
   </View>)}</Card>;
 }
 type TrendLane=ReturnType<typeof reportView>['lanes'][number];
@@ -118,20 +119,26 @@ function PeriodComparison({dark,current,previous,lens}:Theme&{current:Report;pre
 }
 export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLens,onRetry}:Theme&{state:LoadState<Report>;previous?:LoadState<Report>;snapshot:Snapshot|null;lens:Lens;currencies:string[];onLens(value:Lens):void;onRetry():void}) {
   const report=state.data,view=report?reportView(report,lens.include,lens.source):null;
+  const [customOpen,setCustomOpen]=useState(false),[start,setStart]=useState(''),[end,setEnd]=useState('');
+  const valid=validDateRange(start,end),p=palette(dark);
+  const [pickerError,setPickerError]=useState(false);
+  const chooseDate=async(value:string,update:(date:string)=>void)=>{try{setPickerError(false);const date:string|null=await NativeModules.NativeDatePicker.pick(value);if(date)update(date);}catch{setPickerError(true);}};
   const reportFilters = <FilterDisclosure dark={dark} modal label="Report filters" summary={`${lens.source??'All currencies'} · ${lens.target??'No conversion'} · ${lens.include?'Including provisional':'Confirmed only'}`}><Action dark={dark} label="Include provisional" selected={lens.include} onPress={()=>onLens({...lens,include:!lens.include})}/>
     <Choices dark={dark} label="Source currency (no conversion)" values={currencies} value={lens.source} onChange={source=>onLens({...lens,source})}/>
     <Choices dark={dark} label="Reporting currency" searchable values={reportingCurrencies} value={lens.target} onChange={target=>onLens({...lens,target})}/></FilterDisclosure>;
   return <View style={styles.overview}>
-    <View style={styles.periods}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} text={window} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}</View>
+    <View style={styles.periods}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} text={window} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}<Action dark={dark} label="Report window: Custom" text="Custom" selected={lens.window==='Custom'} radio onPress={()=>{setStart(lens.startDate??report?.from??'');setEnd(lens.endDate??report?.to??'');setCustomOpen(true);}}/></View>
+    {customOpen?<DetailModal dark={dark} title="Custom date range" onClose={()=>setCustomOpen(false)}><Copy dark={dark}>Start date (YYYY-MM-DD)</Copy><TextInput accessibilityLabel="Start date (YYYY-MM-DD)" value={start} onChangeText={setStart} placeholder="YYYY-MM-DD" placeholderTextColor={p.muted} autoCapitalize="none" style={[styles.input,{color:p.text,borderColor:p.border}]}/><Action dark={dark} label="Choose start date" onPress={()=>{void chooseDate(start,setStart);}}/><Copy dark={dark}>End date (YYYY-MM-DD)</Copy><TextInput accessibilityLabel="End date (YYYY-MM-DD)" value={end} onChangeText={setEnd} placeholder="YYYY-MM-DD" placeholderTextColor={p.muted} autoCapitalize="none" style={[styles.input,{color:p.text,borderColor:p.border}]}/><Action dark={dark} label="Choose end date" onPress={()=>{void chooseDate(end,setEnd);}}/>{pickerError?<Copy dark={dark} error>Could not open the calendar. Enter the date above.</Copy>:null}{!valid?<View accessibilityLiveRegion="polite"><Copy dark={dark} error>Enter valid dates with the start on or before the end.</Copy></View>:null}<Action dark={dark} label="Apply range" disabled={!valid} onPress={()=>{if(valid){onLens({...lens,window:'Custom',startDate:start,endDate:end});setCustomOpen(false);}}}/><Action dark={dark} label="Cancel" onPress={()=>setCustomOpen(false)}/></DetailModal>:null}
 
     {state.phase!=='ready'||!report?<Status dark={dark} state={state} onRetry={onRetry} label="report"/>:null}
     {!report?reportFilters:null}
     {report&&view?<>
       <Text style={[styles.reportPeriod,{color:palette(dark).muted}]}>{shortDate(report.from)??'Full history'}  –  {shortDate(report.to)??'today'}</Text>
       {report.reportingCurrency?<Copy dark={dark} error={!report.fx.complete}>{report.fx.complete?'Locked to purchase dates using Frankfurter daily rates.':`Partial conversion. Unavailable source currencies: ${report.fx.unavailableSourceCurrencies.join(', ')||'see source audit'}.`}</Copy>:null}
-      <MoneyRows dark={dark} featured label={`Net spending ${lens.window==='Today'?'today':lens.window==='Week'?'this week':'this month'}${report.reportingCurrency?' · converted':''}`} values={view.totals.map(v=>({currency:v.currency,amountMinor:v.amount}))}/>
+      <MoneyRows dark={dark} featured label={`Net spending ${lens.window==='Today'?'today':lens.window==='Week'?'this week':lens.window==='Month'?'this month':'for this period'}${report.reportingCurrency?' · converted':''}`} values={view.totals.map(v=>({currency:v.currency,amountMinor:v.amount}))}/>
       <Text style={[styles.reportNote,{color:palette(dark).muted}]}>{lens.include?'Includes provisional activity':'Confirmed activity only'}{report.reviewCount?` · ${report.reviewCount} need review`:''}</Text>
       <Text style={[styles.sectionHeading,{color:palette(dark).text}]} accessibilityRole="header">Spending over time</Text>
+      {lens.window==='Custom'?<Text style={[styles.reportNote,{color:p.muted}]}>For ranges longer than 31 days, the chart shows dates with recorded activity.</Text>:null}
       {view.unavailable?<Copy dark={dark} error>Chart unavailable: conversion rates are not available for the locked purchase dates.</Copy>:null}
       {!view.lanes.length&&!view.unavailable?<Copy dark={dark}>No daily totals are available for this reporting lens.</Copy>:null}
       {view.lanes.map(lane=><TrendChart key={lane.currency} dark={dark} lane={report.reportingCurrency&&!report.fx.complete?lane:fillReportDays(lane,report.from,report.to)} include={lens.include} converted={Boolean(report.reportingCurrency)}/>)}

@@ -434,9 +434,9 @@ export function WealthScreen({ dark, service, isFocused = true }: Props) {
   const retry = () => { void controller.load(); };
 
   return <View style={styles.root}>
-    {message ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.message, { color: dark ? '#FFB4AB' : '#A83F3F' }]}>{message}</Text> : null}
+    {message && data ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.message, { color: dark ? '#FFB4AB' : '#A83F3F' }]}>{message}</Text> : null}
     {!data && state.phase === 'loading' ? <WealthLoading dark={dark}/> : null}
-    {!data && state.phase !== 'loading' ? <WealthError dark={dark} message={state.message ?? message} onRetry={retry}/> : null}
+    {!data && state.phase !== 'loading' ? <View accessibilityLiveRegion="polite"><WealthError dark={dark} message={state.message ?? message} onRetry={retry}/></View> : null}
     {data ? <>
       <WealthTabs dark={dark} selected={selected} onSelect={chooseView}/>
       {selected !== 'overview' ? <Pressable accessibilityRole="button" accessibilityLabel="Open Wealth Overview" onPress={() => chooseView('overview')} style={styles.overviewLink}><Text style={[styles.overviewLinkText, { color: dark ? '#83C9B1' : '#1B6B5B' }]}>Overview</Text></Pressable> : null}

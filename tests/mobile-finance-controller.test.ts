@@ -14,6 +14,13 @@ describe('native screen controller',()=>{
     expect(f.reads).toContainEqual({startDate:'2026-10-01',endDate:'2026-10-17',timeZone:'America/Toronto',currency:null,reportingCurrency:null,includeProvisional:false});
     c.dispose();expect(f.removed()).toBe(2);
   });
+  it('requests the chosen custom dates and the equally long preceding period',async()=>{
+    const f=fixture(),c=new FinanceController(f.ports,()=>{},()=>new Date('2026-10-17T12:00:00Z'));
+    await c.setLens({window:'Custom',startDate:'2026-02-27',endDate:'2026-03-02',include:false,source:null,target:null});
+    expect(f.reads).toContainEqual(expect.objectContaining({startDate:'2026-02-27',endDate:'2026-03-02'}));
+    expect(f.reads).toContainEqual(expect.objectContaining({startDate:'2026-02-23',endDate:'2026-02-26'}));
+    c.dispose();
+  });
   it('loads a separate equal-length preceding report and clears it on failure',async()=>{
     const f=fixture(),c=new FinanceController(f.ports,()=>{},()=>new Date('2026-10-17T12:00:00Z'));
     await c.start();

@@ -8,7 +8,7 @@ import com.lofuyu.borderledger.auth.OwnerCredentialProvider
 import org.json.JSONObject
 import java.net.URLEncoder
 
-internal const val WEALTH_ROOT = "/api/mobile/owner/wealth"
+internal const val WEALTH_ROOT = "/api/mobile/v1/wealth"
 
 internal enum class WealthAction(val wireValue: String) {
     ACCOUNT("account"),
