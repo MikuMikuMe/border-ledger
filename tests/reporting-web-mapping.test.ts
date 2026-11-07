@@ -92,6 +92,12 @@ describe('web reporting contract mapping', () => {
     })).toBeNull();
   });
 
+  it('sends both custom range endpoints to the report API', () => {
+    const target = new URL(reportRequestPath({key:'custom',label:'Custom',start:'2026-02-27',end:'2026-03-02'}, false, 'America/Toronto'), 'https://ledger.example.test');
+    expect(target.searchParams.get('from')).toBe('2026-02-27');
+    expect(target.searchParams.get('to')).toBe('2026-03-02');
+  });
+
   it('sends a selected reporting target while leaving the source filter absent', () => {
     const target = new URL(reportRequestPath(reportWindow, true, 'America/Toronto', 'CAD'), 'https://ledger.example.test');
     expect(target.searchParams.get('reportingCurrency')).toBe('CAD');

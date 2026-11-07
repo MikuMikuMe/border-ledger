@@ -59,7 +59,8 @@ export class FinanceController {
     this.previousReport.reset();
     await this.report.load(async()=>{
       const preferences=await this.ports.preferences.readReporting();this.preferences=preferences;
-      const query=reportQuery({window:lens.window,now,preferences,includeProvisional:lens.include,currency:lens.source,reportingCurrency:lens.target});
+      const query=reportQuery({window:lens.window==='Custom'?'Month':lens.window,now,preferences,includeProvisional:lens.include,currency:lens.source,reportingCurrency:lens.target});
+      if(lens.window==='Custom'){query.startDate=lens.startDate;query.endDate=lens.endDate;}
       if(sequence===this.reportSequence&&!this.disposed)void this.previousReport.load(()=>this.ports.ledger.readReport(previousReportQuery(query)),false);
       return this.ports.ledger.readReport(query);
     },!reset);

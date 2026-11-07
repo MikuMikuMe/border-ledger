@@ -20,7 +20,7 @@ class WealthRepositoryTest {
 
         assertEquals("{\"totalByCurrency\":{\"CAD\":null}}", body)
         assertEquals("GET", requests.single().method)
-        assertTrue(requests.single().url.startsWith("https://pf.example.com/api/mobile/owner/wealth/report?"))
+        assertTrue(requests.single().url.startsWith("https://pf.example.com/api/mobile/v1/wealth/report?"))
         assertTrue(requests.single().url.contains("view=investments"))
         assertTrue(requests.single().url.contains("accountId=brokerage"))
     }
@@ -33,7 +33,7 @@ class WealthRepositoryTest {
         repository.write(WealthWriteCommand("op-1", "event", "{\"kind\":\"buy\"}"))
 
         assertEquals("POST", requests.single().method)
-        assertEquals("/api/mobile/owner/wealth/events", java.net.URI(requests.single().url).path)
+        assertEquals("/api/mobile/v1/wealth/events", java.net.URI(requests.single().url).path)
         val request = JSONObject(String(requireNotNull(requests.single().body)))
         assertEquals("op-1", request.getString("operationId"))
         assertEquals("buy", request.getJSONObject("event").getString("kind"))
@@ -58,7 +58,7 @@ class WealthRepositoryTest {
 
         repository.readSnapshot(WealthReadQuery(view = "cash-flow", periodStart = "2026-10-01", periodEnd = "2026-10-31"))
 
-        assertEquals("/api/mobile/owner/wealth/report", java.net.URI(requests.single().url).path)
+        assertEquals("/api/mobile/v1/wealth/report", java.net.URI(requests.single().url).path)
         assertTrue(requests.single().url.contains("from=2026-10-01"))
         assertTrue(requests.single().url.contains("to=2026-10-31"))
     }
@@ -71,9 +71,9 @@ class WealthRepositoryTest {
         repository.readEvents("brokerage")
         repository.readValuations("brokerage")
 
-        assertEquals("/api/mobile/owner/wealth/events", java.net.URI(requests[0].url).path)
+        assertEquals("/api/mobile/v1/wealth/events", java.net.URI(requests[0].url).path)
         assertEquals("brokerage", java.net.URI(requests[0].url).query.substringAfter("accountId="))
-        assertEquals("/api/mobile/owner/wealth/valuations", java.net.URI(requests[1].url).path)
+        assertEquals("/api/mobile/v1/wealth/valuations", java.net.URI(requests[1].url).path)
     }
 
     @Test
@@ -86,11 +86,11 @@ class WealthRepositoryTest {
         repository.write(WealthWriteCommand("op-refresh", "quote-refresh", "{\"instrument\":{\"exchange\":\"TSX\",\"ticker\":\"SHOP\",\"type\":\"stock\",\"currency\":\"CAD\"}}"))
 
         assertEquals("PUT", requests[0].method)
-        assertEquals("/api/mobile/owner/wealth/quotes/settings", java.net.URI(requests[0].url).path)
+        assertEquals("/api/mobile/v1/wealth/quotes/settings", java.net.URI(requests[0].url).path)
         assertEquals("DELETE", requests[1].method)
         assertEquals("alpha_vantage", java.net.URI(requests[1].url).query.substringAfter("provider="))
         assertEquals("POST", requests[2].method)
-        assertEquals("/api/mobile/owner/wealth/quotes/refresh", java.net.URI(requests[2].url).path)
+        assertEquals("/api/mobile/v1/wealth/quotes/refresh", java.net.URI(requests[2].url).path)
     }
 
     @Test
@@ -101,7 +101,7 @@ class WealthRepositoryTest {
         repository.readQuoteSettings()
 
         assertEquals("GET", requests.single().method)
-        assertEquals("/api/mobile/owner/wealth/quotes/settings", java.net.URI(requests.single().url).path)
+        assertEquals("/api/mobile/v1/wealth/quotes/settings", java.net.URI(requests.single().url).path)
     }
 
     @Test
@@ -112,8 +112,8 @@ class WealthRepositoryTest {
         assertEquals("csv", repository.readTemplate())
         assertEquals("csv", repository.exportCsv())
 
-        assertEquals("/api/mobile/owner/wealth/template", java.net.URI(requests[0].url).path)
-        assertEquals("/api/mobile/owner/wealth/export", java.net.URI(requests[1].url).path)
+        assertEquals("/api/mobile/v1/wealth/template", java.net.URI(requests[0].url).path)
+        assertEquals("/api/mobile/v1/wealth/export", java.net.URI(requests[1].url).path)
     }
 
     @Test

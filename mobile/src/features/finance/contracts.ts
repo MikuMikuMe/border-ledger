@@ -12,7 +12,7 @@ export type RecurringQuery={cursor:string|null;limit:number;currency:string|null
 export type Page={items:Stream[];nextCursor:string|null;limit:number;state:string;checkedAt:string|null;sourceUpdatedAt:string|null;lastError:string|null;coverageWarnings:string[]};
 export type Money={currency:string;amountMinor:string};
 export type Summary={monthlyByCurrency:Money[];yearlyByCurrency:Money[];subscriptionByCurrency:Money[];actualCostByCurrency:Money[];upcoming:{stream:Stream;nextExpectedAmountMinor:string|null}[];latestPaymentChanges:Stream[];streamCount:number;coverageWarnings:string[];checkedAt:string|null;sourceUpdatedAt:string|null;lastError:string|null;state:string};
-export type Lens={window:'Today'|'Week'|'Month';include:boolean;source:string|null;target:string|null};
+export type Lens={include:boolean;source:string|null;target:string|null}&({window:'Custom';startDate:string;endDate:string}|{window:'Today'|'Week'|'Month';startDate?:string;endDate?:string});
 export type RecurringData={page:Page;summary:Summary|null};
 export type MutationState={blocked:boolean;status:string};
 type EventPort={onChanged(listener:()=>void):{remove():void}};

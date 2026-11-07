@@ -43,6 +43,7 @@ import { serializeTransactionsCsv } from './domain/export';
 import { openPlaidLink, type PlaidAccountMetadata, type PlaidInstitutionMetadata } from './plaid-link';
 import { formatReportingDay, getReportWindows, type ReportingTimezone, type WeekStartsOn } from './domain/reporting';
 import type { Account, ReportWindow, Transaction } from './domain/types';
+import { CustomWindowPicker, CustomChartNote } from './components/CustomWindowPicker';
 import { getCurrencyMeta, supportedCurrencyCodes, type CurrencyCode } from './domain/currencies';
 import RecurringView from './components/RecurringView';
 import { WealthView } from './components/wealth/WealthView';
@@ -211,6 +212,8 @@ function chartCurrenciesForReport(report: OverviewReport, preferredCurrency: Cur
   ], preferredCurrency);
 }
 
+function chartDay(date: string, window: ReportWindow) { return window.key === 'custom' ? date : date.slice(8); }
+
 function chartDataForRange(range: ChartRange, report: OverviewReport, includeProvisional: boolean, selectedWindow: ReportWindow): ChartEntry[] {
   const daily = new Map<string, CurrencyTotals>();
   const dailyTotals = report.reportingCurrency
@@ -229,7 +232,7 @@ function chartDataForRange(range: ChartRange, report: OverviewReport, includePro
   const dates = [...daily.keys()].sort();
   if (range === 'daily') {
     return (dates.length > 0 ? dates : [selectedWindow.end]).slice(-12).map((date) => ({
-      day: date.slice(8),
+      day: chartDay(date, selectedWindow),
       totals: daily.get(date) ?? {},
     }));
   }
@@ -244,6 +247,7 @@ function chartDataForRange(range: ChartRange, report: OverviewReport, includePro
 }
 
 function chartPeriodLabel(range: ChartRange, selectedWindow: ReportWindow) {
+  if (selectedWindow.key === 'custom') return 'CUSTOM RANGE';
   const month = new Intl.DateTimeFormat('en-CA', { month: 'short' }).format(new Date(`${selectedWindow.end}T12:00:00Z`)).toUpperCase();
   if (range === 'weekly') return `W1 — W2 ${month}`;
   if (range === 'monthly') return `${month} ${selectedWindow.end.slice(0, 4)}`;
@@ -564,6 +568,7 @@ function WorkspaceApp() {
   const ledgerApi = useLedgerApi();
   const [activeView, setActiveView] = useState<View>('overview');
   const [selectedWindowKey, setSelectedWindowKey] = useState<ReportWindow['key']>('month');
+  const [customWindow, setCustomWindow] = useState<ReportWindow | null>(null);
   const [reportingNow, setReportingNow] = useState(() => new Date());
   const [reportingTimezone, setReportingTimezone] = useState<ReportingTimezone>('America/Toronto');
   const [weekStartsOn, setWeekStartsOn] = useState<WeekStartsOn>('monday');
@@ -588,7 +593,7 @@ function WorkspaceApp() {
   const [pendingPlaidConnection, setPendingPlaidConnection] = useState<PendingPlaidConnection | null>(null);
 
   const reportingWindows = useMemo(() => getReportWindows(reportingNow, reportingTimezone, weekStartsOn), [reportingNow, reportingTimezone, weekStartsOn]);
-  const selectedWindow = reportingWindows.find((window) => window.key === selectedWindowKey) ?? reportingWindows[2];
+  const selectedWindow = (selectedWindowKey === 'custom' ? customWindow : reportingWindows.find((window) => window.key === selectedWindowKey)) ?? reportingWindows[2];
   const monthWindow = reportingWindows.find((window) => window.key === 'month') ?? reportingWindows[2];
 
   const refreshWorkspace = async () => {
@@ -966,7 +971,7 @@ function WorkspaceApp() {
           ) : reportStatus === 'loading' ? (
             <WorkspaceStatePanel status="loading" error={null} onRetry={refreshWorkspace} />
           ) : reportStatus === 'error' || !reports ? (
-            <WorkspaceStatePanel status="error" error={reportError} onRetry={refreshWorkspace} />
+            <><CustomWindowPicker windows={reportingWindows} selectedWindow={selectedWindow} onPreset={setSelectedWindowKey} onApply={(start, end) => { setCustomWindow({key: 'custom', label: 'Custom', start, end}); setSelectedWindowKey('custom'); }} /><WorkspaceStatePanel status="error" error={reportError} onRetry={refreshWorkspace} /></>
           ) : (
             <Overview
               selectedWindow={selectedWindow}
@@ -974,6 +979,7 @@ function WorkspaceApp() {
               reportingTimezone={reportingTimezone}
               monthWindow={monthWindow}
               setSelectedWindowKey={setSelectedWindowKey}
+              onCustomWindow={(start, end) => { setCustomWindow({key: 'custom', label: 'Custom', start, end}); setSelectedWindowKey('custom'); }}
               report={reports.selected}
               monthReport={reports.month}
               preferredCurrency={preferredCurrency}
@@ -1202,12 +1208,18 @@ function WorkspaceStatePanel({ status, error, onRetry }: { status: 'loading' | '
   return <section className="panel workspace-state-panel" role="status"><div className="workspace-state-mark"><Database size={19} /></div><p className="eyebrow">PRIVATE WORKSPACE</p><h1>No confirmed activity yet</h1><p>Your private workspace is connected, but there are no ledger records to summarize. Connect a source or import a statement to begin.</p></section>;
 }
 
+function OverviewPeriodHeading({window, timeZone}: {window: ReportWindow; timeZone: ReportingTimezone}) {
+  const dates = window.key === 'custom' ? `${formatReportingDay(window.start, timeZone)} – ${formatReportingDay(window.end, timeZone)}` : formatReportingDay(window.end, timeZone);
+  return <><p className="eyebrow">{dates}</p><h1>{window.key === 'custom' ? 'Know where your spending went.' : 'Know where the month is going.'}</h1></>;
+}
+
 function Overview({
   selectedWindow,
   reportingWindows,
   reportingTimezone,
   monthWindow,
   setSelectedWindowKey,
+  onCustomWindow,
   report,
   monthReport,
   preferredCurrency,
@@ -1221,6 +1233,7 @@ function Overview({
   reportingTimezone: ReportingTimezone;
   monthWindow: ReportWindow;
   setSelectedWindowKey: (key: ReportWindow['key']) => void;
+  onCustomWindow: (start: string, end: string) => void;
   report: OverviewReport;
   monthReport: OverviewReport;
   preferredCurrency: CurrencyCode | null;
@@ -1268,9 +1281,8 @@ function Overview({
 
   return (
     <>
-      <PageIntro action={<WindowPicker windows={reportingWindows} selectedWindow={selectedWindow} setSelectedWindow={(window) => setSelectedWindowKey(window.key)} />}>
-        <p className="eyebrow">{formatReportingDay(selectedWindow.end, reportingTimezone)}</p>
-        <h1>Know where the month is going.</h1>
+      <PageIntro action={<CustomWindowPicker windows={reportingWindows} selectedWindow={selectedWindow} onPreset={setSelectedWindowKey} onApply={onCustomWindow} />}>
+        <OverviewPeriodHeading window={selectedWindow} timeZone={reportingTimezone} />
         <p className="intro-copy">A clear view across every registered source currency, with the uncertain bits kept in the margin.</p>
       </PageIntro>
 
@@ -1336,9 +1348,6 @@ function ChineseBankBandView({ band }: { band: ChineseBankBand }) {
   return <aside className="fx-band" role="note" aria-label={description}><div className="fx-band-heading"><span>CHINESE BANK SETTLEMENT RANGE</span><span>SERVER ESTIMATE</span></div><strong>{lower} – {upper} {band.currency}</strong><p>±1.5% Chinese bank settlement estimate; CNY spending excluded.</p><small>Based on {base} of eligible non-CNY Bank of China spending.</small></aside>;
 }
 
-function WindowPicker({ windows, selectedWindow, setSelectedWindow }: { windows: ReportWindow[]; selectedWindow: ReportWindow; setSelectedWindow: (window: ReportWindow) => void }) {
-  return <div className="window-picker" role="group" aria-label="Reporting window">{windows.map((window) => <button key={window.key} type="button" className={selectedWindow.key === window.key ? 'is-selected' : ''} onClick={() => setSelectedWindow(window)} aria-pressed={selectedWindow.key === window.key}>{window.label}</button>)}</div>;
-}
 
 function CurrencyLane({ currency, amount, share, detail }: { currency: CurrencyCode; amount: number; share: string; detail: string }) {
   const meta = currencyPresentation(currency);
@@ -1351,14 +1360,15 @@ function SpendingChart({ range, report, includeProvisional, selectedWindow, pref
   const max = Math.max(...entries.map((entry) => currencies.reduce((total, currency) => total + Math.abs(entry.totals[currency] ?? 0), 0)), 1);
   const chartLabel = `Bar chart showing ${chartRangeLabels[range].toLowerCase()} spending in ${currencies.join(', ')}`;
   return <>
-    <div className="spending-chart" role="img" aria-label={chartLabel}>
+    <div className={`spending-chart${selectedWindow.key === 'custom' && range === 'daily' ? ' custom-daily-chart' : ''}`} role="img" aria-label={chartLabel}>
       <div className="chart-y-labels"><span>largest</span><span>midpoint</span><span>zero</span></div>
       <div className="chart-bars">{entries.map((entry) => <div className="chart-column" key={entry.day}><div className="bar-track">{[...currencies].reverse().map((currency) => {
         const amount = entry.totals[currency] ?? 0;
         const direction = amount < 0 ? 'refund' : 'spending';
         return <span key={currency} className={`bar ${amount < 0 ? 'refund-bar' : ''} ${currency === 'CAD' ? 'cad-bar' : currency === 'CNY' ? 'cny-bar' : ''}`} data-direction={direction} aria-label={`${entry.day} ${currency} ${formatMoney(amount, currency)} ${direction}`} style={{ height: `${(Math.abs(amount) / max) * 100}%`, ...(currency === 'CAD' || currency === 'CNY' ? {} : { backgroundColor: 'var(--muted)', opacity: 0.72 }) }} />;
-      })}</div><span className="bar-label">{entry.day}</span></div>)}</div>
+      })}</div><span className="bar-label" title={entry.day}>{selectedWindow.key === 'custom' && range === 'daily' ? entry.day.slice(5).replace('-', '/') : entry.day}</span></div>)}</div>
     </div>
+    <CustomChartNote window={selectedWindow} range={range} />
     <details className="chart-data-details">
       <summary>View spending data table</summary>
       <table className="chart-data-table">
