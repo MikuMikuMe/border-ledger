@@ -10,6 +10,7 @@ it('edits a tracking forecast without writing an envelope allocation',()=>{
  expect(tree.root.findAllByType('TextInput')).toHaveLength(0);
  expect(tree.root.findByProps({accessibilityLabel:'Edit expense Food'}).props.accessibilityValue?.text).toBe('Planned CAD 100.00. Actual unavailable. Remaining unavailable.');
  act(()=>tree.root.findByProps({accessibilityLabel:'Edit expense Food'}).props.onPress());
+ expect(tree.root.findByProps({accessibilityLabel:'Planned expense for Food'}).props.keyboardType).toBe('numeric');
  expect(tree.root.findAllByType('Modal')).toHaveLength(1);
  act(()=>tree.root.findByProps({accessibilityLabel:'Planned expense for Food'}).props.onChangeText('bad'));
  act(()=>tree.root.findByProps({accessibilityLabel:'Save expense plan for Food'}).props.onPress());

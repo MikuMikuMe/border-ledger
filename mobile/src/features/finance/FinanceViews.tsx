@@ -18,19 +18,19 @@ export function DetailModal({dark,title,onClose,children}:Theme&{title:string;on
     </KeyboardAvoidingView>
   </Modal>;
 }
-export function Action({dark,label,text,onPress,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;onPress():void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
-  const p=palette(dark);return <Pressable accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={onPress} disabled={disabled} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
+export function Action({dark,label,text,value,onPress,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;value?:string;onPress():void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
+  const p=palette(dark);return <Pressable accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={onPress} disabled={disabled} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
 }
-export function LedgerRow({dark,label,title,amount,details,onPress}:Theme&{label:string;title:string;amount?:string;details:string[];onPress():void}) {
+export function LedgerRow({dark,label,title,amount,details,accessibilityDetails=details,onPress}:Theme&{label:string;title:string;amount?:string;details:string[];accessibilityDetails?:string[];onPress():void}) {
   const p=palette(dark);
-  return <Pressable accessibilityRole="button" accessibilityLabel={[label,amount,...details].filter(Boolean).join(' · ')} onPress={onPress} style={({pressed})=>[styles.ledgerRow,{borderColor:p.border},pressed&&styles.rowPressed]}>
+  return <Pressable accessibilityRole="button" accessibilityLabel={[label,amount,...accessibilityDetails].filter(Boolean).join(' · ')} onPress={onPress} style={({pressed})=>[styles.ledgerRow,{borderColor:p.border},pressed&&styles.rowPressed]}>
     <View style={styles.ledgerTop}><Text style={[styles.ledgerTitle,{color:p.text}]}>{title}</Text>{amount?<Text style={[styles.ledgerAmount,{color:p.text}]}>{amount}</Text>:null}</View>
     {details.map((detail,index)=><Text key={index} style={[styles.ledgerMeta,{color:p.muted}]}>{detail}</Text>)}
   </Pressable>;
 }
 function Choices({dark,label,values,value,onChange,searchable=false}:Theme&{label:string;values:string[];value:string|null;onChange(value:string|null):void;searchable?:boolean}) {
   const [search,setSearch]=useState(''),p=palette(dark);
-  return <View style={styles.section}><Copy dark={dark} heading>{label}</Copy>{searchable?<TextInput accessibilityLabel={`Search ${label.toLowerCase()}`} placeholder="Search currency" placeholderTextColor={p.muted} value={search} onChangeText={setSearch} autoCapitalize="characters" style={[styles.input,{color:p.text,borderColor:p.border}]}/>:null}{searchable?<ScrollView horizontal keyboardShouldPersistTaps="handled" contentContainerStyle={{gap:8}}>{[null,...new Set([...(value?[value]:[]),...values])].filter(v=>!search||v?.toLowerCase().includes(search.toLowerCase())).map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'No conversion'}`} text={v??'No conversion'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</ScrollView>:<View style={styles.wrap}>{[null,...new Set([...(value?[value]:[]),...values])].map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'All'}`} text={v??'All'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</View>}</View>;
+  return <View style={styles.section}><Copy dark={dark} heading>{label}</Copy>{searchable?<TextInput accessibilityLabel={`Search ${label.toLowerCase()}`} placeholder="Search currency" placeholderTextColor={p.muted} value={search} onChangeText={setSearch} autoCapitalize="characters" style={[styles.input,{color:p.text,borderColor:p.border}]}/>:null}{searchable?<ScrollView accessibilityLabel={`${label} options`} nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{maxHeight:240}} contentContainerStyle={{gap:8}}>{[null,...new Set([...(value?[value]:[]),...values])].filter(v=>!search||v?.toLowerCase().includes(search.toLowerCase())).map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'No conversion'}`} text={v??'No conversion'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</ScrollView>:<View style={styles.wrap}>{[null,...new Set([...(value?[value]:[]),...values])].map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'All'}`} text={v??'All'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</View>}</View>;
 }
 function FilterDisclosure({dark,label,summary,children,modal=false}:Theme&{label:string;summary:string;children:React.ReactNode;modal?:boolean}) {
   const [expanded,setExpanded]=useState(false),p=palette(dark);
@@ -41,7 +41,7 @@ function FilterDisclosure({dark,label,summary,children,modal=false}:Theme&{label
       <Text style={[styles.reportNote,{color:p.muted}]}>{summary}</Text>
     </Pressable>
     {expanded?(modal?<Modal transparent visible animationType={reducedMotion?'none':'slide'} onRequestClose={()=>setExpanded(false)} onShow={()=>{const node=findNodeHandle(heading.current);if(node)AccessibilityInfo.setAccessibilityFocus(node);}}>
-      <View style={styles.sheetBackdrop}><View accessibilityViewIsModal style={[styles.sheet,{backgroundColor:p.surface}]}><View style={styles.sheetHeader}><Text ref={heading} accessible accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>{label}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Close ${label}`} onPress={()=>setExpanded(false)} style={styles.sheetClose}><Text style={[styles.disclosureLabel,{color:p.accent}]}>Done</Text></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>{children}</ScrollView></View></View>
+      <KeyboardAvoidingView behavior="padding" style={styles.sheetBackdrop}><View accessibilityViewIsModal style={[styles.sheet,{backgroundColor:p.surface}]}><View style={styles.sheetHeader}><Text ref={heading} accessible accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>{label}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Close ${label}`} onPress={()=>setExpanded(false)} style={styles.sheetClose}><Text style={[styles.disclosureLabel,{color:p.accent}]}>Done</Text></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>{children}</ScrollView></View></KeyboardAvoidingView>
     </Modal>:children):null}
   </View>;
 }
@@ -164,7 +164,9 @@ function ActivityFilters({dark,facetRows,filters,onFilter}:{dark:boolean;facetRo
 }
 function ActivityRow({dark,transaction,onOpen}:{dark:boolean;transaction:Transaction;onOpen(id:string):void}){
   const title=transaction.merchant??'Merchant unavailable';
-  return <LedgerRow dark={dark} label={`Open activity: ${title}`} title={title} amount={`${formatMoney(transaction.signedMinorUnits,transaction.currency)} ${transaction.currency}`} details={[`${transaction.occurredAt} · ${transaction.status} · ${transaction.kind}`,`Account: ${transaction.accountLabel??'unavailable'} · Source: ${transaction.sourceLabel??'unavailable'} · Category: ${transaction.category??'Uncategorized'}`]} onPress={()=>onOpen(transaction.id)}/>;
+  const date=transaction.occurredAt.replace('T',' ').replace(/Z$/,' UTC');
+  const details=[`${date} · ${transaction.status} · ${transaction.kind}`,transaction.category??'Uncategorized'];
+  return <LedgerRow dark={dark} label={`Open activity: ${title}`} title={title} amount={`${formatMoney(transaction.signedMinorUnits,transaction.currency)} ${transaction.currency}`} details={details} accessibilityDetails={[...details,`Account: ${transaction.accountLabel??'unavailable'} · Source: ${transaction.sourceLabel??'unavailable'}`]} onPress={()=>onOpen(transaction.id)}/>;
 }
 function ActivityResults({dark,state,rows,onLoadMore,onOpen}:{dark:boolean;state:LoadState<Transactions>;rows:Transaction[];onLoadMore():void;onOpen(id:string):void}){
   return <>
@@ -181,14 +183,13 @@ function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose}:{d
     <Copy dark={dark}>Account: {selected.accountLabel??'unavailable'} · Source: {selected.sourceLabel??'unavailable'} · Revision {selected.revision}</Copy>
     <Copy dark={dark}>Category</Copy><TextInput accessibilityLabel="Category" value={draft.category} maxLength={80} onChangeText={category=>onDraft({...draft,category})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
     <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
-    <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Source evidence and report values remain server-authoritative.</Copy>
+    <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Changes affect only the category and note.</Copy>
     <Action dark={dark} label="Save annotation" onPress={onSave} disabled={mutation.blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/><Action dark={dark} label="Close Activity detail" onPress={onClose}/>
   </DetailModal>;
 }
 export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave}:ActivityProps) {
   const rows=state.data?.items??[],visibleRows=filterActivity(rows,filters);
   return <View style={styles.section}>
-    <Copy dark={dark}>Server Activity pages; filters never convert unlike currencies.</Copy>
     <ActivityFilters dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter}/>
     <Status dark={dark} state={state} onRetry={onRetry} label="Activity"/>
     <ActivityResults dark={dark} state={state} rows={visibleRows} onLoadMore={onLoadMore} onOpen={onOpen}/>
@@ -202,6 +203,8 @@ export function MutationStatus({dark,mutation}:Theme&{mutation:MutationState}) {
 const mutationMessages:Record<string,string>={
   revision_conflict:'This record changed elsewhere. Your draft is preserved; close and refresh before saving again.',
   rejected:'The server rejected this request. Refresh the data and review before trying again.',
+  canceled:'The change was canceled.',
+  failed_local:'The change could not be submitted. Check your connection and try again.',
   completed:'Saved. Refresh to read the current server revision.',
   ready:'',
   checking:'Checking native operation receipts…',

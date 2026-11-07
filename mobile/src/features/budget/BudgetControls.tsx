@@ -10,8 +10,12 @@ export function budgetDecimal(value:number,currency:string) {
  return (value<0?'-':'')+(digits?`${n/scale}.${(n%scale).toString().padStart(digits,'0')}`:n.toString());
 }
 export const budgetSpokenMoney=(value:number|null,currency:string)=>value===null?'unavailable':`${currency} ${budgetDecimal(value,currency)}`;
-export function BudgetField({dark,label,value,onChange}:{dark:boolean;label:string;value:string;onChange(value:string):void}) {
- return <View style={{gap:4,marginTop:8}}><Copy dark={dark}>{label}</Copy><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} style={{minHeight:48,borderWidth:1,borderRadius:8,padding:12,borderColor:dark?'#718679':'#687D70',color:dark?'#EEF1E8':'#18201F'}}/></View>;
+export function BudgetActivityRow({dark,date,category,kind,sourceCurrency,sourceMinor,activityMinor,currency,rate,rateDate}:{dark:boolean;date:string;category:string;kind?:string;sourceCurrency:string;sourceMinor:number;activityMinor:number|null;currency:string;rate:string|null;rateDate:string|null}) {
+ const original=sourceCurrency!==currency||sourceMinor!==activityMinor?` Original ${budgetSpokenMoney(sourceMinor,sourceCurrency)}${sourceCurrency!==currency?`, approximate rate ${rate??'unavailable'}, ${rateDate??'rate date unavailable'}`:''}.`:'';
+ return <View accessible accessibilityLabel={`${category}, ${date}, ${budgetSpokenMoney(activityMinor,currency)}.${kind?` ${kind}.`:''}${original}`} style={{gap:4,paddingVertical:10,borderTopWidth:1,borderColor:dark?'#43534B':'#D2CCC0'}}><View style={{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',gap:8}}><Copy dark={dark} heading>{category}</Copy><Copy dark={dark}>{budgetMoney(activityMinor,currency)}</Copy></View><Copy dark={dark}>{date}{kind?` · ${kind}`:''}</Copy>{original?<Copy dark={dark}>Original {budgetMoney(sourceMinor,sourceCurrency)}{sourceCurrency!==currency?` · Approx. rate ${rate??'unavailable'} · ${rateDate??'rate unavailable'}`:''}</Copy>:null}</View>;
+}
+export function BudgetField({dark,label,value,onChange,numeric=false}:{dark:boolean;label:string;value:string;onChange(value:string):void;numeric?:boolean}) {
+ return <View style={{gap:4,marginTop:8}}><Copy dark={dark}>{label}</Copy><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} keyboardType={numeric?'numeric':'default'} style={{minHeight:48,borderWidth:1,borderRadius:8,padding:12,borderColor:dark?'#718679':'#687D70',color:dark?'#EEF1E8':'#18201F'}}/></View>;
 }
 export function useBudgetDisclosure() {
  const [expanded,setExpanded]=useState(false);

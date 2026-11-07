@@ -36,7 +36,7 @@ function makeActionHandler({ startWrite, operationId }: { startWrite: WriteSink;
 function renderEditor({ data, initialAction, onAction }: { data: EditorData; initialAction: string; onAction: ActionHandler }): EditorContext {
   let tree: any;
   act(() => { tree = create(React.createElement(InvestmentOperations, { dark: false, ...data, initialAction, onAction })); });
-  const choose = ({ label }: Choice) => act(() => { tree.root.findAllByProps({ accessibilityLabel: label }).at(-1).props.onPress(); });
+  const choose = ({ label }: Choice) => { if (['Save event','Save correction'].includes(label)) act(() => tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress()); act(() => tree.root.findAllByProps({ accessibilityLabel: label }).at(-1).props.onPress()); };
   const fill = ({ label, value }: Field) => act(() => { tree.root.findByProps({ accessibilityLabel: label }).props.onChangeText(value); });
   return { tree, choose, fill };
 }
@@ -82,6 +82,35 @@ function chooseAccountAndFill({ choose, fill, targetLabel, date, valueLabel, val
 }
 
 describe('Android Wealth typed write flow', () => {
+  it('offers a date chooser and rejects impossible typed dates', () => {
+    const data = { accounts: [], instruments: [], events: [], quote: { configured: false, provider: null, lastRefreshedAt: null }, csv: { template: null, previewId: null, rowCount: 0, errors: [], duplicates: [] } };
+    const { tree, fill, choose } = renderEditor({ data, initialAction: 'event', onAction: () => {} });
+    fill({ label: 'Event date (YYYY-MM-DD)', value: '2024-02-30' });
+    expect(JSON.stringify(tree.toJSON())).toContain('Enter a valid date');
+    fill({ label: 'Event date (YYYY-MM-DD)', value: '2024-02-01' });
+    choose({ label: 'Choose Event date' });
+    choose({ label: 'Close date picker' });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Event date (YYYY-MM-DD)' }).props.value).toBe('2024-02-01');
+    choose({ label: 'Choose Event date' });
+    choose({ label: 'February 29, 2024' });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Event date (YYYY-MM-DD)' }).props.value).toBe('2024-02-29');
+  });
+  it('explains the next missing event requirement without changing save eligibility', () => {
+    const data={accounts:[{id:'brokerage',name:'Maple brokerage',kind:'brokerage',mode:'holdings',currency:'CAD'}],instruments:[],events:[],bankTransactions:[],quote:{configured:false,provider:null,lastRefreshedAt:null},csv:{template:null,previewId:null,rowCount:0,errors:[],duplicates:[]}};
+    const {tree,choose,fill}=renderEditor({data,initialAction:'event',onAction:()=>{}});
+    expect(JSON.stringify(tree.toJSON())).toContain('Choose an account');
+    choose({label:'Use Maple brokerage'});expect(JSON.stringify(tree.toJSON())).toContain('Enter a valid event date');
+    fill({label:'Event date (YYYY-MM-DD)',value:'2026-11-01'});expect(JSON.stringify(tree.toJSON())).toContain('Enter a valid amount');
+    expect(tree.root.findAllByProps({accessibilityLabel:'Save event'}).at(-1).props.disabled).toBe(true);
+  });
+  it('offers grouped actions without showing every operation at once', () => {
+    const data = { accounts: [], instruments: [], events: [], quote: { configured: false, provider: null, lastRefreshedAt: null }, csv: { template: null, previewId: null, rowCount: 0, errors: [], duplicates: [] } };
+    const { tree } = renderEditor({ data, initialAction: 'account', onAction: () => {} });
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Reverse event' })).toHaveLength(0);
+    act(() => tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress());
+    expect(JSON.stringify(tree.toJSON())).toContain('Transactions');
+    expect(tree.root.findByProps({ accessibilityLabel: 'Reverse event' })).toBeTruthy();
+  });
   it('uses Web Crypto entropy when randomUUID is unavailable', () => {
     const originalCrypto = (globalThis as { crypto?: unknown }).crypto;
     const getRandomValues = vi.fn((bytes: Uint8Array) => {
@@ -239,9 +268,13 @@ describe('Android Wealth typed write flow', () => {
     const { tree, choose, fill } = renderEditor({ data, initialAction: 'event', onAction: makeActionHandler({ startWrite, operationId: 'op-event' }) });
     choose({ label: 'Use Maple brokerage' });
     choose({ label: 'contribution' });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Amount (for example 125.00)' }).props.keyboardType).toBe('numeric');
     fill({ label: 'Event date (YYYY-MM-DD)', value: '2026-11-01' });
     fill({ label: 'Amount (for example 125.00)', value: '125.00' });
+    choose({ label: 'Choose a confirmed Activity record' });
+    fill({ label: 'Search Activity records', value: 'Brokerage' });
     choose({ label: '2026-11-01 · Brokerage transfer · Everyday chequing · CAD 125.00' });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Choose a confirmed Activity record' }).props.accessibilityValue.text).toContain('Brokerage transfer');
     choose({ label: 'Save event' });
     expect(startWrite).toHaveBeenCalledWith({ operationId: 'op-event', action: 'event', body: expect.any(String) });
     expect(JSON.parse(startWrite.mock.calls[0][0].body)).toMatchObject({ kind: 'contribution', accountId: 'brokerage', linkedBankSourceId: 'tx-internal-only' });
@@ -257,6 +290,8 @@ describe('Android Wealth typed write flow', () => {
       quote: { configured: false, provider: null, lastRefreshedAt: null }, csv: { template: null, previewId: null, rowCount: 0, errors: [], duplicates: [] },
     };
     const { tree, choose, fill } = renderEditor({ data, initialAction: 'correction', onAction: makeActionHandler({ startWrite, operationId: 'op-correction' }) });
+    choose({ label: 'Choose an existing event' });
+    fill({ label: 'Search existing events', value: 'Existing' });
     choose({ label: '2026-10-01 · Existing contribution' });
     choose({ label: 'Use Maple brokerage' });
     choose({ label: 'contribution' });
@@ -278,11 +313,13 @@ describe('Android Wealth typed write flow', () => {
       quote: { configured: false, provider: null, lastRefreshedAt: null }, csv: { template: null, previewId: null, rowCount: 0, errors: [], duplicates: [] },
     };
     const { tree, choose, fill } = renderEditor({ data, initialAction: 'correction', onAction: makeActionHandler({ startWrite, operationId: 'op-correction-replacement' }) });
+    choose({ label: 'Choose an existing event' });
     choose({ label: '2026-10-01 · Existing contribution' });
     choose({ label: 'Use Maple brokerage' });
     choose({ label: 'contribution' });
     fill({ label: 'Event date (YYYY-MM-DD)', value: '2026-10-02' });
     fill({ label: 'Amount (for example 125.00)', value: '125.00' });
+    choose({ label: 'Choose a confirmed Activity record' });
     choose({ label: '2026-10-02 · Corrected transfer · Everyday chequing · CAD 125.00' });
     choose({ label: 'Save correction' });
     expect(JSON.parse(startWrite.mock.calls[0][0].body).replacement).toMatchObject({ linkedBankSourceId: 'tx-new' });
@@ -392,6 +429,8 @@ describe('Android Wealth typed write flow', () => {
     };
     let tree: any;
     act(() => { tree = create(React.createElement(InvestmentOperations, { dark: false, ...data, initialAction: 'csv-preview', csvSourceOperationId: 'pick', onCsvRemap: remap, onAction: vi.fn() })); });
+    expect(JSON.stringify(tree.toJSON())).not.toContain('Choose a CSV file or paste CSV rows to preview.');
+    expect(JSON.stringify(tree.toJSON())).toContain('Review the preview');
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Show CSV column mapping' }).props.onPress(); });
     expect(tree.root.findAllByType('Modal')).toHaveLength(1);
     expect(tree.root.findByType('KeyboardAvoidingView').props.behavior).toBe('padding');

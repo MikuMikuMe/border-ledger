@@ -57,8 +57,9 @@ describe('native financial view fixtures and accessibility',()=>{
     act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report filters')[0].props.onPress());
     expect(tree.root.findAll((n:any)=>n.type==='Modal')).toHaveLength(1);
     expect(tree.root.findByType('Modal').props.animationType).toBe('slide');
+    expect(tree.root.findByType('Modal').findByType('KeyboardAvoidingView').props.behavior).toBe('padding');
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: No conversion')).toHaveLength(1);
-    expect(tree.root.findAll((n:any)=>n.type==='ScrollView'&&n.props.horizontal&&n.props.keyboardShouldPersistTaps==='handled')).toHaveLength(1);
+    expect(tree.root.findAll((n:any)=>n.type==='ScrollView'&&n.props.accessibilityLabel==='Reporting currency options'&&n.props.keyboardShouldPersistTaps==='handled')).toHaveLength(1);
     const search=tree.root.findAll((n:any)=>n.type==='TextInput'&&n.props.accessibilityLabel==='Search reporting currency')[0];
     act(()=>search.props.onChangeText('KWD'));
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(1);
@@ -122,6 +123,8 @@ describe('native financial view fixtures and accessibility',()=>{
     expect(row.props.accessibilityRole).toBe('button');expect(row.props.accessibilityLabel).toContain(transaction.status);expect(row.props.accessibilityLabel).toContain(transaction.category);expect(row.props.accessibilityLabel).toContain('Source:');expect(row.props.accessibilityLabel.match(/10\.00/g)).toHaveLength(1);
     const rowText=row.findAll((n:any)=>n.type==='Text').map((n:any)=>n.children.join('')).join(' ');
     expect(row.findAll((n:any)=>n.type==='Text').some((n:any)=>n.children.join('')===transaction.merchant)).toBe(true);expect(rowText).toContain('10.00');expect(rowText).toContain('CAD');
+    expect(rowText).not.toContain('Source:');
+    expect(rowText).toContain('2026-10-17 12:00:00 UTC');
   });
   it('opens the actual transaction and exposes editable labeled fields with draft preservation',()=>{
     let opened='';let saved:any;
@@ -130,6 +133,7 @@ describe('native financial view fixtures and accessibility',()=>{
     expect(opened).toBe('fixture_tx');
     expect(tree.root.findAll((n:any)=>n.type==='TextInput'&&n.props.accessibilityLabel==='Category')[0].props.value).toBe('Food');
     expect(text(tree)).toContain('Keep me');expect(text(tree)).toContain('changed elsewhere');
+    expect(text(tree)).toContain('Changes affect only the category and note.');
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Save annotation')[0].props.disabled).toBe(true);
     expect(tree.root.findAll((n:any)=>n.type==='Modal')[0].props.onRequestClose).toBeTypeOf('function');
   });

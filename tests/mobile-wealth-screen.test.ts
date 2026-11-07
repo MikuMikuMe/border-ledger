@@ -141,6 +141,7 @@ describe('Android Wealth views', () => {
       operation: 'correction',
       onAction: vi.fn(),
     })); });
+    act(() => { tree.root.findByProps({ accessibilityLabel: 'Choose an existing event' }).props.onPress(); });
     expect(JSON.stringify(tree.toJSON())).toContain('Salary contribution');
   });
 
@@ -369,6 +370,7 @@ describe('Android Wealth views', () => {
     let tree: any;
     await act(async () => { tree = create(React.createElement(WealthScreen, { dark: false, service })); await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Investments' }).props.onPress(); await Promise.resolve(); });
+    await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Preview CSV' }).props.onPress(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth CSV file' }).props.onPress(); await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Save Wealth CSV template' }).props.onPress(); await Promise.resolve(); });
@@ -400,8 +402,10 @@ describe('Android Wealth views', () => {
     let tree: any;
     await act(async () => { tree = create(React.createElement(WealthScreen, { dark: false, service })); await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Investments' }).props.onPress(); await Promise.resolve(); });
+    await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Preview CSV' }).props.onPress(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth CSV file' }).props.onPress(); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Commit CSV' }).props.onPress(); await Promise.resolve(); });
     expect(JSON.stringify(tree.toJSON())).toContain('10 rows ready to commit · 10 staged');
     expect(tree.root.findByProps({ accessibilityLabel: 'Show CSV column mapping' })).toBeTruthy();

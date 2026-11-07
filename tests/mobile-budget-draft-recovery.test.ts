@@ -35,3 +35,27 @@ it('opens a rollover preview for explicit confirmation',()=>{
  let tree:any;act(()=>{tree=create(React.createElement(BudgetScreen,{dark:false,showAnalysis:false}));});
  expect(tree.root.findByType('Modal').findByProps({accessibilityLabel:'Confirm rollover policy'})).toBeTruthy();
 });
+it('opens a month picker and selects a month directly',()=>{
+ const chooseMonth=vi.fn();stub.current={month:'2026-10',draftMonth:'2026-10',mode:'envelope',configured:true,loading:false,previewLoading:false,mutation:{blocked:false,status:'ready'},view:null,write:()=>{},load:()=>{},chooseMonth};
+ let tree:any;act(()=>{tree=create(React.createElement(BudgetScreen,{dark:false,showAnalysis:false}));});
+ act(()=>tree.root.findByProps({accessibilityLabel:'Choose budget month'}).props.onPress());
+ act(()=>tree.root.findByProps({accessibilityLabel:'January 2026'}).props.onPress());
+ expect(chooseMonth).toHaveBeenCalledWith('2026-01');
+});
+it('keeps the result visible after a confirmed rollover preview is cleared',()=>{
+ stub.current={month:'2026-10',draftMonth:'2026-10',mode:'envelope',configured:true,loading:false,previewLoading:false,mutation:{blocked:false,status:'ready'},view:null,write:()=>{},load:()=>{},cancelPreview:()=>{},rolloverPreview:{category:'Food',effectiveMonth:'2026-10',policy:'reset',revision:1,changes:[]}};
+ let tree:any;act(()=>{tree=create(React.createElement(BudgetScreen,{dark:false,showAnalysis:false}));});
+ act(()=>tree.root.findByProps({accessibilityLabel:'Confirm rollover policy'}).props.onPress());
+ act(()=>{stub.current={...stub.current,rolloverPreview:null,error:'Budget changed. Review the refreshed amounts.',mutation:{blocked:false,status:'revision_conflict'}};tree.update(React.createElement(BudgetScreen,{dark:false,showAnalysis:false}));});
+ expect(JSON.stringify(tree.root.findByType('Modal').findAllByType('Text').map((n:any)=>n.children))).toContain('Budget changed.');
+ expect(tree.root.findByProps({accessibilityLabel:'Close budget result'})).toBeTruthy();
+});
+it('keeps operation recovery available on the budget screen after closing an uncertain preview',()=>{
+ stub.current={month:'2026-10',draftMonth:'2026-10',mode:'envelope',configured:true,loading:false,previewLoading:false,mutation:{blocked:false,status:'ready'},view:null,write:()=>{},load:()=>{},recover:()=>{},cancelPreview:()=>{stub.current={...stub.current,rolloverPreview:null};},rolloverPreview:{category:'Food',effectiveMonth:'2026-10',policy:'reset',revision:1,changes:[]}};
+ let tree:any;act(()=>{tree=create(React.createElement(BudgetScreen,{dark:false,showAnalysis:false}));});
+ act(()=>tree.root.findByProps({accessibilityLabel:'Confirm rollover policy'}).props.onPress());
+ act(()=>{stub.current={...stub.current,mutation:{blocked:true,status:'reconciliation_required'}};tree.update(React.createElement(BudgetScreen,{dark:false,showAnalysis:false}));});
+ act(()=>{tree.root.findByProps({accessibilityLabel:'Close preview'}).props.onPress();tree.update(React.createElement(BudgetScreen,{dark:false,showAnalysis:false}));});
+ expect(tree.root.findAllByProps({accessibilityLabel:'Confirm rollover policy'})).toHaveLength(0);
+ expect(tree.root.findByProps({accessibilityLabel:'Refresh submitted operation status'})).toBeTruthy();
+});
