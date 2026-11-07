@@ -6,7 +6,7 @@ const React = require('react');
 const { act, create } = require('react-test-renderer');
 
 vi.mock('../mobile/node_modules/react-native/index.js', () => ({
-  Text: 'Text', View: 'View', Pressable: 'Pressable', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator', Modal: 'Modal', ScrollView: 'ScrollView',
+  Text: 'Text', View: 'View', Pressable: 'Pressable', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator', Modal: 'Modal', ScrollView: 'ScrollView', KeyboardAvoidingView: 'KeyboardAvoidingView',
   StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
   TurboModuleRegistry: { getEnforcing: () => ({}) },
 }));
@@ -393,7 +393,10 @@ describe('Android Wealth typed write flow', () => {
     let tree: any;
     act(() => { tree = create(React.createElement(InvestmentOperations, { dark: false, ...data, initialAction: 'csv-preview', csvSourceOperationId: 'pick', onCsvRemap: remap, onAction: vi.fn() })); });
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Show CSV column mapping' }).props.onPress(); });
+    expect(tree.root.findAllByType('Modal')).toHaveLength(1);
+    expect(tree.root.findByType('KeyboardAvoidingView').props.behavior).toBe('padding');
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Choose source column for date' }).props.onPress(); });
+    expect(tree.root.findAllByType('Modal')).toHaveLength(1);
     act(() => { tree.root.findByProps({ accessibilityLabel: 'posted_on for date' }).props.onPress(); });
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Re-preview mapped CSV' }).props.onPress(); });
     expect(remap).toHaveBeenCalledWith({ date: 'posted_on' });

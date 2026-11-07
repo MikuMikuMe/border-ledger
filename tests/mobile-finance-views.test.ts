@@ -7,6 +7,7 @@ vi.mock('../mobile/node_modules/react-native/index.js',()=>({Text:'Text',View:'V
 // Runtime import keeps RN ambient declarations out of the independent React 18 web typecheck.
 const viewModule='../mobile/src/features/finance/FinanceViews';
 const {OverviewView,ActivityView,RecurringView}=await import(viewModule);
+const motion=await import('../mobile/src/features/auth/presentationPolicy');
 import {report,transaction,stream,states} from './fixtures/mobile-finance';
 
 (globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;
@@ -54,7 +55,28 @@ describe('native financial view fixtures and accessibility',()=>{
     const tree=render(OverviewView,{...actions,dark:true,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD','CNY']});
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(0);
     act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report filters')[0].props.onPress());
+    expect(tree.root.findAll((n:any)=>n.type==='Modal')).toHaveLength(1);
+    expect(tree.root.findByType('Modal').props.animationType).toBe('slide');
+    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: No conversion')).toHaveLength(1);
+    expect(tree.root.findAll((n:any)=>n.type==='ScrollView'&&n.props.horizontal&&n.props.keyboardShouldPersistTaps==='handled')).toHaveLength(1);
+    const search=tree.root.findAll((n:any)=>n.type==='TextInput'&&n.props.accessibilityLabel==='Search reporting currency')[0];
+    act(()=>search.props.onChangeText('KWD'));
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Reporting currency: KWD')).toHaveLength(1);
+    act(()=>tree.root.findByType('Modal').props.onRequestClose());
+    expect(tree.root.findAll((n:any)=>n.type==='Modal')).toHaveLength(0);
+  });
+  it('keeps the prior-period comparison concise and its coverage context in details',()=>{
+    const tree=render(OverviewView,{...actions,dark:false,state:ready(report),previous:ready({...report,from:'2026-09-14',to:'2026-09-30'}),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});
+    expect(text(tree)).toContain('Previous period');expect(text(tree)).not.toContain('recorded spending');expect(text(tree)).not.toContain('Account coverage may differ');
+    act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Report details')[0].props.onPress());
+    expect(text(tree)).toContain('Account coverage may differ');
+  });
+  it('removes filter panel motion when reduced motion is enabled',()=>{
+    const {ReducedMotionContext}=motion;
+    const props={...actions,dark:false,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']};
+    let tree:any;act(()=>{tree=create(React.createElement(ReducedMotionContext.Provider,{value:true},React.createElement(OverviewView,props)));});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Report filters'}).props.onPress());
+    expect(tree.root.findByType('Modal').props.animationType).toBe('none');
   });
   it('prioritizes spending while keeping report context and refresh accessible',()=>{
     const tree=render(OverviewView,{...actions,dark:true,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD','CNY']});

@@ -1,7 +1,7 @@
 import {AnalysisContent} from '../features/budget/AnalysisContent';
 import React,{useEffect} from 'react';
 import {BackHandler,TextInput,View} from 'react-native';
-import {Action,Copy,MutationStatus} from '../features/finance/FinanceViews';
+import {Action,Copy,DetailModal,MutationStatus} from '../features/finance/FinanceViews';
 import {getCurrencyMeta} from '../../../src/domain/currencies';
 import {BudgetContent} from '../features/budget/BudgetContent';
 import {useMobileBudget} from '../features/budget/useMobileBudget';
@@ -20,13 +20,13 @@ function BudgetBody({dark,state}:{dark:boolean;state:State}) {
   if(state.configured===false) return <BudgetSetup dark={dark} state={state}/>;
   if(!state.view || state.view.summary.month!==state.month) return null;
   const view=state.view,busy=state.loading||state.mutation.blocked||state.previewLoading;
-  if(view.mode==='tracking')return <TrackingContent key={`${state.month}:tracking`} dark={dark} view={view} busy={busy} onWrite={state.write} onCopy={state.previewCopy}/>;
-  return <BudgetContent key={`${state.month}:envelope`} dark={dark} currency={view.settings.currency} view={view} busy={busy} onWrite={state.write} onRollover={state.previewRollover} onPreviewChange={state.cancelPreview}/>;
+  if(view.mode==='tracking')return <TrackingContent key={`${state.month}:tracking`} dark={dark} view={view} busy={busy} onWrite={state.write} onCopy={state.previewCopy} status={<BudgetStatus dark={dark} state={state}/>}/>;
+  return <BudgetContent key={`${state.month}:envelope`} dark={dark} currency={view.settings.currency} view={view} busy={busy} onWrite={state.write} onRollover={state.previewRollover} onPreviewChange={state.cancelPreview} status={<BudgetStatus dark={dark} state={state}/>}/>;
 }
 function BudgetPreviews({dark,state}:{dark:boolean;state:State}) {
  useEffect(()=>{if(!state.copyPreview&&!state.rolloverPreview)return;const subscription=BackHandler?.addEventListener('hardwareBackPress',()=>{state.cancelPreview();return true;});return()=>subscription?.remove();},[state.copyPreview,state.rolloverPreview,state.cancelPreview]);
  const currency=state.view?.settings.currency??state.currency;
- return <>{state.previewLoading?<Copy dark={dark}>Preparing change preview…</Copy>:null}{state.copyPreview?<CopyPlanPreview dark={dark} currency={currency} preview={state.copyPreview} busy={state.mutation.blocked} onWrite={state.write} onCancel={state.cancelPreview}/>:null}{state.rolloverPreview?<RolloverChangePreview dark={dark} currency={currency} preview={state.rolloverPreview} busy={state.mutation.blocked} onWrite={state.write} onCancel={state.cancelPreview}/>:null}</>;
+ return <>{state.previewLoading?<Copy dark={dark}>Preparing change preview…</Copy>:null}{state.copyPreview?<DetailModal dark={dark} title="Review plan copy" onClose={state.cancelPreview}><BudgetStatus dark={dark} state={state}/><CopyPlanPreview dark={dark} currency={currency} preview={state.copyPreview} busy={state.mutation.blocked} onWrite={state.write} onCancel={state.cancelPreview}/></DetailModal>:null}{state.rolloverPreview?<DetailModal dark={dark} title="Review rollover change" onClose={state.cancelPreview}><BudgetStatus dark={dark} state={state}/><RolloverChangePreview dark={dark} currency={currency} preview={state.rolloverPreview} busy={state.mutation.blocked} onWrite={state.write} onCancel={state.cancelPreview}/></DetailModal>:null}</>;
 }
 export function BudgetScreen({dark,service,showAnalysis=true}:{dark:boolean;service?:BudgetService;showAnalysis?:boolean}) {
   const state=useMobileBudget(service),busy=state.loading||state.mutation.blocked||state.previewLoading;

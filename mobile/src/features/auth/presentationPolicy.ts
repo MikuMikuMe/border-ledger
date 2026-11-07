@@ -1,3 +1,5 @@
+import {createContext} from 'react';
+export const ReducedMotionContext=createContext(false);
 export const LOGIN_ACTION_COLORS = { background: '#174B37', foreground: '#F4F0E6' } as const;
 export const DARK_TEXT_COLORS = { muted: '#A5B2AA', accent: '#83C9B1', warning: '#D7B77E', error: '#FFB4A9' } as const;
 

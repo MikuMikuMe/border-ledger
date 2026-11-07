@@ -7,7 +7,7 @@ const React = require('react');
 const { act, create } = require('react-test-renderer');
 
 vi.mock('../mobile/node_modules/react-native/index.js', () => ({
-  Text: 'Text', View: 'View', Pressable: 'Pressable', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator', Modal: 'Modal', ScrollView: 'ScrollView',
+  Text: 'Text', View: 'View', Pressable: 'Pressable', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator', Modal: 'Modal', ScrollView: 'ScrollView', KeyboardAvoidingView: 'KeyboardAvoidingView',
   AppState: { addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: (_event: string, handler: () => boolean) => { nativeAccessibility.backHandlers.push(handler); return { remove: () => { nativeAccessibility.backHandlers = nativeAccessibility.backHandlers.filter(value => value !== handler); } }; } },
   StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 }, TurboModuleRegistry: { getEnforcing: () => ({}) },
 }));

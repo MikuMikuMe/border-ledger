@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
+import { ReducedMotionContext } from '../auth/presentationPolicy';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { WealthBankAccount, WealthBankTransaction, WealthCashFlowRow, WealthCsvMapping, WealthEventRow, WealthInvestmentDetail, WealthView, WealthWireSnapshot } from './contracts';
 import { parseMoneyMinor } from '../../../../src/domain/currencies';
 import type { CanonicalInstrument } from '../../../../src/domain/wealth-types';
@@ -683,9 +684,7 @@ function CsvHeaderPicker({ dark, canonical, current, sourceHeaders, onChoose, on
   const matchingHeaders = sourceHeaders.filter(header => header.toLowerCase().includes(normalizedQuery));
   const headers = current && !matchingHeaders.includes(current) ? [current, ...matchingHeaders] : matchingHeaders;
   const colors = theme(dark);
-  return <Modal transparent visible animationType="none" onRequestClose={onClose}>
-    <View style={styles.mappingModalBackdrop}>
-      <View accessibilityViewIsModal style={[styles.mappingModal, { backgroundColor: colors.panel, borderColor: colors.rule }]}>
+  return <>
         <Copy dark={dark} heading>Choose source column</Copy>
         <Copy dark={dark} muted>{canonical}</Copy>
         <TextInput accessibilityLabel="Search source columns" value={query} onChangeText={setQuery} placeholder="Search source columns" placeholderTextColor={colors.muted} style={[styles.input, styles.mappingSearch, { color: colors.ink, borderColor: colors.rule, backgroundColor: colors.canvas }]}/>
@@ -695,9 +694,7 @@ function CsvHeaderPicker({ dark, canonical, current, sourceHeaders, onChoose, on
           {!headers.length ? <Copy dark={dark} muted>No source columns match this search.</Copy> : null}
         </ScrollView>
         <Action dark={dark} label="Close source column picker" onPress={onClose}/>
-      </View>
-    </View>
-  </Modal>;
+  </>;
 }
 
 function CsvMappingDisclosure({ dark, expanded, matchedCount, total, onToggle }: { dark: boolean; expanded: boolean; matchedCount: number; total: number; onToggle: () => void }) {
@@ -737,6 +734,15 @@ function csvEditorMapping(csv: WealthWireSnapshot['csv'], mapping: WealthCsvMapp
   return resolved;
 }
 
+function CsvMappingPanel({dark, activeCanonical, mapping, sourceHeaders, canonicalHeaders, canRemap, choose, closePicker, close, onSelect, onRemap}: {dark:boolean; activeCanonical:string|null; mapping:WealthCsvMapping; sourceHeaders:string[]; canonicalHeaders:string[]; canRemap:boolean; choose:(source:string|null)=>void; closePicker:()=>void; close:()=>void; onSelect:(value:string)=>void; onRemap?:(mapping:WealthCsvMapping)=>void}) {
+  const reducedMotion=useContext(ReducedMotionContext),colors=theme(dark);
+  return <Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={activeCanonical?closePicker:close}>
+    <KeyboardAvoidingView behavior="padding" style={styles.mappingModalBackdrop}><View accessibilityViewIsModal style={[styles.mappingModal,{backgroundColor:colors.panel,borderColor:colors.rule}]}>
+      {activeCanonical?<CsvHeaderPicker dark={dark} canonical={activeCanonical} current={mapping[activeCanonical]} sourceHeaders={sourceHeaders} onChoose={choose} onClose={closePicker}/>:<><Copy dark={dark} heading>Column mapping</Copy><ScrollView keyboardShouldPersistTaps="handled"><CsvMappingDetails dark={dark} canonicalHeaders={canonicalHeaders} mapping={mapping} onSelect={onSelect} canRemap={canRemap} onRemap={value=>{onRemap?.(value);close();}}/></ScrollView><Action dark={dark} label="Close column mapping" onPress={close}/></>}
+    </View></KeyboardAvoidingView>
+  </Modal>;
+}
+
 function CsvMappingEditor({ dark, csv, mapping, onChange, onRemap, canRemap }: { dark: boolean; csv: WealthWireSnapshot['csv']; mapping: WealthCsvMapping; onChange: (mapping: WealthCsvMapping) => void; onRemap?: (mapping: WealthCsvMapping) => void; canRemap: boolean }) {
   const sourceHeaders = csv.sourceHeaders ?? [];
   const canonicalHeaders = csv.canonicalHeaders?.length ? csv.canonicalHeaders : defaultCanonicalHeaders;
@@ -751,8 +757,7 @@ function CsvMappingEditor({ dark, csv, mapping, onChange, onRemap, canRemap }: {
   };
   return <View style={[styles.mapping, { borderColor: theme(dark).rule, backgroundColor: theme(dark).panel }]}>
     <CsvMappingDisclosure dark={dark} expanded={expanded} matchedCount={matchedCount} total={canonicalHeaders.length} onToggle={() => setExpanded(value => !value)}/>
-    {expanded ? <CsvMappingDetails dark={dark} canonicalHeaders={canonicalHeaders} mapping={mapping} onSelect={setActiveCanonical} canRemap={canRemap} onRemap={onRemap}/> : null}
-    <CsvHeaderPicker dark={dark} canonical={activeCanonical} current={activeCanonical ? mapping[activeCanonical] : null} sourceHeaders={sourceHeaders} onChoose={choose} onClose={() => setActiveCanonical(null)}/>
+    {expanded ? <CsvMappingPanel dark={dark} activeCanonical={activeCanonical} mapping={mapping} sourceHeaders={sourceHeaders} canonicalHeaders={canonicalHeaders} canRemap={canRemap} choose={choose} closePicker={()=>setActiveCanonical(null)} close={()=>setExpanded(false)} onSelect={setActiveCanonical} onRemap={onRemap}/> : null}
   </View>;
 }
 

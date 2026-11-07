@@ -1,9 +1,9 @@
 import React,{useState} from 'react';
-import {BudgetDisclosure,budgetSpokenMoney,useBudgetDisclosure} from './BudgetControls';
-import {RolloverEditor,type RolloverRule} from './RolloverEditor';
+import {BudgetDisclosure,budgetSpokenMoney,useBudgetDisclosure,useBudgetDraft} from './BudgetControls';
+import {RolloverEditor,currentRolloverPolicy,type RolloverRule} from './RolloverEditor';
 import type {BudgetMode,RolloverPolicy} from './budgetTracking';
 import {TextInput,View} from 'react-native';
-import {Action,Copy} from '../finance/FinanceViews';
+import {Action,Copy,DetailModal} from '../finance/FinanceViews';
 import {formatMoney} from '../finance/model';
 import {getCurrencyMeta,parseMoneyMinor} from '../../../../src/domain/currencies';
 
@@ -16,18 +16,20 @@ function decimal(value:number,currency:string) {const digits=getCurrencyMeta(cur
 function Field({dark,label,value,onChange}:{dark:boolean;label:string;value:string;onChange(value:string):void}) {
   return <View style={{gap:5,marginTop:8}}><Copy dark={dark}>{label}</Copy><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} style={{minHeight:48,borderWidth:1,borderRadius:8,padding:10,borderColor:dark?'#43534B':'#9AADA2',color:dark?'#EEF1E8':'#18201F'}}/></View>;
 }
-function CategoryPanel({dark,row,currency,month,busy,onWrite,onRollover,onPreviewChange,rules}:{dark:boolean;row:Category;currency:string;month:string;busy:boolean;onWrite:Write;onRollover?:(category:string,month:string,policy:RolloverPolicy)=>void;onPreviewChange?:()=>void;rules:RolloverRule[]}) {
+function CategoryPanel({dark,row,currency,month,busy,onWrite,onRollover,onPreviewChange,rules,status}:{dark:boolean;row:Category;currency:string;month:string;busy:boolean;onWrite:Write;onRollover?:(category:string,month:string,policy:RolloverPolicy)=>void;onPreviewChange?:()=>void;rules:RolloverRule[];status?:React.ReactNode}) {
   const {expanded,setExpanded}=useBudgetDisclosure();
-  const [allocation,setAllocation]=useState(''),[target,setTarget]=useState('');
+  const [allocation,setAllocation]=useState(''),[target,setTarget]=useState(''),[outgoingMonth,setOutgoingMonth]=useState(month);
+  const currentPolicy=currentRolloverPolicy(rules,row.category,month);
+  const [policy,setPolicy]=useBudgetDraft(currentPolicy);
   const spokenValue=`Assigned ${budgetSpokenMoney(row.assignedMinor,currency)}. Activity ${budgetSpokenMoney(row.activityMinor,currency)}. Available ${budgetSpokenMoney(row.availableMinor,currency)}. Carried ${budgetSpokenMoney(row.openingMinor,currency)}.`;
   return <View style={{gap:6,paddingVertical:16,borderTopWidth:1,borderColor:dark?'#43534B':'#D2CCC0'}}>
     <BudgetDisclosure dark={dark} label={`Edit envelope ${row.category}`} spokenValue={spokenValue} expanded={expanded} onPress={()=>setExpanded(!expanded)}><Copy dark={dark} heading>{row.category}</Copy><Copy dark={dark}>Available {money(row.availableMinor,currency)}</Copy></BudgetDisclosure>
     <Copy dark={dark}>Carried {money(row.openingMinor,currency)} · Assigned {money(row.assignedMinor,currency)} · Activity {money(row.activityMinor,currency)}</Copy>
     <Copy dark={dark}>Target {row.targetMinor===null?'Not set':money(row.targetMinor,currency)}{row.suggestedMinor===null?'':` · Suggested ${money(row.suggestedMinor,currency)} (${row.suggestionBasis})`}</Copy>
     {row.missingTransactionIds.length?<Copy dark={dark} error>Some exchange rates are unavailable.</Copy>:null}
-    {expanded?<><Copy dark={dark}>Adjust this category</Copy>{row.suggestedMinor!==null?<Action dark={dark} label={`Use suggestion for ${row.category}`} onPress={()=>setAllocation(decimal(row.assignedMinor+row.suggestedMinor!,currency))} disabled={busy}/>:null}
+    {expanded?<DetailModal dark={dark} title={`Edit ${row.category} envelope`} onClose={()=>setExpanded(false)}>{status}<Copy dark={dark}>Adjust this category</Copy>{row.suggestedMinor!==null?<Action dark={dark} label={`Use suggestion for ${row.category}`} onPress={()=>setAllocation(decimal(row.assignedMinor+row.suggestedMinor!,currency))} disabled={busy}/>:null}
     <Field dark={dark} label={`Assignment for ${row.category}`} value={allocation} onChange={setAllocation}/><Action dark={dark} label={`Save assignment for ${row.category}`} disabled={busy} onPress={()=>onWrite('allocations',()=>({month,category:row.category,assignedMinor:parseMoneyMinor(allocation.trim(),currency)}))}/>
-    <Field dark={dark} label={`Target for ${row.category}`} value={target} onChange={setTarget}/><Action dark={dark} label={`Save target for ${row.category}`} disabled={busy} onPress={()=>onWrite('targets',()=>({category:row.category,targetMinor:parseMoneyMinor(target.trim(),currency)}))}/>{onRollover?<RolloverEditor dark={dark} category={row.category} month={month} rules={rules} busy={busy} onPreview={onRollover} onChange={onPreviewChange}/>:null}</>:null}
+    <Field dark={dark} label={`Target for ${row.category}`} value={target} onChange={setTarget}/><Action dark={dark} label={`Save target for ${row.category}`} disabled={busy} onPress={()=>onWrite('targets',()=>({category:row.category,targetMinor:parseMoneyMinor(target.trim(),currency)}))}/>{onRollover?<RolloverEditor dark={dark} category={row.category} month={month} rules={rules} busy={busy} onPreview={(category,effectiveMonth,value)=>{setExpanded(false);onRollover(category,effectiveMonth,value);}} onChange={onPreviewChange} draft={{policy,month:outgoingMonth,setPolicy,setMonth:setOutgoingMonth}}/>:null}<Action dark={dark} label="Close envelope editor" onPress={()=>setExpanded(false)}/></DetailModal>:null}
   </View>;
 }
 function AddCategory({dark,currency,month,busy,onWrite}:{dark:boolean;currency:string;month:string;busy:boolean;onWrite:Write}) {
@@ -46,9 +48,9 @@ function BalancePanel({dark,view,busy,onWrite}:{dark:boolean;view:BudgetData;bus
     <Field dark={dark} label="Balance name" value={name} onChange={setName}/><Field dark={dark} label="Balance currency" value={currency} onChange={value=>setCurrency(value.toUpperCase())}/><Field dark={dark} label="Balance amount" value={amount} onChange={setAmount}/><Action dark={dark} label="Save custom balance" disabled={busy} onPress={()=>onWrite('cash',id=>({id:view.balances.find(item=>item.accountId===accountId && item.source==='manual')?.id??id,name:name.trim(),currency,amountMinor:parseMoneyMinor(amount.trim(),currency),...(accountId?{accountId}:{})}))}/>
   </View>;
 }
-export function BudgetContent({dark,currency,view,busy,onWrite,onRollover,onPreviewChange}:{dark:boolean;currency:string;view:BudgetData;busy:boolean;onWrite:Write;onRollover?:(category:string,month:string,policy:RolloverPolicy)=>void;onPreviewChange?:()=>void}) {
+export function BudgetContent({dark,currency,view,busy,onWrite,onRollover,onPreviewChange,status}:{dark:boolean;currency:string;view:BudgetData;busy:boolean;onWrite:Write;onRollover?:(category:string,month:string,policy:RolloverPolicy)=>void;onPreviewChange?:()=>void;status?:React.ReactNode}) {
   return <View style={{gap:10}}><Copy dark={dark}>Available to assign: {money(view.summary.unassignedMinor,currency)}</Copy><Copy dark={dark}>Current cash: {money(view.summary.cashMinor,currency)} · credit accounts excluded</Copy><Copy dark={dark}>{view.summary.month===view.currentMonth?'After category balances and future assignments.':'Current cash is not a historical balance.'}</Copy><Copy dark={dark} heading>Categories</Copy>
-    {view.summary.categories.map(row=><CategoryPanel key={row.category} dark={dark} row={row} currency={currency} month={view.summary.month} busy={busy} onWrite={onWrite} onRollover={onRollover} onPreviewChange={onPreviewChange} rules={view.rolloverPolicies??[]}/>)}
+    {view.summary.categories.map(row=><CategoryPanel key={row.category} dark={dark} row={row} currency={currency} month={view.summary.month} busy={busy} onWrite={onWrite} onRollover={onRollover} onPreviewChange={onPreviewChange} rules={view.rolloverPolicies??[]} status={status}/>)}
     <AddCategory dark={dark} currency={currency} month={view.summary.month} busy={busy} onWrite={onWrite}/>{view.summary.categories.length>1?<MoveMoney dark={dark} currency={currency} month={view.summary.month} categories={view.summary.categories} busy={busy} onWrite={onWrite}/>:null}
     <Copy dark={dark} heading>Counted transactions</Copy>{view.activity.map(item=><Copy dark={dark} key={item.id}>{item.date} · {item.category} · {money(item.sourceMinor,item.sourceCurrency)} · {money(item.activityMinor,currency)}{item.sourceCurrency!==currency?` · Approx. rate ${item.rate??'unavailable'} · ${item.rateDate??'rate unavailable'}`:''}</Copy>)}
     <BalancePanel dark={dark} view={view} busy={busy} onWrite={onWrite}/>
