@@ -11,6 +11,25 @@ const {useMobileBudget}=await import('../mobile/src/features/budget/useMobileBud
 (globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;
 const tracking={mode:'tracking',settings:{currency:'CAD',preferredMode:'tracking',revision:4,startMonth:'2026-10'},summary:{month:'2026-10',plannedIncomeMinor:0,plannedExpenseMinor:0,plannedSavingsMinor:0,actualIncomeMinor:0,actualExpenseMinor:0,actualSavingsMinor:0,categories:[]},plans:[],activity:[],currentMonth:'2026-10',asOf:'now'};
 beforeEach(()=>vi.resetAllMocks());
+async function rolloverHost(){
+ bridge.readSettings.mockResolvedValue(JSON.stringify({settings:tracking.settings}));bridge.readModeView.mockResolvedValue(JSON.stringify(tracking));
+ bridge.readRolloverPreview.mockResolvedValue(JSON.stringify({category:'Food',effectiveMonth:'2026-10',revision:4,policy:'reset',changes:[]}));
+ let state:any,tree:any;function Host(){state=useMobileBudget();return null;}
+ await act(async()=>{tree=create(React.createElement(Host));});await act(async()=>state.previewRollover('Food','2026-10','reset'));
+ return {get state(){return state;},tree};
+}
+it('keeps the confirmation visible while the submitted write is pending',async()=>{
+ let finish!:(value:any)=>void;bridge.startWrite.mockReturnValue(new Promise(resolve=>{finish=resolve;}));
+ const host=await rolloverHost();act(()=>host.state.write('rollover',()=>({category:'Food'})));
+ expect(host.state.mutation.status).toBe('saving');expect(host.state.rolloverPreview?.category).toBe('Food');
+ await act(async()=>finish({status:'completed'}));expect(host.state.rolloverPreview).toBeNull();act(()=>host.tree.unmount());
+});
+it('keeps an uncertain confirmation blocked until operation recovery clears it',async()=>{
+ bridge.startWrite.mockRejectedValue(new Error('offline'));
+ const host=await rolloverHost();await act(async()=>host.state.write('rollover',()=>({category:'Food'})));
+ expect(host.state.mutation.blocked).toBe(true);expect(host.state.rolloverPreview?.category).toBe('Food');
+ await act(async()=>host.state.recover());expect(host.state.rolloverPreview).toBeNull();expect(host.state.mutation.blocked).toBe(false);act(()=>host.tree.unmount());
+});
 it('opens saved tracking mode with an explicit mode read',async()=>{
  bridge.readSettings.mockResolvedValue(JSON.stringify({settings:tracking.settings}));bridge.readModeView.mockResolvedValue(JSON.stringify(tracking));
  let state:any,tree:any;function Host(){state=useMobileBudget();return null;}
@@ -18,6 +37,13 @@ it('opens saved tracking mode with an explicit mode read',async()=>{
  expect(state.mode).toBe('tracking');expect(state.view?.mode).toBe('tracking');expect(bridge.readView).not.toHaveBeenCalled();
  expect(bridge.readModeView.mock.calls[0][0]).toEqual({month:state.month,mode:'tracking'});
  act(()=>tree.unmount());
+});
+it('moves between adjacent budget months without typing',async()=>{
+ bridge.readSettings.mockResolvedValue(JSON.stringify({settings:tracking.settings}));bridge.readModeView.mockResolvedValue(JSON.stringify(tracking));
+ let state:any,tree:any;function Host(){state=useMobileBudget();return null;}
+ await act(async()=>{tree=create(React.createElement(Host));});
+ act(()=>{state.setDraftMonth('2026-01');});act(()=>state.selectMonth());
+ await act(async()=>state.shiftMonth(-1));expect(state.month).toBe('2025-12');expect(state.draftMonth).toBe('2025-12');act(()=>tree.unmount());
 });
 it('keeps a pending same-month load recoverable when Show month is pressed',async()=>{
  let finish!:(value:string)=>void;const pending=new Promise<string>(resolve=>{finish=resolve;});

@@ -10,6 +10,11 @@ it('edits a tracking forecast without writing an envelope allocation',()=>{
  expect(tree.root.findAllByType('TextInput')).toHaveLength(0);
  expect(tree.root.findByProps({accessibilityLabel:'Edit expense Food'}).props.accessibilityValue?.text).toBe('Planned CAD 100.00. Actual unavailable. Remaining unavailable.');
  act(()=>tree.root.findByProps({accessibilityLabel:'Edit expense Food'}).props.onPress());
+ expect(tree.root.findByProps({accessibilityLabel:'Planned expense for Food'}).props.keyboardType).toBe('numeric');
+ expect(tree.root.findAllByType('Modal')).toHaveLength(1);
+ act(()=>tree.root.findByProps({accessibilityLabel:'Planned expense for Food'}).props.onChangeText('bad'));
+ act(()=>tree.root.findByProps({accessibilityLabel:'Save expense plan for Food'}).props.onPress());
+ expect(tree.root.findAllByType('Modal')).toHaveLength(1);expect(JSON.stringify(tree.toJSON())).toContain('Enter a valid amount');expect(writes).toHaveLength(0);
  act(()=>tree.root.findByProps({accessibilityLabel:'Planned expense for Food'}).props.onChangeText('125.50'));
  act(()=>tree.root.findByProps({accessibilityLabel:'Save expense plan for Food'}).props.onPress());
  expect(writes).toEqual([['tracking-plans',{month:'2026-10',direction:'expense',category:'Food',plannedMinor:12550,expectedRevision:4,operationId:'op'}]]);

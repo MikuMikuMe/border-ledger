@@ -1,4 +1,5 @@
-import React,{useEffect,useRef,useState} from 'react';
+import React,{useContext,useEffect,useRef,useState} from 'react';
+import {ReducedMotionContext} from '../auth/presentationPolicy';
 import {AccessibilityInfo,ActivityIndicator,findNodeHandle,KeyboardAvoidingView,Modal,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
 import type {ActivityQuery,Report,Snapshot,Transaction,Transactions,Stream,Lens,RecurringData,MutationState} from './contracts';
 import {comparableTotals,fillReportDays,filterActivity,formatMoney,recurringMessage,reportingCurrencies,reportView,type LoadState,type Window} from './model';
@@ -10,34 +11,38 @@ export function Copy({dark,children,heading=false,error=false}:Theme&{children:R
 }
 export function Card({dark,children}:Theme&{children:React.ReactNode}) {const p=palette(dark);return <View style={[styles.card,{backgroundColor:p.surface,borderColor:p.border}]}>{children}</View>;}
 export function DetailModal({dark,title,onClose,children}:Theme&{title:string;onClose():void;children:React.ReactNode}) {
-  const heading=useRef<React.ElementRef<typeof Text>>(null);
-  return <Modal transparent visible animationType="none" onRequestClose={onClose} onShow={()=>{const node=findNodeHandle(heading.current);if(node)AccessibilityInfo.setAccessibilityFocus(node);}}>
+  const heading=useRef<React.ElementRef<typeof Text>>(null),reducedMotion=useContext(ReducedMotionContext);
+  return <Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={onClose} onShow={()=>{const node=findNodeHandle(heading.current);if(node)AccessibilityInfo.setAccessibilityFocus(node);}}>
     <KeyboardAvoidingView behavior="padding" style={{flex:1,justifyContent:'center',padding:18,backgroundColor:'#00000080'}}>
       <View accessibilityViewIsModal style={[styles.card,{maxHeight:'90%',backgroundColor:palette(dark).surface,borderColor:palette(dark).border}]}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.section}><Text ref={heading} accessible accessibilityRole="header" style={[styles.heading,{color:palette(dark).text}]}>{title}</Text>{children}</ScrollView></View>
     </KeyboardAvoidingView>
   </Modal>;
 }
-export function Action({dark,label,text,onPress,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;onPress():void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
-  const p=palette(dark);return <Pressable accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={onPress} disabled={disabled} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
+export function Action({dark,label,text,value,onPress,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;value?:string;onPress():void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
+  const p=palette(dark);return <Pressable accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={onPress} disabled={disabled} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
 }
-export function LedgerRow({dark,label,title,amount,details,onPress}:Theme&{label:string;title:string;amount?:string;details:string[];onPress():void}) {
+export function LedgerRow({dark,label,title,amount,details,accessibilityDetails=details,onPress}:Theme&{label:string;title:string;amount?:string;details:string[];accessibilityDetails?:string[];onPress():void}) {
   const p=palette(dark);
-  return <Pressable accessibilityRole="button" accessibilityLabel={[label,amount,...details].filter(Boolean).join(' · ')} onPress={onPress} style={({pressed})=>[styles.ledgerRow,{borderColor:p.border},pressed&&styles.rowPressed]}>
+  return <Pressable accessibilityRole="button" accessibilityLabel={[label,amount,...accessibilityDetails].filter(Boolean).join(' · ')} onPress={onPress} style={({pressed})=>[styles.ledgerRow,{borderColor:p.border},pressed&&styles.rowPressed]}>
     <View style={styles.ledgerTop}><Text style={[styles.ledgerTitle,{color:p.text}]}>{title}</Text>{amount?<Text style={[styles.ledgerAmount,{color:p.text}]}>{amount}</Text>:null}</View>
     {details.map((detail,index)=><Text key={index} style={[styles.ledgerMeta,{color:p.muted}]}>{detail}</Text>)}
   </Pressable>;
 }
-function Choices({dark,label,values,value,onChange}:Theme&{label:string;values:string[];value:string|null;onChange(value:string|null):void}) {
-  return <View style={styles.section}><Copy dark={dark} heading>{label}</Copy><ScrollView horizontal contentContainerStyle={{gap:8}}>{[null,...new Set([...(value?[value]:[]),...values])].map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'All'}`} text={v??'All'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</ScrollView></View>;
+function Choices({dark,label,values,value,onChange,searchable=false}:Theme&{label:string;values:string[];value:string|null;onChange(value:string|null):void;searchable?:boolean}) {
+  const [search,setSearch]=useState(''),p=palette(dark);
+  return <View style={styles.section}><Copy dark={dark} heading>{label}</Copy>{searchable?<TextInput accessibilityLabel={`Search ${label.toLowerCase()}`} placeholder="Search currency" placeholderTextColor={p.muted} value={search} onChangeText={setSearch} autoCapitalize="characters" style={[styles.input,{color:p.text,borderColor:p.border}]}/>:null}{searchable?<ScrollView accessibilityLabel={`${label} options`} nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{maxHeight:240}} contentContainerStyle={{gap:8}}>{[null,...new Set([...(value?[value]:[]),...values])].filter(v=>!search||v?.toLowerCase().includes(search.toLowerCase())).map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'No conversion'}`} text={v??'No conversion'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</ScrollView>:<View style={styles.wrap}>{[null,...new Set([...(value?[value]:[]),...values])].map(v=><Action key={v??'all'} dark={dark} label={`${label}: ${v??'All'}`} text={v??'All'} selected={v===value} radio onPress={()=>onChange(v)}/>)}</View>}</View>;
 }
-function FilterDisclosure({dark,label,summary,children}:Theme&{label:string;summary:string;children:React.ReactNode}) {
+function FilterDisclosure({dark,label,summary,children,modal=false}:Theme&{label:string;summary:string;children:React.ReactNode;modal?:boolean}) {
   const [expanded,setExpanded]=useState(false),p=palette(dark);
+  const heading=useRef<React.ElementRef<typeof Text>>(null),reducedMotion=useContext(ReducedMotionContext);
   return <View>
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{expanded}} onPress={()=>setExpanded(!expanded)} style={{minHeight:48,paddingVertical:12}}>
-      <Text style={[styles.disclosureLabel,{color:p.accent}]}>{expanded?'Hide':'Show'} {label.toLowerCase()}</Text>
+      <Text style={[styles.disclosureLabel,{color:p.accent}]}>{modal?label:`${expanded?'Hide':'Show'} ${label.toLowerCase()}`}</Text>
       <Text style={[styles.reportNote,{color:p.muted}]}>{summary}</Text>
     </Pressable>
-    {expanded?children:null}
+    {expanded?(modal?<Modal transparent visible animationType={reducedMotion?'none':'slide'} onRequestClose={()=>setExpanded(false)} onShow={()=>{const node=findNodeHandle(heading.current);if(node)AccessibilityInfo.setAccessibilityFocus(node);}}>
+      <KeyboardAvoidingView behavior="padding" style={styles.sheetBackdrop}><View accessibilityViewIsModal style={[styles.sheet,{backgroundColor:p.surface}]}><View style={styles.sheetHeader}><Text ref={heading} accessible accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>{label}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Close ${label}`} onPress={()=>setExpanded(false)} style={styles.sheetClose}><Text style={[styles.disclosureLabel,{color:p.accent}]}>Done</Text></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>{children}</ScrollView></View></KeyboardAvoidingView>
+    </Modal>:children):null}
   </View>;
 }
 export function Status({dark,state,onRetry,label}:Theme&{state:LoadState<unknown>;onRetry():void;label:string}) {
@@ -109,13 +114,13 @@ function TrendChart({dark,lane,include,converted}:Theme&{lane:TrendLane;include:
 function PeriodComparison({dark,current,previous,lens}:Theme&{current:Report;previous:Report;lens:Lens}) {
   const values=comparableTotals(current,previous,lens.include,lens.source),p=palette(dark);
   if(!values.length)return null;
-  return <View style={[styles.comparison,{borderColor:p.border}]}><Text accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>Previous period</Text><Text style={[styles.reportNote,{color:p.muted}]}>{shortDate(previous.from)} – {shortDate(previous.to)} · recorded spending</Text><Text style={[styles.reportNote,{color:p.muted}]}>Account coverage may differ between periods.</Text>{values.map(value=>{const delta=BigInt(value.difference);return <Text key={value.currency} style={[styles.copy,{color:p.text}]}>{value.currency} · {formatMoney(value.previous,value.currency)} · {delta===0n?'No change':`${formatMoney((delta<0n?-delta:delta).toString(),value.currency)} ${delta>0n?'more':'less'}`}</Text>;})}</View>;
+  return <View style={[styles.comparison,{borderColor:p.border}]}><Text accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>Previous period</Text><Text style={[styles.reportNote,{color:p.muted}]}>{shortDate(previous.from)} – {shortDate(previous.to)}</Text>{values.map(value=>{const delta=BigInt(value.difference);return <Text key={value.currency} style={[styles.copy,{color:p.text}]}>{value.currency} · {formatMoney(value.previous,value.currency)} · {delta===0n?'No change':`${formatMoney((delta<0n?-delta:delta).toString(),value.currency)} ${delta>0n?'more':'less'}`}</Text>;})}</View>;
 }
 export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLens,onRetry}:Theme&{state:LoadState<Report>;previous?:LoadState<Report>;snapshot:Snapshot|null;lens:Lens;currencies:string[];onLens(value:Lens):void;onRetry():void}) {
   const report=state.data,view=report?reportView(report,lens.include,lens.source):null;
-  const reportFilters = <FilterDisclosure dark={dark} label="Report filters" summary={`${lens.source??'All currencies'} · ${lens.target??'No conversion'} · ${lens.include?'Including provisional':'Confirmed only'}`}><Action dark={dark} label="Include provisional" selected={lens.include} onPress={()=>onLens({...lens,include:!lens.include})}/>
+  const reportFilters = <FilterDisclosure dark={dark} modal label="Report filters" summary={`${lens.source??'All currencies'} · ${lens.target??'No conversion'} · ${lens.include?'Including provisional':'Confirmed only'}`}><Action dark={dark} label="Include provisional" selected={lens.include} onPress={()=>onLens({...lens,include:!lens.include})}/>
     <Choices dark={dark} label="Source currency (no conversion)" values={currencies} value={lens.source} onChange={source=>onLens({...lens,source})}/>
-    <Choices dark={dark} label="Reporting currency" values={reportingCurrencies} value={lens.target} onChange={target=>onLens({...lens,target})}/></FilterDisclosure>;
+    <Choices dark={dark} label="Reporting currency" searchable values={reportingCurrencies} value={lens.target} onChange={target=>onLens({...lens,target})}/></FilterDisclosure>;
   return <View style={styles.overview}>
     <View style={styles.periods}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} text={window} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}</View>
 
@@ -136,7 +141,7 @@ export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLen
       {report.fx.chineseBankBand?<Card dark={dark}><Copy dark={dark} heading>Chinese bank estimate band</Copy><Copy dark={dark}>{report.fx.chineseBankBand.eligible?`${formatMoney(report.fx.chineseBankBand.lowerMinorUnits,report.fx.chineseBankBand.currency)} – ${formatMoney(report.fx.chineseBankBand.upperMinorUnits,report.fx.chineseBankBand.currency)}`:'Not eligible for an estimate band.'}</Copy><Copy dark={dark}>Estimate only · {report.fx.chineseBankBand.percentageBasisPoints/100}% · actual bank settlement may differ.</Copy></Card>:null}
       {reportFilters}
       {state.phase==='ready'&&!state.message?<Status dark={dark} state={state} onRetry={onRetry} label="report"/>:null}
-      <FilterDisclosure dark={dark} label="Report details" summary="Dates, coverage and exclusions"><Copy dark={dark}>Server snapshot only; unsent capture records are not included.</Copy><Copy dark={dark}>As of {report.asOf??'unavailable'} · {report.timeBasis} · {report.timeZone??snapshot?.timeZone??'Timezone unavailable'}</Copy>{snapshot?<Copy dark={dark}>Snapshot {snapshot.snapshotAt} · {snapshot.accounts.length} account(s)</Copy>:null}<Copy dark={dark}>Excluded: {report.excludedCount}</Copy><Copy dark={dark} heading>Source coverage</Copy>{[...report.sourceCoverage].sort((a,b)=>a.source.localeCompare(b.source)).map(s=><Copy key={s.source} dark={dark}>{s.source}: {s.count}</Copy>)}
+      <FilterDisclosure dark={dark} label="Report details" summary="Dates, coverage and exclusions"><Copy dark={dark}>Account coverage may differ between periods.</Copy><Copy dark={dark}>Server snapshot only; unsent capture records are not included.</Copy><Copy dark={dark}>As of {report.asOf??'unavailable'} · {report.timeBasis} · {report.timeZone??snapshot?.timeZone??'Timezone unavailable'}</Copy>{snapshot?<Copy dark={dark}>Snapshot {snapshot.snapshotAt} · {snapshot.accounts.length} account(s)</Copy>:null}<Copy dark={dark}>Excluded: {report.excludedCount}</Copy><Copy dark={dark} heading>Source coverage</Copy>{[...report.sourceCoverage].sort((a,b)=>a.source.localeCompare(b.source)).map(s=><Copy key={s.source} dark={dark}>{s.source}: {s.count}</Copy>)}
       <Copy dark={dark}>FX provider {report.fx.provider} · {report.fx.lockedDateCount} locked date(s) · {report.fx.earliest??'unavailable'} to {report.fx.latest??'unavailable'}</Copy></FilterDisclosure>
     </>:state.phase==='ready'?<Copy dark={dark}>No report is available. Connect an account and refresh the owner snapshot.</Copy>:null}
   </View>;
@@ -154,12 +159,14 @@ function ActivityFilters({dark,facetRows,filters,onFilter}:{dark:boolean;facetRo
   const p=palette(dark);
   return <>
     <TextInput accessibilityLabel="Search merchant, account, status" placeholder="Search merchant, account, status" placeholderTextColor={p.muted} value={filters.query??''} onChangeText={query=>onFilter({...filters,query})} style={[styles.input,{color:p.text,borderColor:p.border}]} returnKeyType="search"/>
-    <FilterDisclosure dark={dark} label="Activity filters" summary={`${activityFacetNames.filter(name=>filters[name]).length} active`}>{activityFacetNames.map(name=><ActivityFacet key={name} dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter} name={name}/>)}</FilterDisclosure>
+    <FilterDisclosure dark={dark} modal label="Activity filters" summary={`${activityFacetNames.filter(name=>filters[name]).length} active`}>{activityFacetNames.map(name=><ActivityFacet key={name} dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter} name={name}/>)}</FilterDisclosure>
   </>;
 }
 function ActivityRow({dark,transaction,onOpen}:{dark:boolean;transaction:Transaction;onOpen(id:string):void}){
   const title=transaction.merchant??'Merchant unavailable';
-  return <LedgerRow dark={dark} label={`Open activity: ${title}`} title={title} amount={`${formatMoney(transaction.signedMinorUnits,transaction.currency)} ${transaction.currency}`} details={[`${transaction.occurredAt} · ${transaction.status} · ${transaction.kind}`,`Account: ${transaction.accountLabel??'unavailable'} · Source: ${transaction.sourceLabel??'unavailable'} · Category: ${transaction.category??'Uncategorized'}`]} onPress={()=>onOpen(transaction.id)}/>;
+  const date=transaction.occurredAt.replace('T',' ').replace(/Z$/,' UTC');
+  const details=[`${date} · ${transaction.status} · ${transaction.kind}`,transaction.category??'Uncategorized'];
+  return <LedgerRow dark={dark} label={`Open activity: ${title}`} title={title} amount={`${formatMoney(transaction.signedMinorUnits,transaction.currency)} ${transaction.currency}`} details={details} accessibilityDetails={[...details,`Account: ${transaction.accountLabel??'unavailable'} · Source: ${transaction.sourceLabel??'unavailable'}`]} onPress={()=>onOpen(transaction.id)}/>;
 }
 function ActivityResults({dark,state,rows,onLoadMore,onOpen}:{dark:boolean;state:LoadState<Transactions>;rows:Transaction[];onLoadMore():void;onOpen(id:string):void}){
   return <>
@@ -176,14 +183,13 @@ function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose}:{d
     <Copy dark={dark}>Account: {selected.accountLabel??'unavailable'} · Source: {selected.sourceLabel??'unavailable'} · Revision {selected.revision}</Copy>
     <Copy dark={dark}>Category</Copy><TextInput accessibilityLabel="Category" value={draft.category} maxLength={80} onChangeText={category=>onDraft({...draft,category})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
     <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
-    <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Source evidence and report values remain server-authoritative.</Copy>
+    <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Changes affect only the category and note.</Copy>
     <Action dark={dark} label="Save annotation" onPress={onSave} disabled={mutation.blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/><Action dark={dark} label="Close Activity detail" onPress={onClose}/>
   </DetailModal>;
 }
 export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave}:ActivityProps) {
   const rows=state.data?.items??[],visibleRows=filterActivity(rows,filters);
   return <View style={styles.section}>
-    <Copy dark={dark}>Server Activity pages; filters never convert unlike currencies.</Copy>
     <ActivityFilters dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter}/>
     <Status dark={dark} state={state} onRetry={onRetry} label="Activity"/>
     <ActivityResults dark={dark} state={state} rows={visibleRows} onLoadMore={onLoadMore} onOpen={onOpen}/>
@@ -197,6 +203,8 @@ export function MutationStatus({dark,mutation}:Theme&{mutation:MutationState}) {
 const mutationMessages:Record<string,string>={
   revision_conflict:'This record changed elsewhere. Your draft is preserved; close and refresh before saving again.',
   rejected:'The server rejected this request. Refresh the data and review before trying again.',
+  canceled:'The change was canceled.',
+  failed_local:'The change could not be submitted. Check your connection and try again.',
   completed:'Saved. Refresh to read the current server revision.',
   ready:'',
   checking:'Checking native operation receipts…',
@@ -210,7 +218,7 @@ export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,on
   const row=(s:Stream,support:string,key:string)=><LedgerRow dark={dark} key={key} label={`Open recurring: ${s.merchantName??'Merchant unavailable'}`} title={s.merchantName??'Merchant unavailable'} amount={s.averageAmountMinor===null?'Unavailable':formatMoney(s.averageAmountMinor,s.currency)} details={[`${s.currency} · ${s.classification} · ${s.frequency} · Source ${s.sourceStatus}`,`Next expected: ${s.predictedNextDate??'unavailable'} · ${support}`]} onPress={()=>onOpen(s.id)}/>;
   return <View style={styles.section}>
     <Copy dark={dark}>Expected commitments stay separate from actual posted cost.</Copy>
-    <FilterDisclosure dark={dark} label="Recurring filters" summary={`${filters.currency??'All currencies'} / ${filters.classification??'All classifications'}`}><Choices dark={dark} label="Recurring currency" values={currencies} value={filters.currency??null} onChange={currency=>onFilter({...filters,currency})}/>
+    <FilterDisclosure dark={dark} modal label="Recurring filters" summary={`${filters.currency??'All currencies'} / ${filters.classification??'All classifications'}`}><Choices dark={dark} label="Recurring currency" values={currencies} value={filters.currency??null} onChange={currency=>onFilter({...filters,currency})}/>
     <Choices dark={dark} label="Classification" values={['unclassified','subscription','bill','other','excluded']} value={filters.classification??null} onChange={classification=>onFilter({...filters,classification})}/></FilterDisclosure>
     <Status dark={dark} state={state} onRetry={onRetry} label="Recurring"/>
     {page?<><Copy dark={dark}>{page.state} · Checked {page.checkedAt??'unavailable'} · Source updated {page.sourceUpdatedAt??'unavailable'}</Copy>{page.state!=='ready'||!page.items.length?<Copy dark={dark}>{recurringMessage(page.state)}</Copy>:null}{page.coverageWarnings.map((w,i)=><Copy key={i} dark={dark}>{w}</Copy>)}{page.lastError?<Copy dark={dark} error>Source error: {page.lastError}</Copy>:null}</>:null}
@@ -230,6 +238,7 @@ const styles=StyleSheet.create({
   quietRefresh:{minHeight:48,alignSelf:'flex-start',justifyContent:'center',paddingVertical:8},status:{gap:12,marginVertical:8},
   ledgerRow:{minHeight:64,paddingVertical:14,borderBottomWidth:1,gap:4},ledgerTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'baseline',gap:12},ledgerTitle:{fontFamily:'DMSans',fontSize:17,lineHeight:24,fontWeight:'600',flexShrink:1},ledgerAmount:{fontFamily:'DMSans',fontSize:16,lineHeight:24,fontWeight:'600',fontVariant:['tabular-nums'],flexShrink:1,textAlign:'right'},ledgerMeta:{fontFamily:'DMSans',fontSize:13,lineHeight:20},rowPressed:{opacity:0.65},
   dailyRow:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',gap:4,paddingVertical:8,borderBottomWidth:StyleSheet.hairlineWidth},dailyAmount:{fontVariant:['tabular-nums']},
+  sheetBackdrop:{flex:1,justifyContent:'flex-end',backgroundColor:'#00000080'},sheet:{maxHeight:'85%',borderTopLeftRadius:20,borderTopRightRadius:20},sheetHeader:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingHorizontal:20,paddingTop:12},sheetClose:{minHeight:48,justifyContent:'center',paddingHorizontal:8},sheetContent:{paddingHorizontal:20,paddingBottom:32,gap:8},
   disclosureLabel:{fontFamily:'DMSans',fontSize:15,lineHeight:22,fontWeight:'600'},
   overview:{gap:10,marginTop:12},periods:{flexDirection:'row',flexWrap:'wrap',gap:8},reportPeriod:{fontFamily:'DMSans',fontSize:14,lineHeight:20,marginTop:4},reportNote:{fontFamily:'DMSans',fontSize:13,lineHeight:20},sectionHeading:{fontFamily:'DMSans',fontSize:21,lineHeight:28,fontWeight:'600',marginTop:20},laneTitle:{fontFamily:'DMSans',fontSize:16,lineHeight:24,fontWeight:'600'},chartDates:{flexDirection:'row',justifyContent:'space-between'},
   featuredTotal:{padding:20,gap:10},comparison:{borderTopWidth:1,paddingTop:14,gap:5},trendSummary:{fontFamily:'DMSans',fontSize:14,lineHeight:20,fontWeight:'600'},trendAmount:{fontFamily:'DMSans',fontSize:22,lineHeight:30,fontWeight:'600',fontVariant:['tabular-nums']},chartScroll:{flexGrow:1},chartContent:{flexGrow:1,gap:8},

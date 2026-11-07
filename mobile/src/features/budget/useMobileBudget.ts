@@ -29,7 +29,7 @@ export function useMobileBudget(service:BudgetService=nativeBudgetService) {
  const [month,setMonth]=useState(()=>monthIn('America/Toronto')),[draftMonth,setDraftMonth]=useState(month),[currency,setCurrency]=useState('CAD'),[mode,setMode]=useState<BudgetMode>('envelope'),[view,setView]=useState<ReturnType<typeof decodeBudgetView>|null>(null),[configured,setConfigured]=useState<boolean|null>(null),[error,setError]=useState<string|null>(null),[loading,setLoading]=useState(true);
  const [monthError,setMonthError]=useState<string|null>(null);
  const [copyPreview,setCopyPreview]=useState<CopyPreview|null>(null),[rolloverPreview,setRolloverPreview]=useState<RolloverPreview|null>(null),[previewLoading,setPreviewLoading]=useState(false);
- const recover=useCallback(()=>gate.recover(service.readOperations),[gate,service]);
+ const recover=useCallback(async()=>{await gate.recover(service.readOperations);if(!gate.current().blocked){setCopyPreview(null);setRolloverPreview(null);}},[gate,service]);
  const load=useCallback(async()=>{
   const id=++request.current;previewRequest.current++;setLoading(true);setCopyPreview(null);setRolloverPreview(null);setPreviewLoading(false);
   try {const settings=decodeSettings(await service.readSettings());const next=settings?decodeBudgetView(await service.readModeView(month,settings.preferredMode)):null;if(id!==request.current)return;setConfigured(Boolean(settings));setView(next);if(settings){setCurrency(settings.currency);setMode(settings.preferredMode);}setError(null);}
@@ -38,12 +38,14 @@ export function useMobileBudget(service:BudgetService=nativeBudgetService) {
  },[month,service]);
  useEffect(()=>{void NativePreferences.readReporting().then(p=>{if(!monthTouched.current){const value=monthIn(p.reportingTimezone);setMonth(value);setDraftMonth(value);}}).catch(()=>undefined);},[]);
  useEffect(()=>{void recover();void load();const subscription=AppState.addEventListener('change',state=>{if(state==='active'){void recover();void load();}});return()=>{request.current++;previewRequest.current++;subscription.remove();};},[load,recover]);
- const selectMonth=()=>{monthTouched.current=true;if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(draftMonth)){setMonthError(MONTH_ERROR);return;}setMonthError(null);if(draftMonth===month)return;request.current++;previewRequest.current++;setCopyPreview(null);setRolloverPreview(null);setPreviewLoading(false);setMonth(draftMonth);};
+ const chooseMonth=(next:string)=>{monthTouched.current=true;if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(next)){setMonthError(MONTH_ERROR);return;}setMonthError(null);setDraftMonth(next);if(next===month)return;request.current++;previewRequest.current++;setCopyPreview(null);setRolloverPreview(null);setPreviewLoading(false);setMonth(next);};
+ const selectMonth=()=>chooseMonth(draftMonth);
+ const shiftMonth=(delta:-1|1)=>{const [year,part]=month.split('-').map(Number),index=year*12+part-1+delta,nextYear=Math.floor(index/12);if(nextYear<1||nextYear>9999)return;chooseMonth(`${String(nextYear).padStart(4,'0')}-${String(index%12+1).padStart(2,'0')}`);};
  const write=(action:string,build:(id:string)=>unknown)=>{
   if(gate.current().blocked)return;const id=operationId();let body:string;
   try{body=JSON.stringify(build(id));}catch{setError('Check the amount and details, then try again.');return;}
-  request.current++;previewRequest.current++;setCopyPreview(null);setRolloverPreview(null);setError(null);
-  void gate.submit(id,()=>service.startWrite(id,action,body),service.queryOperation).then(()=>refreshWriteResult(gate.current().status,load,setError));
+  request.current++;previewRequest.current++;setError(null);
+  void gate.submit(id,()=>service.startWrite(id,action,body),service.queryOperation).then(()=>{const status=gate.current().status;if(status==='canceled'||status==='failed_local'){setCopyPreview(null);setRolloverPreview(null);}return refreshWriteResult(status,load,setError);});
  };
  const preview=async(kind:'copy'|'rollover',read:()=>Promise<string>)=>{
   const id=++previewRequest.current;setPreviewLoading(true);setError(null);setCopyPreview(null);setRolloverPreview(null);
@@ -52,7 +54,7 @@ export function useMobileBudget(service:BudgetService=nativeBudgetService) {
   finally{if(id===previewRequest.current)setPreviewLoading(false);}
  };
  const selectMode=(next:BudgetMode)=>{if(next===mode||!view)return;write('mode',id=>({mode:next,expectedRevision:view.settings.revision??0,operationId:id}));};
- return {month,draftMonth,setDraftMonth,currency,setCurrency,mode,selectMode,view,configured,error:monthError??error,loading,mutation:gate.current(),recover,load,selectMonth,write,copyPreview,rolloverPreview,previewLoading,
+ return {month,draftMonth,setDraftMonth,currency,setCurrency,mode,selectMode,view,configured,error:monthError??error,loading,mutation:gate.current(),recover,load,selectMonth,chooseMonth,shiftMonth,write,copyPreview,rolloverPreview,previewLoading,
   previewCopy:()=>void preview('copy',()=>service.readCopyPreview(month)),
   previewRollover:(category:string,effectiveMonth:string,policy:RolloverPolicy)=>void preview('rollover',()=>service.readRolloverPreview(category,effectiveMonth,policy)),
   cancelPreview:()=>{previewRequest.current++;setCopyPreview(null);setRolloverPreview(null);setPreviewLoading(false);},

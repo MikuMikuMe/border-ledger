@@ -7,7 +7,7 @@ const React = require('react');
 const { act, create } = require('react-test-renderer');
 
 vi.mock('../mobile/node_modules/react-native/index.js', () => ({
-  Text: 'Text', View: 'View', Pressable: 'Pressable', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator', Modal: 'Modal', ScrollView: 'ScrollView',
+  Text: 'Text', View: 'View', Pressable: 'Pressable', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator', Modal: 'Modal', ScrollView: 'ScrollView', KeyboardAvoidingView: 'KeyboardAvoidingView',
   AppState: { addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: (_event: string, handler: () => boolean) => { nativeAccessibility.backHandlers.push(handler); return { remove: () => { nativeAccessibility.backHandlers = nativeAccessibility.backHandlers.filter(value => value !== handler); } }; } },
   StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 }, TurboModuleRegistry: { getEnforcing: () => ({}) },
 }));
@@ -141,6 +141,7 @@ describe('Android Wealth views', () => {
       operation: 'correction',
       onAction: vi.fn(),
     })); });
+    act(() => { tree.root.findByProps({ accessibilityLabel: 'Choose an existing event' }).props.onPress(); });
     expect(JSON.stringify(tree.toJSON())).toContain('Salary contribution');
   });
 
@@ -369,6 +370,7 @@ describe('Android Wealth views', () => {
     let tree: any;
     await act(async () => { tree = create(React.createElement(WealthScreen, { dark: false, service })); await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Investments' }).props.onPress(); await Promise.resolve(); });
+    await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Preview CSV' }).props.onPress(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth CSV file' }).props.onPress(); await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Save Wealth CSV template' }).props.onPress(); await Promise.resolve(); });
@@ -400,8 +402,10 @@ describe('Android Wealth views', () => {
     let tree: any;
     await act(async () => { tree = create(React.createElement(WealthScreen, { dark: false, service })); await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Investments' }).props.onPress(); await Promise.resolve(); });
+    await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Preview CSV' }).props.onPress(); await Promise.resolve(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth CSV file' }).props.onPress(); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress(); });
     await act(async () => { tree.root.findByProps({ accessibilityLabel: 'Commit CSV' }).props.onPress(); await Promise.resolve(); });
     expect(JSON.stringify(tree.toJSON())).toContain('10 rows ready to commit · 10 staged');
     expect(tree.root.findByProps({ accessibilityLabel: 'Show CSV column mapping' })).toBeTruthy();

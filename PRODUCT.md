@@ -4,7 +4,7 @@
 
 ## Platform
 
-web and Android
+adaptive
 
 ## Stack
 

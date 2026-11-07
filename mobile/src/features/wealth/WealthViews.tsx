@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
+import { ReducedMotionContext } from '../auth/presentationPolicy';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { WealthBankAccount, WealthBankTransaction, WealthCashFlowRow, WealthCsvMapping, WealthEventRow, WealthInvestmentDetail, WealthView, WealthWireSnapshot } from './contracts';
 import { parseMoneyMinor } from '../../../../src/domain/currencies';
 import type { CanonicalInstrument } from '../../../../src/domain/wealth-types';
@@ -42,7 +43,12 @@ const titleForAction: Record<string, string> = {
   account: 'Save account', instrument: 'Save instrument', valuation: 'Save dated value', event: 'Save event', correction: 'Save correction', reversal: 'Reverse event',
   'quote-save': 'Save quote key', 'quote-remove': 'Remove quote key', 'quote-refresh': 'Refresh dated prices', 'csv-preview': 'Preview CSV', 'csv-commit': 'Commit CSV', 'csv-export': 'Export CSV',
 };
-const operationActions = Object.keys(titleForAction);
+const operationGroups = [
+  { label: 'Accounts and holdings', actions: ['account', 'instrument', 'valuation'] },
+  { label: 'Transactions', actions: ['event', 'correction', 'reversal'] },
+  { label: 'Prices', actions: ['quote-save', 'quote-remove', 'quote-refresh'] },
+  { label: 'CSV files', actions: ['csv-preview', 'csv-commit', 'csv-export'] },
+];
 const eventKinds = ['opening_cash', 'opening_position', 'buy', 'sell', 'dividend', 'withholding', 'fee', 'contribution', 'withdrawal', 'split', 'transfer'];
 const instrumentEventKinds = new Set(['opening_position', 'buy', 'sell', 'dividend', 'withholding', 'fee', 'split']);
 const bankLinkEventKinds = new Set(['dividend', 'withholding', 'fee', 'contribution', 'withdrawal']);
@@ -61,14 +67,27 @@ export function Copy({ dark, children, heading, muted, error, accessibilityLiveR
   return <Text accessibilityRole={heading ? 'header' : undefined} accessibilityLiveRegion={accessibilityLiveRegion} style={[heading ? styles.heading : styles.copy, { color: error ? colors.danger : muted ? colors.muted : colors.ink }]}>{children}</Text>;
 }
 
-export function Action({ dark, label, onPress, disabled, selected }: { dark: boolean; label: string; onPress: () => void; disabled?: boolean; selected?: boolean }) {
+export function Action({ dark, label, text, onPress, disabled, selected }: { dark: boolean; label: string; text?: string; onPress: () => void; disabled?: boolean; selected?: boolean }) {
   const colors = theme(dark);
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.action, { borderColor: colors.rule, backgroundColor: selected ? (dark ? '#244C3D' : '#DEE7DE') : colors.panel, opacity: disabled ? 0.5 : pressed ? 0.68 : 1 }]}><Text style={[styles.actionText, { color: selected ? colors.signal : colors.ink }]}>{label}</Text></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityValue={text?{text}:undefined} accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.action, { borderColor: colors.rule, backgroundColor: selected ? (dark ? '#244C3D' : '#DEE7DE') : colors.panel, opacity: disabled ? 0.5 : pressed ? 0.68 : 1 }]}><Text style={[styles.actionText, { color: selected ? colors.signal : colors.ink }]}>{text ?? label}</Text></Pressable>;
 }
 
-function Field({ dark, label, value, onChange, placeholder, multiline = false, secure = false }: { dark: boolean; label: string; value: string; onChange: (value: string) => void; placeholder?: string; multiline?: boolean; secure?: boolean }) {
+function Field({ dark, label, value, onChange, onBlur, placeholder, multiline = false, secure = false, numeric = false }: { dark: boolean; label: string; value: string; onChange: (value: string) => void; onBlur?:()=>void; placeholder?: string; multiline?: boolean; secure?: boolean; numeric?: boolean }) {
   const colors = theme(dark);
-  return <View style={styles.field}><Text style={[styles.fieldLabel, { color: colors.muted }]}>{label}</Text><TextInput accessibilityLabel={label} value={value} placeholder={placeholder} placeholderTextColor={colors.muted} onChangeText={onChange} secureTextEntry={secure} multiline={multiline} textAlignVertical={multiline ? 'top' : 'center'} style={[styles.input, { color: colors.ink, borderColor: colors.rule, backgroundColor: colors.panel }, multiline && styles.multiline]} /></View>;
+  return <View style={styles.field}><Text style={[styles.fieldLabel, { color: colors.muted }]}>{label}</Text><TextInput accessibilityLabel={label} value={value} placeholder={placeholder} placeholderTextColor={colors.muted} onChangeText={onChange} onBlur={onBlur} secureTextEntry={secure} multiline={multiline} keyboardType={numeric?'numeric':'default'} textAlignVertical={multiline ? 'top' : 'center'} style={[styles.input, { color: colors.ink, borderColor: colors.rule, backgroundColor: colors.panel }, multiline && styles.multiline]} /></View>;
+}
+function DateField({dark,label,value,onChange}:{dark:boolean;label:string;value:string;onChange:(value:string)=>void}) {
+  const [open,setOpen]=useState(false),[month,setMonth]=useState(''),[blurred,setBlurred]=useState(false),colors=theme(dark),reducedMotion=useContext(ReducedMotionContext);
+  const name=label.replace(' (YYYY-MM-DD)','');
+  const openPicker=()=>{setMonth((isIsoDate(value)?value:todayIsoDate()).slice(0,7));setOpen(true);};
+  return <View style={styles.field}><Field dark={dark} label={label} value={value} onChange={onChange} onBlur={()=>setBlurred(true)}/>{value&&(blurred||value.length>=10)&&!isIsoDate(value)?<View accessibilityRole="alert"><Copy dark={dark} error>Enter a valid date as YYYY-MM-DD.</Copy></View>:null}<Action dark={dark} label={`Choose ${name}`} onPress={openPicker}/>{open?<DateChooser dark={dark} name={name} month={month} value={value} onMonth={setMonth} onChoose={date=>{onChange(date);setOpen(false);}} onClose={()=>setOpen(false)} colors={colors} reducedMotion={reducedMotion}/>:null}</View>;
+}
+function DateChooser({dark,name,month,value,onMonth,onChoose,onClose,colors,reducedMotion}:{dark:boolean;name:string;month:string;value:string;onMonth:(value:string)=>void;onChoose:(value:string)=>void;onClose:()=>void;colors:typeof light;reducedMotion:boolean}) {
+  const [year,number]=month.split('-').map(Number),first=new Date(0);first.setUTCHours(0,0,0,0);first.setUTCFullYear(year,number-1,1);
+  const next=new Date(first);next.setUTCMonth(next.getUTCMonth()+1);next.setUTCDate(0);
+  const title=new Intl.DateTimeFormat('en',{month:'long',year:'numeric',timeZone:'UTC'}).format(first);
+  const shift=(delta:number)=>{const index=year*12+number-1+delta,y=Math.floor(index/12);if(y<1||y>9999)return;onMonth(`${String(y).padStart(4,'0')}-${String(index%12+1).padStart(2,'0')}`);};
+  return <Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={onClose}><View style={styles.mappingModalBackdrop}><View accessibilityViewIsModal style={[styles.mappingModal,{backgroundColor:colors.panel,borderColor:colors.rule}]}><Copy dark={dark} heading>{`Choose ${name}`}</Copy><ScrollView><View style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8}}><Action dark={dark} label="Previous year" text="− year" onPress={()=>shift(-12)}/><Action dark={dark} label="Previous month" text="Previous" onPress={()=>shift(-1)}/><Copy dark={dark} heading>{title}</Copy><Action dark={dark} label="Next month" text="Next" onPress={()=>shift(1)}/><Action dark={dark} label="Next year" text="+ year" onPress={()=>shift(12)}/></View><View style={{flexDirection:'row',flexWrap:'wrap'}}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(day=><View key={day} style={{width:'14.285%',alignItems:'center'}}><Text accessible accessibilityLabel={day} style={{fontSize:14,color:colors.muted}}>{day[0]}</Text></View>)}{Array.from({length:first.getUTCDay()},(_,i)=><View key={`blank-${i}`} style={{width:'14.285%'}}/>)}{Array.from({length:next.getUTCDate()},(_,i)=>{const day=i+1,date=`${month}-${String(day).padStart(2,'0')}`;return <Pressable key={date} accessibilityRole="radio" accessibilityLabel={`${title.split(' ')[0]} ${day}, ${year}`} accessibilityState={{checked:date===value}} onPress={()=>onChoose(date)} style={{width:'14.285%',minHeight:48,alignItems:'center',justifyContent:'center',backgroundColor:date===value?(dark?'#244C3D':'#DEE7DE'):'transparent'}}><Text style={[styles.copy,{color:colors.ink}]}>{day}</Text></Pressable>;})}</View></ScrollView><Action dark={dark} label="Close date picker" onPress={onClose}/></View></View></Modal>;
 }
 
 function Status({ dark, data }: { dark: boolean; data: WealthWireSnapshot }) {
@@ -297,14 +316,19 @@ export function WealthInvestments({ dark, data, revision = data.revision, events
   </View>;
 }
 
+function SearchPicker({dark,title,trigger,searchLabel,options,selected,onSelect}:{dark:boolean;title:string;trigger:string;searchLabel:string;options:{id:string;label:string}[];selected:string|null;onSelect:(id:string)=>void}) {
+  const [open,setOpen]=useState(false),[search,setSearch]=useState(''),colors=theme(dark),reducedMotion=useContext(ReducedMotionContext);
+  const matching=options.filter(option=>option.label.toLowerCase().includes(search.trim().toLowerCase()));
+  return <><Action dark={dark} label={trigger} text={options.find(option=>option.id===selected)?.label??trigger} onPress={()=>setOpen(true)}/>{open?<Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={()=>setOpen(false)}><KeyboardAvoidingView behavior="padding" style={styles.mappingModalBackdrop}><View accessibilityViewIsModal style={[styles.mappingModal,{backgroundColor:colors.panel,borderColor:colors.rule}]}><Copy dark={dark} heading>{title}</Copy><Field dark={dark} label={searchLabel} value={search} onChange={setSearch}/><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.actionRow}>{matching.slice(0,100).map(option=><Action key={option.id} dark={dark} label={option.label} selected={selected===option.id} onPress={()=>{onSelect(option.id);setOpen(false);}}/>)}{!matching.length?<Copy dark={dark} muted>No matching records.</Copy>:null}{matching.length>100?<Copy dark={dark} muted>Showing the first 100 matches. Search to narrow the list.</Copy>:null}</ScrollView><Action dark={dark} label={`Close ${title.toLowerCase()}`} onPress={()=>setOpen(false)}/></View></KeyboardAvoidingView></Modal>:null}</>;
+}
 function EventPicker({ dark, events, selected, onSelect }: { dark: boolean; events: WealthEventRow[]; selected: WealthEventRow | null; onSelect: (event: WealthEventRow) => void }) {
   if (!events.length) return <Copy dark={dark} muted>No existing events are available to select. Refresh after recording an event before correcting or reversing it.</Copy>;
-  return <View style={styles.actionRow}>{events.map(event => <Action key={event.id} dark={dark} label={`${event.date} · ${event.label ?? event.kind}`} selected={selected?.id === event.id} onPress={() => onSelect(event)}/>)}</View>;
+  return <SearchPicker dark={dark} title="Choose an existing event" trigger="Choose an existing event" searchLabel="Search existing events" options={events.map(event=>({id:event.id,label:`${event.date} · ${event.label ?? event.kind}`}))} selected={selected?.id??null} onSelect={id=>{const event=events.find(item=>item.id===id);if(event)onSelect(event);}}/>;
 }
 
 function BankTransactionPicker({ dark, transactions, selected, onSelect }: { dark: boolean; transactions: WealthBankTransaction[]; selected: WealthBankTransaction | null; onSelect: (transaction: WealthBankTransaction) => void }) {
   if (!transactions.length) return <Copy dark={dark} muted>No confirmed bank records are available for linking. Refresh Activity and try again.</Copy>;
-  return <><Copy dark={dark} muted>Link a confirmed Activity record only when it is the same money movement.</Copy><View style={styles.actionRow}>{transactions.slice(0, 100).map(transaction => <Action key={transaction.id} dark={dark} label={bankTransactionLabel(transaction)} selected={selected?.id === transaction.id} onPress={() => onSelect(transaction)}/>)}</View>{transactions.length > 100 ? <Copy dark={dark} muted>Showing the 100 most recent confirmed records.</Copy> : null}</>;
+  return <><Copy dark={dark} muted>Link a confirmed Activity record only when it is the same money movement.</Copy><SearchPicker dark={dark} title="Choose an Activity record" trigger="Choose a confirmed Activity record" searchLabel="Search Activity records" options={transactions.map(item=>({id:item.id,label:bankTransactionLabel(item)}))} selected={selected?.id??null} onSelect={id=>{const transaction=transactions.find(item=>item.id===id);if(transaction)onSelect(transaction);}}/></>;
 }
 
 function AccountPicker({ dark, accounts, selected, onSelect, filter }: { dark: boolean; accounts: WealthWireSnapshot['accounts']; selected: string; onSelect: (id: string) => void; filter?: (account: WealthWireSnapshot['accounts'][number]) => boolean }) {
@@ -617,6 +641,50 @@ function canSubmitOperation(action: string, values: OperationValues, csv: Wealth
   if (action === 'csv-commit') return csvCommitReady(csv);
   return true;
 };
+function operationHint(action:string,values:OperationValues,instrument:CanonicalInstrument,accounts:WealthWireSnapshot['accounts'],csv:WealthWireSnapshot['csv']):string {
+  if (['correction','reversal'].includes(action) && !values.targetEvent) return 'Choose an existing event.';
+  if (action==='account') {
+    if (!values.accountName.trim()) return 'Enter an account name.';
+    if (values.currency.length!==3) return 'Enter a three-letter currency.';
+    if (!accountModeAllowed(values)) return 'Choose a compatible account type and mode.';
+    if (!accountLinkAllowed(values)) return 'Choose an Activity account to link.';
+    if (isAccountModeTransition(values) && !isIsoDate(values.effectiveDate)) return 'Enter a valid effective date.';
+    if (!accountOpeningValueAllowed(values)) return 'Check the opening value and its date.';
+    return 'Check the opening cash or position details.';
+  }
+  if (['instrument','quote-refresh'].includes(action)) return 'Enter an exchange, ticker, and three-letter currency.';
+  if (action==='reversal') return 'Enter a valid reversal date.';
+  if (action==='valuation') {
+    if (!values.accountId) return 'Choose an account.';
+    if (!isIsoDate(values.date)) return 'Enter a valid observation date.';
+    if (parseMinor(values.priceMinor,values.currency)===null) return 'Enter a valid balance or price and currency.';
+    return 'Enter an exchange, ticker, and three-letter currency.';
+  }
+  if (action==='event'||action==='correction') return eventHint(values,instrument,accounts);
+  if (action==='quote-save') return 'Enter a quote provider key.';
+  if (action==='csv-preview') return csv.previewId?'Review the preview, then choose Commit CSV when ready.':'Choose a CSV file or paste CSV rows to preview.';
+  if (action==='csv-commit') return 'Preview valid rows and resolve errors before committing.';
+  return 'Review the required fields before saving.';
+}
+function eventHint(values:OperationValues,instrument:CanonicalInstrument,accounts:WealthWireSnapshot['accounts']):string {
+  if (!values.accountId) return 'Choose an account.';
+  if (!isIsoDate(values.date)) return 'Enter a valid event date.';
+  const account=accountForEvent(accounts,values.accountId);
+  if (!account || (eventRequiresHoldings(values.eventKind)&&account.mode!=='holdings')) return 'Choose a compatible account.';
+  const hasInstrument=Boolean(instrument.exchange && instrument.ticker && values.currency.length===3);
+  const positionTransfer=values.eventKind==='transfer'&&values.transferKind==='position';
+  if (['opening_position','buy','sell','split'].includes(values.eventKind)||positionTransfer) {
+    if (!hasInstrument) return 'Enter an exchange, ticker, and three-letter currency.';
+    if (parseQuantity(values.quantity)===null) return 'Enter a valid quantity greater than zero.';
+  }
+  if (values.eventKind==='split' && (parseInteger(values.numerator)===null||parseInteger(values.denominator)===null)) return 'Enter the split numerator and denominator.';
+  if (values.eventKind==='transfer') {
+    const destination=accountForEvent(accounts,values.toAccountId);
+    if (!destination||destination.id===account.id||destination.mode!==account.mode) return 'Choose a different compatible destination account.';
+    if (positionTransfer&&account.mode!=='holdings') return 'Choose a holdings account for a position transfer.';
+  }
+  return 'Enter a valid amount and currency.';
+}
 
 function AccountKindPicker({ dark, values, setters }: Pick<OperationEditorProps, 'dark' | 'values' | 'setters'>) {
   return <><Copy dark={dark} heading>Account kind</Copy><View style={styles.actionRow}>{['brokerage', 'manual_asset', 'debt', 'linked_bank'].map(kind => <Action key={kind} dark={dark} label={kind.replace('_', ' ')} selected={values.accountKind === kind} onPress={() => setters.setAccountKind(kind)}/>)}</View></>;
@@ -635,14 +703,14 @@ function AccountLinkPicker({ dark, bankAccounts, values, setters }: Pick<Operati
 function OpeningPositionEditor({ dark, instruments, values, setters }: Pick<OperationEditorProps, 'dark' | 'instruments' | 'values' | 'setters'>) {
   const setField = <K extends keyof OpeningPositionValues>(key: K, value: OpeningPositionValues[K]) => setters.setOpeningPosition(current => ({ ...current, [key]: value }));
   const position = values.openingPosition;
-  return <><Copy dark={dark} heading>Opening position (optional)</Copy><InstrumentFields dark={dark} options={instruments} exchange={position.exchange} ticker={position.ticker} type={position.type} currency={position.currency} setExchange={value => setField('exchange', value)} setTicker={value => setField('ticker', value)} setType={value => setField('type', value)} setCurrency={value => setField('currency', value)}/><Field dark={dark} label="Opening quantity" value={position.quantity} onChange={value => setField('quantity', value)}/><Field dark={dark} label="Opening basis (optional, for example 980.00)" value={position.basis} onChange={value => setField('basis', value)}/><Field dark={dark} label="Opening dated price (optional, for example 125.00)" value={position.price} onChange={value => setField('price', value)}/></>;
+  return <><Copy dark={dark} heading>Opening position (optional)</Copy><InstrumentFields dark={dark} options={instruments} exchange={position.exchange} ticker={position.ticker} type={position.type} currency={position.currency} setExchange={value => setField('exchange', value)} setTicker={value => setField('ticker', value)} setType={value => setField('type', value)} setCurrency={value => setField('currency', value)}/><Field dark={dark} numeric label="Opening quantity" value={position.quantity} onChange={value => setField('quantity', value)}/><Field dark={dark} numeric label="Opening basis (optional, for example 980.00)" value={position.basis} onChange={value => setField('basis', value)}/><Field dark={dark} numeric label="Opening dated price (optional, for example 125.00)" value={position.price} onChange={value => setField('price', value)}/></>;
 }
 
 function AccountTransitionFields({ dark, instruments, values, setters }: Pick<OperationEditorProps, 'dark' | 'instruments' | 'values' | 'setters'>) {
   const transitioning = isAccountModeTransition(values);
-  if (!transitioning && values.accountMode === 'aggregate') return <><Field dark={dark} label="Opening value (optional, for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/><Field dark={dark} label="Opening date (YYYY-MM-DD)" value={values.effectiveDate} onChange={setters.setEffectiveDate}/><Copy dark={dark} muted>A dated opening value seeds the first aggregate Wealth observation. Leave the value blank when you will add a dated balance later.</Copy></>;
+  if (!transitioning && values.accountMode === 'aggregate') return <><Field dark={dark} numeric label="Opening value (optional, for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/><DateField dark={dark} label="Opening date (YYYY-MM-DD)" value={values.effectiveDate} onChange={setters.setEffectiveDate}/><Copy dark={dark} muted>A dated opening value seeds the first aggregate Wealth observation. Leave the value blank when you will add a dated balance later.</Copy></>;
   if (!transitioning) return <Copy dark={dark} muted>Holdings accounts start without an opening amount here. Save the brokerage, then record dated Opening cash or Opening position activity so the server creates holdings history.</Copy>;
-  return <><Copy dark={dark} heading>Atomic mode transition</Copy><Copy dark={dark} muted>The server records this effective-dated opening state in one account write. No follow-up event or valuation is submitted.</Copy><Field dark={dark} label="Effective date (YYYY-MM-DD)" value={values.effectiveDate} onChange={setters.setEffectiveDate}/>{values.accountMode === 'holdings' ? <><Field dark={dark} label="Opening cash (for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/><OpeningPositionEditor dark={dark} instruments={instruments} values={values} setters={setters}/></> : <Field dark={dark} label="Opening aggregate value (for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/>}</>;
+  return <><Copy dark={dark} heading>Atomic mode transition</Copy><Copy dark={dark} muted>The server records this effective-dated opening state in one account write. No follow-up event or valuation is submitted.</Copy><DateField dark={dark} label="Effective date (YYYY-MM-DD)" value={values.effectiveDate} onChange={setters.setEffectiveDate}/>{values.accountMode === 'holdings' ? <><Field dark={dark} numeric label="Opening cash (for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/><OpeningPositionEditor dark={dark} instruments={instruments} values={values} setters={setters}/></> : <Field dark={dark} numeric label="Opening aggregate value (for example 1250.00)" value={values.openingAmountMinor} onChange={setters.setOpeningAmountMinor}/>}</>;
 }
 
 function AccountEditor({ dark, accounts, bankAccounts, instruments, values, setters, onExistingAccount }: Pick<OperationEditorProps, 'dark' | 'accounts' | 'bankAccounts' | 'instruments' | 'values' | 'setters' | 'onExistingAccount'>) {
@@ -655,7 +723,7 @@ function InstrumentEditor({ dark, values, setters, options = [] }: Pick<Operatio
 }
 
 function ValuationEditor({ dark, accounts, instruments, values, setters }: Pick<OperationEditorProps, 'dark' | 'accounts' | 'instruments' | 'values' | 'setters'>) {
-  return <><Copy dark={dark} heading>Dated balance or price</Copy><View style={styles.actionRow}><Action dark={dark} label="Account balance" selected={values.valuationTarget === 'account'} onPress={() => setters.setValuationTarget('account')}/><Action dark={dark} label="Instrument price" selected={values.valuationTarget === 'instrument'} onPress={() => setters.setValuationTarget('instrument')}/></View><Copy dark={dark} heading>Account</Copy><AccountPicker dark={dark} accounts={accounts} selected={values.accountId} onSelect={setters.setAccountId}/>{values.valuationTarget === 'instrument' ? <InstrumentFields dark={dark} options={instruments} exchange={values.exchange} ticker={values.ticker} type={values.instrumentType} currency={values.currency} setExchange={setters.setExchange} setTicker={setters.setTicker} setType={setters.setInstrumentType} setCurrency={setters.setCurrency}/> : <Field dark={dark} label="Account currency" value={values.currency} onChange={value => setters.setCurrency(value.toUpperCase())}/>}<Field dark={dark} label="Dated observation (YYYY-MM-DD)" value={values.date} onChange={setters.setDate}/><Field dark={dark} label={values.valuationTarget === 'account' ? 'Balance (for example 1250.00)' : 'Price (for example 125.00)'} value={values.priceMinor} onChange={setters.setPriceMinor}/></>;
+  return <><Copy dark={dark} heading>Dated balance or price</Copy><View style={styles.actionRow}><Action dark={dark} label="Account balance" selected={values.valuationTarget === 'account'} onPress={() => setters.setValuationTarget('account')}/><Action dark={dark} label="Instrument price" selected={values.valuationTarget === 'instrument'} onPress={() => setters.setValuationTarget('instrument')}/></View><Copy dark={dark} heading>Account</Copy><AccountPicker dark={dark} accounts={accounts} selected={values.accountId} onSelect={setters.setAccountId}/>{values.valuationTarget === 'instrument' ? <InstrumentFields dark={dark} options={instruments} exchange={values.exchange} ticker={values.ticker} type={values.instrumentType} currency={values.currency} setExchange={setters.setExchange} setTicker={setters.setTicker} setType={setters.setInstrumentType} setCurrency={setters.setCurrency}/> : <Field dark={dark} label="Account currency" value={values.currency} onChange={value => setters.setCurrency(value.toUpperCase())}/>}<DateField dark={dark} label="Dated observation (YYYY-MM-DD)" value={values.date} onChange={setters.setDate}/><Field dark={dark} numeric label={values.valuationTarget === 'account' ? 'Balance (for example 1250.00)' : 'Price (for example 125.00)'} value={values.priceMinor} onChange={setters.setPriceMinor}/></>;
 }
 
 function QuoteEditor({ dark, values, setters, instruments, action }: Pick<OperationEditorProps, 'dark' | 'values' | 'setters' | 'instruments'> & { action: string }) {
@@ -683,9 +751,7 @@ function CsvHeaderPicker({ dark, canonical, current, sourceHeaders, onChoose, on
   const matchingHeaders = sourceHeaders.filter(header => header.toLowerCase().includes(normalizedQuery));
   const headers = current && !matchingHeaders.includes(current) ? [current, ...matchingHeaders] : matchingHeaders;
   const colors = theme(dark);
-  return <Modal transparent visible animationType="none" onRequestClose={onClose}>
-    <View style={styles.mappingModalBackdrop}>
-      <View accessibilityViewIsModal style={[styles.mappingModal, { backgroundColor: colors.panel, borderColor: colors.rule }]}>
+  return <>
         <Copy dark={dark} heading>Choose source column</Copy>
         <Copy dark={dark} muted>{canonical}</Copy>
         <TextInput accessibilityLabel="Search source columns" value={query} onChangeText={setQuery} placeholder="Search source columns" placeholderTextColor={colors.muted} style={[styles.input, styles.mappingSearch, { color: colors.ink, borderColor: colors.rule, backgroundColor: colors.canvas }]}/>
@@ -695,9 +761,7 @@ function CsvHeaderPicker({ dark, canonical, current, sourceHeaders, onChoose, on
           {!headers.length ? <Copy dark={dark} muted>No source columns match this search.</Copy> : null}
         </ScrollView>
         <Action dark={dark} label="Close source column picker" onPress={onClose}/>
-      </View>
-    </View>
-  </Modal>;
+  </>;
 }
 
 function CsvMappingDisclosure({ dark, expanded, matchedCount, total, onToggle }: { dark: boolean; expanded: boolean; matchedCount: number; total: number; onToggle: () => void }) {
@@ -737,6 +801,15 @@ function csvEditorMapping(csv: WealthWireSnapshot['csv'], mapping: WealthCsvMapp
   return resolved;
 }
 
+function CsvMappingPanel({dark, activeCanonical, mapping, sourceHeaders, canonicalHeaders, canRemap, choose, closePicker, close, onSelect, onRemap}: {dark:boolean; activeCanonical:string|null; mapping:WealthCsvMapping; sourceHeaders:string[]; canonicalHeaders:string[]; canRemap:boolean; choose:(source:string|null)=>void; closePicker:()=>void; close:()=>void; onSelect:(value:string)=>void; onRemap?:(mapping:WealthCsvMapping)=>void}) {
+  const reducedMotion=useContext(ReducedMotionContext),colors=theme(dark);
+  return <Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={activeCanonical?closePicker:close}>
+    <KeyboardAvoidingView behavior="padding" style={styles.mappingModalBackdrop}><View accessibilityViewIsModal style={[styles.mappingModal,{backgroundColor:colors.panel,borderColor:colors.rule}]}>
+      {activeCanonical?<CsvHeaderPicker dark={dark} canonical={activeCanonical} current={mapping[activeCanonical]} sourceHeaders={sourceHeaders} onChoose={choose} onClose={closePicker}/>:<><Copy dark={dark} heading>Column mapping</Copy><ScrollView keyboardShouldPersistTaps="handled"><CsvMappingDetails dark={dark} canonicalHeaders={canonicalHeaders} mapping={mapping} onSelect={onSelect} canRemap={canRemap} onRemap={value=>{onRemap?.(value);close();}}/></ScrollView><Action dark={dark} label="Close column mapping" onPress={close}/></>}
+    </View></KeyboardAvoidingView>
+  </Modal>;
+}
+
 function CsvMappingEditor({ dark, csv, mapping, onChange, onRemap, canRemap }: { dark: boolean; csv: WealthWireSnapshot['csv']; mapping: WealthCsvMapping; onChange: (mapping: WealthCsvMapping) => void; onRemap?: (mapping: WealthCsvMapping) => void; canRemap: boolean }) {
   const sourceHeaders = csv.sourceHeaders ?? [];
   const canonicalHeaders = csv.canonicalHeaders?.length ? csv.canonicalHeaders : defaultCanonicalHeaders;
@@ -751,8 +824,7 @@ function CsvMappingEditor({ dark, csv, mapping, onChange, onRemap, canRemap }: {
   };
   return <View style={[styles.mapping, { borderColor: theme(dark).rule, backgroundColor: theme(dark).panel }]}>
     <CsvMappingDisclosure dark={dark} expanded={expanded} matchedCount={matchedCount} total={canonicalHeaders.length} onToggle={() => setExpanded(value => !value)}/>
-    {expanded ? <CsvMappingDetails dark={dark} canonicalHeaders={canonicalHeaders} mapping={mapping} onSelect={setActiveCanonical} canRemap={canRemap} onRemap={onRemap}/> : null}
-    <CsvHeaderPicker dark={dark} canonical={activeCanonical} current={activeCanonical ? mapping[activeCanonical] : null} sourceHeaders={sourceHeaders} onChoose={choose} onClose={() => setActiveCanonical(null)}/>
+    {expanded ? <CsvMappingPanel dark={dark} activeCanonical={activeCanonical} mapping={mapping} sourceHeaders={sourceHeaders} canonicalHeaders={canonicalHeaders} canRemap={canRemap} choose={choose} closePicker={()=>setActiveCanonical(null)} close={()=>setExpanded(false)} onSelect={setActiveCanonical} onRemap={onRemap}/> : null}
   </View>;
 }
 
@@ -801,7 +873,7 @@ function EventKindPicker({ dark, values, setters }: Pick<OperationEditorProps, '
 
 function EventAccountFields({ dark, accounts, values, setters }: Pick<OperationEditorProps, 'dark' | 'accounts' | 'values' | 'setters'>) {
   const requiresHoldings = eventRequiresHoldings(values.eventKind);
-  return <><Copy dark={dark} heading>Account</Copy><Copy dark={dark} muted>{requiresHoldings ? 'This event is available only in a holdings account.' : 'Opening cash and cash transfers can use aggregate or holdings accounts.'}</Copy><AccountPicker dark={dark} accounts={accounts} selected={values.accountId} filter={account => !requiresHoldings || account.mode === 'holdings'} onSelect={setters.setAccountId}/><Field dark={dark} label="Event date (YYYY-MM-DD)" value={values.date} onChange={setters.setDate}/></>;
+  return <><Copy dark={dark} heading>Account</Copy><Copy dark={dark} muted>{requiresHoldings ? 'This event is available only in a holdings account.' : 'Opening cash and cash transfers can use aggregate or holdings accounts.'}</Copy><AccountPicker dark={dark} accounts={accounts} selected={values.accountId} filter={account => !requiresHoldings || account.mode === 'holdings'} onSelect={setters.setAccountId}/><DateField dark={dark} label="Event date (YYYY-MM-DD)" value={values.date} onChange={setters.setDate}/></>;
 }
 
 function EventInstrumentOrCurrency({ dark, instruments, values, setters }: Pick<OperationEditorProps, 'dark' | 'instruments' | 'values' | 'setters'>) {
@@ -812,7 +884,7 @@ function EventInstrumentOrCurrency({ dark, instruments, values, setters }: Pick<
 function EventValueFields({ dark, values, setters }: Pick<OperationEditorProps, 'dark' | 'values' | 'setters'>) {
   const needsQuantity = ['opening_position', 'buy', 'sell', 'split'].includes(values.eventKind) || (values.eventKind === 'transfer' && values.transferKind === 'position');
   const needsAmount = ['opening_cash', 'buy', 'sell', 'dividend', 'withholding', 'fee', 'contribution', 'withdrawal'].includes(values.eventKind) || (values.eventKind === 'transfer' && values.transferKind === 'cash');
-  return <>{needsQuantity ? <Field dark={dark} label="Quantity" value={values.quantity} onChange={setters.setQuantity}/> : null}{needsAmount ? <Field dark={dark} label="Amount (for example 125.00)" value={values.amountMinor} onChange={setters.setAmountMinor}/> : null}{values.eventKind === 'split' ? <><Field dark={dark} label="Split numerator" value={values.numerator} onChange={setters.setNumerator}/><Field dark={dark} label="Split denominator" value={values.denominator} onChange={setters.setDenominator}/></> : null}</>;
+  return <>{needsQuantity ? <Field dark={dark} numeric label="Quantity" value={values.quantity} onChange={setters.setQuantity}/> : null}{needsAmount ? <Field dark={dark} numeric label="Amount (for example 125.00)" value={values.amountMinor} onChange={setters.setAmountMinor}/> : null}{values.eventKind === 'split' ? <><Field dark={dark} numeric label="Split numerator" value={values.numerator} onChange={setters.setNumerator}/><Field dark={dark} numeric label="Split denominator" value={values.denominator} onChange={setters.setDenominator}/></> : null}</>;
 }
 
 function EventTransferFields({ dark, accounts, values, setters }: Pick<OperationEditorProps, 'dark' | 'accounts' | 'values' | 'setters'>) {
@@ -844,7 +916,7 @@ const operationEditors: Record<string, EditorFactory> = {
   'csv-export': props => <CsvEditor {...props}/>,
   event: props => <EventEditor {...props} action="event"/>,
   correction: props => <EventEditor {...props} action="correction"/>,
-  reversal: props => <><Copy dark={props.dark} heading>Choose the event to reverse</Copy><EventPicker dark={props.dark} events={props.events} selected={props.values.targetEvent} onSelect={props.setters.setTargetEvent}/><Field dark={props.dark} label="Reversal date (YYYY-MM-DD)" value={props.values.date} onChange={props.setters.setDate}/></>,
+  reversal: props => <><Copy dark={props.dark} heading>Choose the event to reverse</Copy><EventPicker dark={props.dark} events={props.events} selected={props.values.targetEvent} onSelect={props.setters.setTargetEvent}/><DateField dark={props.dark} label="Reversal date (YYYY-MM-DD)" value={props.values.date} onChange={props.setters.setDate}/></>,
 };
 
 function OperationEditor(props: OperationEditorProps & { action: string }) {
@@ -931,6 +1003,8 @@ function useInvestmentOperationState(initialAction: string, accounts: WealthWire
 
 export function InvestmentOperations({ dark, accounts, revision, instruments, events, bankAccounts = [], bankTransactions = [], initialAction = 'account', csvSourceOperationId, onCsvImport, onCsvRemap, onCsvTemplate, onAction, quote, csv }: InvestmentOperationProps) {
   const colors = theme(dark);
+  const [choosing, setChoosing] = useState(false);
+  const reducedMotion = useContext(ReducedMotionContext);
   const { action, draftId, values, setters, chooseAction, selectAccount } = useInvestmentOperationState(initialAction, accounts, bankTransactions);
   const instrument = buildInstrument(values);
   const body = buildOperationBody(action, values, csv, instrument, revision);
@@ -938,9 +1012,11 @@ export function InvestmentOperations({ dark, accounts, revision, instruments, ev
   const submit = () => onAction(action, body, draftId);
   return <View style={[styles.editor, { borderTopColor: colors.rule }]}>
     <Copy dark={dark} heading>Manage Wealth</Copy><Copy dark={dark} muted>Every save is append-only and recalculated by the server. Unknown basis or prices remain unavailable.</Copy>
-    <View style={styles.actionRow}>{operationActions.map(value => <Action key={value} dark={dark} label={titleForAction[value]} selected={value === action} onPress={() => chooseAction(value)}/>)}</View>
+    <Action dark={dark} label="Choose Wealth action" text={`Change action · ${titleForAction[action]}`} onPress={() => setChoosing(true)}/>
+    {choosing ? <Modal transparent visible animationType={reducedMotion ? 'none' : 'fade'} onRequestClose={() => setChoosing(false)}><View style={styles.mappingModalBackdrop}><View accessibilityViewIsModal style={[styles.mappingModal, { backgroundColor: colors.panel, borderColor: colors.rule }]}><Copy dark={dark} heading>Choose an action</Copy><ScrollView contentContainerStyle={styles.actionRow}>{operationGroups.map(group => <View key={group.label} style={styles.actionRow}><Copy dark={dark} heading>{group.label}</Copy>{group.actions.map(value => <Action key={value} dark={dark} label={titleForAction[value]} selected={value === action} onPress={() => { chooseAction(value); setChoosing(false); }}/>)}</View>)}</ScrollView><Action dark={dark} label="Close action chooser" onPress={() => setChoosing(false)}/></View></View></Modal> : null}
     <OperationEditor dark={dark} accounts={accounts} bankAccounts={bankAccounts} revision={revision} instruments={instruments} events={events} bankTransactions={bankTransactions} quote={quote} csv={csv} values={values} setters={setters} onCsvImport={onCsvImport} onCsvRemap={onCsvRemap} onCsvTemplate={onCsvTemplate} csvSourceOperationId={csvSourceOperationId} onExistingAccount={selectAccount} onSubmit={submit} submitDisabled={!canSubmit} action={action}/>
     {action.startsWith('quote-') ? <><Copy dark={dark} muted>{quote.configured ? `Quote key configured${quote.lastRefreshedAt ? ` · refreshed ${quote.lastRefreshedAt}` : ''}` : 'No quote key configured. Manual dated prices remain available.'}</Copy>{quote.error ? <Copy dark={dark} error>Quote provider: {quote.error}</Copy> : null}</> : null}
+    {!canSubmit?<Copy dark={dark} muted>{operationHint(action,values,instrument,accounts,csv)}</Copy>:null}
     {action === 'csv-commit' ? null : <Action dark={dark} label={titleForAction[action]} disabled={!canSubmit} onPress={submit}/>}
   </View>;
 }
@@ -1000,7 +1076,7 @@ export function WealthCashFlow({ dark, data, periodStart = '', periodEnd = '', p
   return <View style={styles.sectionGroup}>
     <Copy dark={dark} heading>Cash flow</Copy>
     <Copy dark={dark} muted>Only explicitly linked external flows affect performance. Ambiguous bank records stay visible and excluded.</Copy>
-    <View style={styles.periodFields}><Field dark={dark} label="Period start (YYYY-MM-DD)" value={draftStart} onChange={setDraftStart}/><Field dark={dark} label="Period end (YYYY-MM-DD)" value={draftEnd} onChange={setDraftEnd}/><Action dark={dark} label="Load selected period" onPress={() => onPeriod?.(draftStart, draftEnd)}/>{periodError ? <Copy dark={dark} error>{periodError}</Copy> : null}</View>
+    <View style={styles.periodFields}><DateField dark={dark} label="Period start (YYYY-MM-DD)" value={draftStart} onChange={setDraftStart}/><DateField dark={dark} label="Period end (YYYY-MM-DD)" value={draftEnd} onChange={setDraftEnd}/><Action dark={dark} label="Load selected period" onPress={() => onPeriod?.(draftStart, draftEnd)}/>{periodError ? <Copy dark={dark} error>{periodError}</Copy> : null}</View>
     <PerformanceSummary dark={dark} data={data}/>
     {householdFlows.length ? <CashFlowLane dark={dark} title="Household cash flow" flows={householdFlows}/> : null}
     <InvestmentCashFlowTotals dark={dark} totals={investmentTotals}/>

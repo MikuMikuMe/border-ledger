@@ -8,7 +8,7 @@ import NativeSession, { type SessionSnapshot } from './native/specs/NativeSessio
 import NativePreferences, { type Display } from './native/specs/NativePreferences';
 import { SessionCoordinator, type DisplaySnapshot, type MobileAppSnapshot, type PreferencesPort, type SessionPort } from './features/auth/SessionCoordinator';
 import type { SafeSessionSnapshot } from './features/auth/authModel';
-import { statusBarStyle, watchSystemReducedMotion } from './features/auth/presentationPolicy';
+import { ReducedMotionContext, statusBarStyle, watchSystemReducedMotion } from './features/auth/presentationPolicy';
 import { LoginScreen } from './screens/LoginScreen';
 import { AboutScreen } from './screens/AboutScreen';
 import { AppShellScreen } from './screens/AppShellScreen';
@@ -167,7 +167,7 @@ function MobileRoot() {
   return (
     <>
       <StatusBar barStyle={statusBarStyle(route === 'login' ? 'login' : 'shell', dark)} />
-      <NavigationContainer theme={navTheme}>
+      <ReducedMotionContext.Provider value={snapshot.display.reducedMotion || systemReducedMotion}><NavigationContainer theme={navTheme}>
         <Stack.Navigator
           key={`${route}:${snapshot.session.sessionEpoch ?? "locked"}`}
           screenOptions={{
@@ -188,7 +188,7 @@ function MobileRoot() {
             onSignOut: () => coordinator.signOut(),
           })}
         </Stack.Navigator>
-      </NavigationContainer>
+      </NavigationContainer></ReducedMotionContext.Provider>
     </>
   );
 }

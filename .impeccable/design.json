@@ -1,13 +1,35 @@
 {
-  "schemaVersion": 1,
-  "mode": "operate",
-  "direction": "Border Ledger",
-  "platform": "web",
-  "tokens": {
-    "canvas": "#f3efe6",
-    "ink": "#18201f",
-    "cad": "#1b6b5b",
-    "cny": "#b04e36",
-    "review": "#996b1f"
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-07T02:05:28.111752+00:00",
+  "title": "Design System: Border Ledger",
+  "extensions": {},
+  "components": [],
+  "narrative": {
+    "northStar": "Bilingual remittance slips and railway timetables",
+    "overview": "Warm paper, ink-dark text, disciplined ruled columns, and small status marks make the ledger precise and human.",
+    "keyCharacteristics": [
+      "Separate source currencies",
+      "Restrained motion",
+      "Thin rules and inset panels",
+      "Tabular amounts and dates"
+    ],
+    "rules": [
+      {
+        "name": "Currency lanes",
+        "body": "Show currency in separate lanes before conversion.",
+        "section": "components"
+      },
+      {
+        "name": "Textual state",
+        "body": "Express confirmed, provisional, review and imported states in text.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Use clear focus and pressed states."
+    ],
+    "donts": [
+      "Avoid a wall of floating cards."
+    ]
   }
 }

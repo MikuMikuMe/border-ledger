@@ -17,3 +17,15 @@ it('discards an Android preview when the user changes the requested analysis',as
  expect(button('Send for analysis')).toBeUndefined();
  act(()=>tree.unmount());
 });
+
+it('keeps provider errors and the draft visible in the settings panel',async()=>{
+ const execute=vi.fn((action:string)=>action==='settings'?Promise.resolve('{"configurations":[],"detailedTransactions":false}'):Promise.reject(new Error('Cannot save')));
+ let tree:any;await act(async()=>{tree=create(React.createElement(AnalysisContent,{dark:false,month:'2026-10',execute}));});
+ act(()=>tree.root.findByProps({accessibilityLabel:'Show provider and privacy settings'}).props.onPress());
+ expect(tree.root.findAllByType('Modal')).toHaveLength(1);
+ act(()=>tree.root.findByProps({accessibilityLabel:'Model'}).props.onChangeText('test'));
+ act(()=>tree.root.findByProps({accessibilityLabel:'API key'}).props.onChangeText('secret'));
+ await act(async()=>{tree.root.findByProps({accessibilityLabel:'Save or replace key'}).props.onPress();await Promise.resolve();});
+ expect(JSON.stringify(tree.root.findByType('Modal').findAllByType('Text').map((n:any)=>n.children))).toContain('Cannot save');
+ expect(tree.root.findByProps({accessibilityLabel:'API key'}).props.value).toBe('secret');
+});
