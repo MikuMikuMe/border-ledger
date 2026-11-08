@@ -230,6 +230,15 @@ function summaryEligible(flow: CashFlowSummaryRecord): boolean {
   return flow.reason !== 'Conflicting bank records share one explicit wealth link.';
 }
 
+function mergeMatchedAliases(aliasesByTransaction:Map<string,Set<string>>,matches:readonly {manual_id:string;bank_id:string}[]) {
+  for (const match of matches) {
+    const bankAliases = aliasesByTransaction.get(match.bank_id) ?? new Set<string>();
+    bankAliases.add(match.manual_id);
+    aliasesByTransaction.get(match.manual_id)?.forEach((value) => bankAliases.add(value));
+    aliasesByTransaction.set(match.bank_id, bankAliases);
+  }
+}
+
 export async function cashFlowRecords(db: D1Database, context: FinancialContext, events: readonly WealthEvent[], options: { includeTransfers?: boolean } = {}): Promise<StoredCashFlowRecord[]> {
   const [rows, aliases, matches] = await Promise.all([
     db.prepare(`SELECT t.id,t.account_id,t.merchant,t.date,t.amount_minor,t.currency,t.category,t.kind,t.status,t.source,
@@ -250,12 +259,7 @@ export async function cashFlowRecords(db: D1Database, context: FinancialContext,
     aliasesByTransaction.set(alias.transaction_id, set);
     sourceRecordByTransaction.set(alias.transaction_id, sourceRecordByTransaction.get(alias.transaction_id) ?? alias.id);
   }
-  for (const match of matches) {
-    const bankAliases = aliasesByTransaction.get(match.bank_id) ?? new Set<string>();
-    bankAliases.add(match.manual_id);
-    aliasesByTransaction.get(match.manual_id)?.forEach((value) => bankAliases.add(value));
-    aliasesByTransaction.set(match.bank_id, bankAliases);
-  }
+  mergeMatchedAliases(aliasesByTransaction,matches);
   return rows.results.map((row) => {
     const candidates = new Set([row.id, ...(aliasesByTransaction.get(row.id) ?? [])]);
     const linked = events.filter((event) => event.linkedBankSourceId && candidates.has(event.linkedBankSourceId));
