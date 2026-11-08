@@ -33,7 +33,7 @@ jobs:
             Write-Output '::notice::Android Gradle job is gated: android/gradle/wrapper/gradle-wrapper.jar is unavailable.'
           }
 
-  android-build:
+  android-debug:
     needs: static-release-gates
     if: needs.static-release-gates.outputs.toolchain_available == 'true' && github.event_name != 'push'
     runs-on: windows-latest
@@ -79,7 +79,7 @@ jobs:
           if (-not $sdkmanager) { throw 'Android SDK command-line tools were not installed.' }
           & $sdkmanager.FullName --install 'platforms;android-37.0' --channel=3
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Run Android lint, unit tests, and unsigned release assembly
+      - name: Run Android lint, unit tests, and debug assembly
         working-directory: android
         shell: pwsh
         env:
@@ -87,9 +87,132 @@ jobs:
         run: |
           .\gradlew.bat lintDebug testDebugUnitTest :sharedCore:testAndroidHostTest assembleDebug --no-daemon
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          .\gradlew.bat assembleRelease -PmobileEnvironment=production --no-daemon
+
+  android-release-build:
+    needs: static-release-gates
+    if: needs.static-release-gates.outputs.toolchain_available == 'true' && github.event_name != 'push'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: npm ci
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          # The action's historical default includes the removed `tools`
+          # package. Install only packages required by this project.
+          packages: platform-tools build-tools;36.0.0
+      - name: Install Android 17 preview platform
+        shell: pwsh
+        run: |
+          $sdkmanager = Get-ChildItem -LiteralPath (Join-Path $env:ANDROID_HOME 'cmdline-tools') -Filter 'sdkmanager.bat' -File -Recurse | Select-Object -First 1
+          if (-not $sdkmanager) { throw 'Android SDK command-line tools were not installed.' }
+          & $sdkmanager.FullName --install 'platforms;android-37.0' --channel=3
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build unsigned release and verify manifests
+        working-directory: android
+        shell: pwsh
+        env:
+          ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
+        run: |
+          .\gradlew.bat :app:processDebugManifest assembleRelease -PmobileEnvironment=production --no-daemon
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\react-native-host-check.ps1 -Merged
+
+  android-build:
+    needs: [static-release-gates, android-debug, android-release-build]
+    if: always() && github.event_name != 'push' && needs.static-release-gates.outputs.toolchain_available == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both Android build jobs
+        shell: bash
+        run: |
+          test "${{ needs.android-debug.result }}" = success
+          test "${{ needs.android-release-build.result }}" = success
+
+  linux-benchmark:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [debug, release]
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          tool-cache: false
+          swap-storage: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+      - if: matrix.variant == 'debug'
+        run: npm ci
+      - name: Install mobile dependencies and validate JavaScript
+        working-directory: mobile
+        shell: bash
+        run: |
+          set -e
+          npm ci
+          if [ "${{ matrix.variant }}" = debug ]; then
+            npm run typecheck
+            npm run codegen
+            npm test
+            npm run bundle:release
+          fi
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        env:
+          ANDROID_HOME: ${{ runner.temp }}/android-sdk
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+        with:
+          packages: platform-tools build-tools;36.0.0
+          log-accepted-android-sdk-licenses: false
+      - name: Install Android 17 preview platform
+        run: |
+          sdkmanager="$(find "$ANDROID_HOME/cmdline-tools" -mindepth 3 -maxdepth 3 -type f -name sdkmanager -print -quit)"
+          test -n "$sdkmanager"
+          "$sdkmanager" --install "platforms;android-37.0" --channel=3
+      - name: Build and validate
+        working-directory: android
+        shell: bash
+        env:
+          ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx
+        run: |
+          set -e
+          if [ "${{ matrix.variant }}" = debug ]; then
+            bash gradlew lintDebug testDebugUnitTest :sharedCore:testAndroidHostTest assembleDebug --no-daemon
+          else
+            bash gradlew :app:processDebugManifest assembleRelease -PmobileEnvironment=production --no-daemon
+            pwsh -NoProfile -File react-native-host-check.ps1 -Merged
+          fi
 
   ios-core:
     runs-on: macos-26
@@ -205,4 +328,5 @@ jobs:
     steps:
       - name: Report unavailable Android build prerequisites
         run: echo 'Android Gradle validation was intentionally gated because the wrapper JAR is missing; no Android build or test is claimed.'
+
 
