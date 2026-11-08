@@ -92,7 +92,7 @@ describe('manual transaction creation', () => {
       await fixture.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank','acct','2026-11-08','Coffee',-1234,'CAD','Food','expense','confirmed','plaid','bank','personal')").run();
       const matches = await listManualMatches(fixture.db, owner);
       expect(matches).toHaveLength(1);
-      expect(matches[0]).toMatchObject({manualId: manual.id, bankId:'bank', decision:'open', revision:0});
+      expect(matches[0]).toMatchObject({manualId: manual.id, bankId:'bank', accountId:'acct', decision:'open', revision:0});
       const read = () => readBudgetActivity(fixture.db, owner, {from:'2026-11-01',to:'2026-11-30',currency:'CAD'});
       expect(await read()).toHaveLength(2);
       await decideManualMatch(fixture.db, owner, {manualId:manual.id,bankId:'bank',decision:'confirmed',expectedRevision:0});
@@ -113,7 +113,7 @@ describe('manual transaction creation', () => {
       await fixture.db.prepare("UPDATE transactions SET amount_minor=-999 WHERE id='bank'").run();
       const rows=await readBudgetActivity(fixture.db,owner,{from:'2026-11-01',to:'2026-11-30',currency:'CAD'});
       expect(rows).toHaveLength(2);
-      expect(await listManualMatches(fixture.db,owner)).toMatchObject([{decision:'stale'}]);
+      expect(await listManualMatches(fixture.db,owner)).toMatchObject([{decision:'stale',bankAmountMinor:-999,bankCurrency:'CAD'}]);
       await decideManualMatch(fixture.db,owner,{manualId:manual.id,bankId:'bank',decision:'dismissed',expectedRevision:1});
     } finally {fixture.close();}
   });

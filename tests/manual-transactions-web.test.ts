@@ -48,4 +48,33 @@ describe('manual transaction form',()=>{
     } finally {act(()=>root.unmount());container.remove();}
   });
 
+  it('moves focus into the form, associates amount errors, and restores focus on cancel',async()=>{
+    const api:LedgerApi=async <T>()=>({matches:[]} as T);
+    const container=document.createElement('div');document.body.append(container);const root=createRoot(container);
+    try {
+      await act(async()=>root.render(createElement(ManualTransactions,{accounts:[{id:'acct',name:'Chequing',institution:'Bank',currency:'CAD'}],api,onChanged:async()=>{}})));
+      act(()=>[...container.querySelectorAll('button')].find(node=>node.textContent==='Add transaction')!.click());
+      expect(document.activeElement).toBe(container.querySelector('select'));
+      const amount=[...container.querySelectorAll('label')].find(node=>node.textContent?.startsWith('Amount'))!.querySelector('input')!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(amount,'1.001');
+      act(()=>amount.dispatchEvent(new Event('input',{bubbles:true})));
+      await act(async()=>container.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+      expect(amount.getAttribute('aria-invalid')).toBe('true');
+      expect(document.getElementById(amount.getAttribute('aria-describedby')!)?.textContent).toContain('decimal places');
+      act(()=>[...container.querySelectorAll('button')].find(node=>node.textContent==='Cancel')!.click());
+      expect((document.activeElement as HTMLElement).textContent).toBe('Add transaction');
+    } finally {act(()=>root.unmount());container.remove();}
+  });
+
+  it('shows the account, amount, and clear status for duplicate candidates',async()=>{
+    const api:LedgerApi=async <T>()=>({matches:[{manualId:'manual',bankId:'bank',accountId:'acct',manualDate:'2026-11-07',bankDate:'2026-11-08',manualMerchant:'Coffee',bankMerchant:'Coffee Bank',amountMinor:-1234,currency:'CAD',bankAmountMinor:-1234,bankCurrency:'CAD',category:'Food',note:null,decision:'open',revision:0}]} as T);
+    const container=document.createElement('div');document.body.append(container);const root=createRoot(container);
+    try {
+      await act(async()=>root.render(createElement(ManualTransactions,{accounts:[{id:'acct',name:'Chequing',institution:'Example Bank',currency:'CAD'}],api,onChanged:async()=>{}})));
+      expect(container.textContent).toContain('Example Bank · Chequing');
+      expect(container.textContent).toContain('Needs review');
+      expect(container.textContent?.match(/12\.34/g)).toHaveLength(2);
+    } finally {act(()=>root.unmount());container.remove();}
+  });
+
 });

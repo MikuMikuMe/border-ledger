@@ -1,11 +1,14 @@
-import { useEffect, useState, type Dispatch, type SetStateAction, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from 'react';
 import type { LedgerApi } from '../domain/api';
 import { LedgerApiError, ledgerSession } from '../domain/api';
 import { formatMoney } from '../domain/format';
 import { getCurrencyMeta, parseMoneyMinor } from '../domain/currencies';
 
 type Account = {id:string;name:string;institution:string;currency:string;currencies?:string[]};
-type Match = {manualId:string;bankId:string;manualDate:string;bankDate:string;manualMerchant:string;bankMerchant:string;amountMinor:number;currency:string;category:string;note:string|null;decision:'open'|'confirmed'|'dismissed'|'stale';revision:number};
+type Match = {manualId:string;bankId:string;accountId:string;manualDate:string;bankDate:string;manualMerchant:string;bankMerchant:string;amountMinor:number;currency:string;bankAmountMinor?:number;bankCurrency?:string;category:string;note:string|null;decision:'open'|'confirmed'|'dismissed'|'stale';revision:number};
+const amountErrorText='Enter a positive amount with the correct decimal places for the currency.';
+const matchStatus={open:'Needs review',confirmed:'Duplicate confirmed',dismissed:'Not a duplicate',stale:'Bank entry changed; both records count'};
+
 type Entry = {requestId:string;accountId:string;date:string;merchant:string;amount:string;currency:string;kind:string;direction:string;category:string;note:string};
 
 export function parseAccountCurrencies(value: unknown, fallback: string): string[] {
@@ -23,19 +26,27 @@ async function readMatches(api:LedgerApi) {
   return all;
 }
 
-function MatchList({matches,busy,onDecide}:{matches:Match[];busy:boolean;onDecide(match:Match,decision:'confirmed'|'dismissed'):void}) {
+function accountName(accounts:Account[],id:string) { const account=accounts.find(item=>item.id===id); return account?`${account.institution} · ${account.name}`:'Account unavailable'; }
+
+function MatchList({accounts,matches,busy,onDecide}:{accounts:Account[];matches:Match[];busy:boolean;onDecide(match:Match,decision:'confirmed'|'dismissed'):void}) {
   if(!matches.length)return null;
-  return <div><h3>Possible duplicates</h3><p>Both entries count until you confirm a duplicate. The bank entry is kept in totals.</p>{matches.map(match=><div className="manual-match" key={`${match.manualId}:${match.bankId}`}><p><strong>Manual:</strong> {match.manualDate} · {match.manualMerchant} · {formatMoney(Math.abs(match.amountMinor),match.currency)}<br/><strong>Bank:</strong> {match.bankDate} · {match.bankMerchant}<br/>Category: {match.category}{match.note?` · ${match.note}`:''} · {match.decision==='stale'?'Bank entry changed; both records count':match.decision}</p><div className="manual-actions">{match.decision!=='confirmed'&&match.decision!=='stale'?<button type="button" className="outline-button" disabled={busy} onClick={()=>onDecide(match,'confirmed')}>Confirm duplicate</button>:null}{match.decision!=='dismissed'?<button type="button" className="outline-button" disabled={busy} onClick={()=>onDecide(match,'dismissed')}>{match.decision==='confirmed'?'Undo confirmation':'Not a duplicate'}</button>:null}</div></div>)}</div>;
+  return <div><h3>Possible duplicates</h3><p>Both entries count until you confirm a duplicate. The bank entry is kept in totals.</p>{matches.map(match=><div className="manual-match" key={`${match.manualId}:${match.bankId}`}><p>{accountName(accounts,match.accountId)}<br/><strong>Manual:</strong> {match.manualDate} · {match.manualMerchant} · {formatMoney(Math.abs(match.amountMinor),match.currency)}<br/><strong>Bank:</strong> {match.bankDate} · {match.bankMerchant}{match.bankAmountMinor!==undefined && match.bankCurrency?` · ${formatMoney(Math.abs(match.bankAmountMinor),match.bankCurrency)}`:''}<br/>Category: {match.category}{match.note?` · ${match.note}`:''} · {matchStatus[match.decision]}</p><div className="manual-actions">{match.decision!=='confirmed'&&match.decision!=='stale'?<button type="button" className="outline-button" disabled={busy} onClick={()=>onDecide(match,'confirmed')}>Confirm duplicate</button>:null}{match.decision!=='dismissed'?<button type="button" className="outline-button" disabled={busy} onClick={()=>onDecide(match,'dismissed')}>{match.decision==='confirmed'?'Undo confirmation':'Not a duplicate'}</button>:null}</div></div>)}</div>;
 }
 
-function EntryForm({accounts,entry,setEntry,busy,uncertain,onSubmit,onCancel}:{accounts:Account[];entry:Entry;setEntry:Dispatch<SetStateAction<Entry>>;busy:boolean;uncertain:boolean;onSubmit(event:FormEvent):Promise<void>;onCancel():void}) {
+function AmountField({entry,update,error}:{entry:Entry;update(name:keyof Entry,value:string):void;error:boolean}) {
+  const id=useId();
+  return <label>Amount<input required inputMode="decimal" aria-invalid={error || undefined} aria-describedby={error ? id : undefined} value={entry.amount} onChange={event=>update('amount',event.target.value)}/>{error?<span id={id} className="manual-field-error" role="alert">{amountErrorText}</span>:null}</label>;
+}
+
+function EntryForm({accounts,entry,setEntry,busy,uncertain,message,onSubmit,onCancel}:{accounts:Account[];entry:Entry;setEntry:Dispatch<SetStateAction<Entry>>;busy:boolean;uncertain:boolean;message:string;onSubmit(event:FormEvent):Promise<void>;onCancel():void}) {
+  const amountError=message===amountErrorText;
   const selected=accounts.find(account=>account.id===entry.accountId);
   const update=(name:keyof Entry,value:string)=>setEntry(current=>({...current,[name]:value}));
-  return <form onSubmit={event=>{void onSubmit(event);}} className="manual-form"><fieldset disabled={busy||uncertain}>
-      <label>Account<select required value={entry.accountId} onChange={event=>{const account=accounts.find(item=>item.id===event.target.value);setEntry(current=>({...current,accountId:event.target.value,currency:account?.currency??''}));}}>{accounts.map(account=><option key={account.id} value={account.id}>{account.institution} · {account.name}</option>)}</select></label>
+  return <form onSubmit={event=>{void onSubmit(event);}} className="manual-form"><fieldset disabled={busy||uncertain}><legend>Transaction details</legend>
+      <label>Account<select autoFocus required value={entry.accountId} onChange={event=>{const account=accounts.find(item=>item.id===event.target.value);setEntry(current=>({...current,accountId:event.target.value,currency:account?.currency??''}));}}>{accounts.map(account=><option key={account.id} value={account.id}>{account.institution} · {account.name}</option>)}</select></label>
       <label>Date<input type="date" required value={entry.date} onChange={event=>update('date',event.target.value)}/></label>
       <label>Description<input required maxLength={160} value={entry.merchant} onChange={event=>update('merchant',event.target.value)}/></label>
-      <label>Amount<input required inputMode="decimal" value={entry.amount} onChange={event=>update('amount',event.target.value)}/></label>
+      <AmountField entry={entry} update={update} error={amountError}/>
       <label>Currency<select value={entry.currency} onChange={event=>update('currency',event.target.value)}>{(selected?.currencies?.length?selected.currencies:[selected?.currency??'']).map(code=><option key={code}>{code}</option>)}</select></label>
       <label>Type<select value={entry.kind} onChange={event=>update('kind',event.target.value)}>{['expense','income','transfer','refund','fee'].map(kind=><option key={kind} value={kind}>{kind}</option>)}</select></label>
       {entry.kind==='transfer'?<label>Direction<select value={entry.direction} onChange={event=>update('direction',event.target.value)}><option value="out">Out of account</option><option value="in">Into account</option></select></label>:null}
@@ -60,7 +71,7 @@ function clearPendingEntry(pendingKey:string|null) {
 }
 async function submitEntry(event:FormEvent,{entry,pendingKey,api,onChanged,loadMatches,setBusy,setMessage,setOpen,setUncertain}:EntryActions) {
     event.preventDefault();
-    if(!validEntryAmount(entry)){setMessage('Enter a positive amount with the correct decimal places for the currency.');return;}
+    if(!validEntryAmount(entry)){setMessage(amountErrorText);return;}
     setBusy(true);setMessage('');
     try {
       storePendingEntry(pendingKey,entry);
@@ -91,6 +102,8 @@ export function ManualTransactions({accounts,api,onChanged}:{accounts:Account[];
   const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[uncertain,setUncertain]=useState(false);
   const [message,setMessage]=useState('');
   const [matches,setMatches]=useState<Match[]>([]);
+  const addButton=useRef<HTMLButtonElement>(null),wasOpen=useRef(false);
+  useEffect(()=>{if(!open && wasOpen.current)addButton.current?.focus();wasOpen.current=open;},[open]);
   const ledgerId=ledgerSession.snapshot().identity?.ledgerId;
   const pendingKey=ledgerId?`manual-pending:${ledgerId}`:null;
   const loadMatches=async()=>{try {setMatches(await readMatches(api));}catch {setMessage('Could not load possible duplicates.');}};
@@ -101,10 +114,10 @@ export function ManualTransactions({accounts,api,onChanged}:{accounts:Account[];
   const submit=(event:FormEvent)=>submitEntry(event,actions);
   const decide=(match:Match,decision:'confirmed'|'dismissed')=>decideMatch(match,decision,actions);
   return <section className="panel manual-transactions" aria-label="Manual transactions">
-    <div className="section-heading"><div><h2>Manual transactions</h2><p>Add one transaction or review possible duplicates.</p></div>{!open?<button type="button" className="outline-button" disabled={!accounts.length} onClick={start}>Add transaction</button>:null}</div>
+    <div className="section-heading"><div><h2>Manual transactions</h2><p>Add one transaction or review possible duplicates.</p></div>{!open?<button ref={addButton} type="button" className="outline-button" disabled={!accounts.length} onClick={start}>Add transaction</button>:null}</div>
     {!accounts.length?<p>Add an account before recording a transaction.</p>:null}
-    {message?<p role="status">{message}</p>:null}
-    {open?<EntryForm accounts={accounts} entry={entry} setEntry={setEntry} busy={busy} uncertain={uncertain} onSubmit={submit} onCancel={()=>setOpen(false)}/>:null}
-    <MatchList matches={matches} busy={busy} onDecide={(match,decision)=>{void decide(match,decision);}}/>
+    {message && message!==amountErrorText?<p role="status">{message}</p>:null}
+    {open?<EntryForm accounts={accounts} entry={entry} setEntry={setEntry} busy={busy} uncertain={uncertain} message={message} onSubmit={submit} onCancel={()=>setOpen(false)}/>:null}
+    <MatchList accounts={accounts} matches={matches} busy={busy} onDecide={(match,decision)=>{void decide(match,decision);}}/>
   </section>;
 }

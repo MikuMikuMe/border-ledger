@@ -9,7 +9,8 @@ import type {FinanceController} from './FinanceController';
 import type {Snapshot} from './contracts';
 
 type Account=Snapshot['accounts'][number];
-type Match={manualId:string;bankId:string;manualDate:string;bankDate:string;manualMerchant:string;bankMerchant:string;amountMinor:number;currency:string;category:string;note:string|null;decision:'open'|'confirmed'|'dismissed'|'stale';revision:number};
+type Match={manualId:string;bankId:string;accountId:string;manualDate:string;bankDate:string;manualMerchant:string;bankMerchant:string;amountMinor:number;currency:string;bankAmountMinor?:number;bankCurrency?:string;category:string;note:string|null;decision:'open'|'confirmed'|'dismissed'|'stale';revision:number};
+const matchStatus={open:'Needs review',confirmed:'Duplicate confirmed',dismissed:'Not a duplicate',stale:'Bank entry changed; both records count'};
 function today(){const date=new Date();return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,10);}
 function initial(accounts:Account[]):ManualDraft{return {accountId:accounts[0]?.id??'',date:today(),merchant:'',amount:'',currency:accounts[0]?.currencies[0]??'',kind:'expense',direction:'out',category:'',note:''};}
 async function readMatches() {
@@ -22,11 +23,14 @@ async function pendingManualOperation() {
   do {page=await NativeSession.readOperations({offset,limit:100});found??=page.find(item=>item.kind.startsWith('manual_')&&!['completed','rejected','revision_conflict','failed_local','canceled'].includes(item.status))?.operationId??null;offset+=page.length;} while(page.length===100);
   return found;
 }
-function MatchList({dark,matches,blocked,onDecide}:{dark:boolean;matches:Match[];blocked:boolean;onDecide(match:Match,decision:'confirmed'|'dismissed'):void}) {
+function accountName(accounts:Account[],id:string) { const account=accounts.find(item=>item.id===id); return account?[account.institution,account.displayName].filter(Boolean).join(' · '):'Account unavailable'; }
+function bankAmount(match:Match) { return match.bankAmountMinor!==undefined && match.bankCurrency?` · ${formatMoney(String(match.bankAmountMinor),match.bankCurrency)}`:''; }
+function MatchList({dark,accounts,matches,blocked,onDecide}:{dark:boolean;accounts:Account[];matches:Match[];blocked:boolean;onDecide(match:Match,decision:'confirmed'|'dismissed'):void}) {
   if(!matches.length)return null;
   return <><Copy dark={dark} heading>Possible duplicates</Copy><Copy dark={dark}>Both entries count until you confirm a duplicate. The bank entry is kept in totals.</Copy>{matches.map(match=><View key={`${match.manualId}:${match.bankId}`} style={{gap:6,marginTop:12}}>
+    <Copy dark={dark}>{accountName(accounts,match.accountId)}</Copy>
     <Copy dark={dark}>Manual: {match.manualDate} · {match.manualMerchant} · {formatMoney(String(match.amountMinor),match.currency)}</Copy>
-    <Copy dark={dark}>Bank: {match.bankDate} · {match.bankMerchant} · {match.decision==='stale'?'Bank entry changed; both records count':match.decision}</Copy>
+    <Copy dark={dark}>Bank: {match.bankDate} · {match.bankMerchant}{bankAmount(match)} · {matchStatus[match.decision]}</Copy>
     <Copy dark={dark}>Category: {match.category}{match.note?` · ${match.note}`:''}</Copy>
     {match.decision!=='confirmed'&&match.decision!=='stale'?<Action dark={dark} label="Confirm duplicate" disabled={blocked} onPress={()=>onDecide(match,'confirmed')}/>:null}
     {match.decision!=='dismissed'?<Action dark={dark} label={match.decision==='confirmed'?'Undo confirmation':'Not a duplicate'} disabled={blocked} onPress={()=>onDecide(match,'dismissed')}/>:null}
@@ -61,7 +65,7 @@ export function ManualTransactions({dark,controller,operationId}:{dark:boolean;c
     {message?<Copy dark={dark}>{message}</Copy>:null}
     {message?<Action dark={dark} label="Refresh manual transaction status" onPress={()=>{setMessage('');void load();}}/>:null}
     {pending?<Action dark={dark} label="Retry submitted manual change" onPress={()=>{void resume();}}/>:null}
-    <MatchList dark={dark} matches={matches} blocked={mutation.blocked} onDecide={decide}/>
+    <MatchList dark={dark} accounts={accounts} matches={matches} blocked={mutation.blocked} onDecide={decide}/>
     {open?<ManualEntryForm dark={dark} accounts={accounts} draft={draft} onDraft={setDraft} mutation={mutation} onSave={create} onClose={()=>setOpen(false)}/>:null}
   </Card>;
 }
