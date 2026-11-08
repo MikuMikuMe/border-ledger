@@ -16,6 +16,17 @@ import org.junit.Test
 import java.security.MessageDigest
 
 class BridgeOperationJournalTest {
+    @Test fun manualRecoveryRequiresTheSameOwnerAndPayload()=runTest {
+        val disk=MemoryRecords()
+        val request=BridgeOperationRequest("manual-retry-1","manual_create","create:original","owner")
+        BridgeOperationJournal(disk).start(request) { error("response lost") }
+        val restored=BridgeOperationJournal(disk)
+        try {
+            restored.retryMatchingRequest(request.copy(fingerprint="create:changed")) { fail("changed payload was sent"); null }
+            fail("changed payload was accepted")
+        } catch (_: IllegalArgumentException) { }
+        assertEquals("completed",restored.retryMatchingRequest(request) { "saved" }.status)
+    }
     @Test fun budgetRevisionConflictIsTerminalAndPermitsAReviewedRetry()=runTest {
         val journal=BridgeOperationJournal(MemoryRecords())
         val conflict=journal.start(BridgeOperationRequest("budget-conflict","budget_rollover","payload","owner")) { throw com.lofuyu.borderledger.budget.BudgetRevisionConflict() }

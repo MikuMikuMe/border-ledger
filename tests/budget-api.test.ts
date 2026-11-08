@@ -1,12 +1,12 @@
 import {afterEach,describe,expect,it} from 'vitest';
 import {VERIFIED_WEB_ENV,VERIFIED_WEB_HEADERS,provisionWebOwner} from './helpers/web-identity';
-import {createD1Fixture,task24MigrationNames} from './helpers/d1';
+import {createD1Fixture,currentMigrationNames} from './helpers/d1';
 import worker from '../worker/index';
 const fixtures:Array<{dispose():Promise<void>}>=[];
 afterEach(async()=>{while(fixtures.length) await fixtures.pop()!.dispose();});
 describe('budget web API',()=>{
   it('requires authentication and exposes settings and funding data',async()=>{
-    const f=await createD1Fixture([...task24MigrationNames,'0025-lunchflow-platform.sql','0026-lunchflow-connection-mappings.sql','0027-hosted-users-activation.sql','0028-recurring-plans.sql','0029-budget.sql','0031-budget-tracking.sql']);fixtures.push(f);await provisionWebOwner(f.db);
+    const f=await createD1Fixture(currentMigrationNames);fixtures.push(f);await provisionWebOwner(f.db);
     const env={DB:f.db,...VERIFIED_WEB_ENV,LEDGER_APP_ORIGIN:'https://pf.example.com',ASSETS:{fetch:async()=>new Response('not found',{status:404})}};
     const root='https://pf.example.com/api/budget';
     expect((await worker.fetch(new Request(root),env as never)).status).toBe(401);

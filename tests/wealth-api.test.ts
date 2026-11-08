@@ -17,6 +17,7 @@ const wealthMigrations = [
   '0031-budget-tracking.sql',
   '0032-ai-official-providers.sql',
   '0033-wealth.sql',
+  '0034-manual-matches.sql',
 ] as const;
 
 afterEach(async () => {

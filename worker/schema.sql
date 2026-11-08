@@ -1764,3 +1764,17 @@ CREATE TRIGGER wealth_valuation_corrections_immutable_delete BEFORE DELETE ON we
 CREATE TRIGGER wealth_operations_immutable_update BEFORE UPDATE ON wealth_operations BEGIN SELECT RAISE(ABORT,'wealth operations are immutable'); END;
 CREATE TRIGGER wealth_operations_immutable_delete BEFORE DELETE ON wealth_operations BEGIN SELECT RAISE(ABORT,'wealth operations are immutable'); END;
 CREATE TRIGGER wealth_import_rows_scope_insert BEFORE INSERT ON wealth_import_rows WHEN NOT EXISTS(SELECT 1 FROM wealth_import_previews p WHERE p.ledger_id=NEW.ledger_id AND p.id=NEW.preview_id) BEGIN SELECT RAISE(ABORT,'wealth import row preview mismatch'); END;
+CREATE TABLE manual_transaction_matches (
+  ledger_id TEXT NOT NULL REFERENCES ledgers(id),
+  manual_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+  bank_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+  decision TEXT NOT NULL CHECK(decision IN ('confirmed','dismissed')),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  PRIMARY KEY(ledger_id,manual_id,bank_id)
+);
+CREATE UNIQUE INDEX manual_match_one_confirmed ON manual_transaction_matches(ledger_id,manual_id) WHERE decision='confirmed';
+CREATE UNIQUE INDEX manual_match_bank_confirmed ON manual_transaction_matches(ledger_id,bank_id) WHERE decision='confirmed';
+CREATE INDEX manual_match_candidates ON transactions(ledger_id,source,account_id,currency,kind,amount_minor,date,status);
+CREATE TRIGGER budget_revision_manual_match_insert AFTER INSERT ON manual_transaction_matches BEGIN UPDATE budget_planning_state SET revision=revision+1 WHERE ledger_id=NEW.ledger_id; END;
+CREATE TRIGGER budget_revision_manual_match_update AFTER UPDATE ON manual_transaction_matches BEGIN UPDATE budget_planning_state SET revision=revision+1 WHERE ledger_id=NEW.ledger_id; END;
+CREATE TRIGGER budget_revision_manual_match_delete AFTER DELETE ON manual_transaction_matches BEGIN UPDATE budget_planning_state SET revision=revision+1 WHERE ledger_id=OLD.ledger_id; END;

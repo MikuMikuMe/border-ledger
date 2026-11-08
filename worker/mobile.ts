@@ -1,4 +1,5 @@
 import type {AiEgressBinding} from './ai-egress';
+import { createManualTransaction, listManualMatches, decideManualMatch, manualMatchOffset, ManualTransactionConflict } from './manual-transactions';
 import { handleAiApi } from './ai-http';
 import { handleBudgetApi } from './budget-http';
 import { handlePlanApi } from './recurring-plans-http';
@@ -242,9 +243,9 @@ function requestId() {
 }
 
 function typedServiceErrorResponse(error: unknown, id: string) {
-  const supported = [ConnectionServiceError, LunchFlowError, LedgerAccessError, PlaidOwnershipConflictError].some(type => error instanceof type);
+  const supported = [ConnectionServiceError, LunchFlowError, LedgerAccessError, PlaidOwnershipConflictError, ManualTransactionConflict].some(type => error instanceof type);
   if (!supported) return null;
-  const serviceError = error as ConnectionServiceError | LunchFlowError | LedgerAccessError | PlaidOwnershipConflictError;
+  const serviceError = error as ConnectionServiceError | LunchFlowError | LedgerAccessError | PlaidOwnershipConflictError | ManualTransactionConflict;
   return json({ code: serviceError.code, message: serviceError.message, requestId: id, retryable: serviceError.retryable }, { status: serviceError.status });
 }
 
@@ -537,12 +538,24 @@ async function handleMobileWealthRequest(request: Request, env: MobileRouteEnv, 
   return handleWealthApi(request, env.DB, owner, { root, env: wealthHttpEnvironment(env) });
 }
 
+async function handleMobileManualTransactions(request: Request, env: MobileRouteEnv, config: MobileAuthConfig, url: URL) {
+  const route = `${request.method} ${url.pathname}`;
+  if (!['POST /api/mobile/v1/transactions', 'GET /api/mobile/v1/transactions/manual-matches', 'POST /api/mobile/v1/transactions/manual-matches'].includes(route)) return null;
+  const isCreate = route === 'POST /api/mobile/v1/transactions';
+  const scope = request.method === 'GET' ? 'ledger:read' : 'ledger:review';
+  const owner = await authenticateOwner(bearer(request), env.DB, config, scope);
+  authorizeMobileRoute(owner, url.pathname, scope);
+  if (request.method === 'GET') return json({matches:await listManualMatches(env.DB, owner, manualMatchOffset(url.searchParams))});
+  const body = await readJsonBody<unknown>(request, 16 * 1024);
+  return isCreate ? json(await createManualTransaction(env.DB, owner, body), {status:201}) : json(await decideManualMatch(env.DB, owner, body));
+}
+
 async function handleMobileFeatureRoutes(request: Request, env: MobileRouteEnv, config: MobileAuthConfig, url: URL): Promise<Response | null> {
   const wealthResponse = await handleMobileWealthRequest(request, env, config, url);
   if (wealthResponse) return wealthResponse;
   const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
   if (lunchFlowResponse) return lunchFlowResponse;
-  const connectionResponse = await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
+  const connectionResponse = await handleMobileManualTransactions(request, env, config, url) ?? await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
   return connectionResponse;
 }
 

@@ -259,6 +259,17 @@ class NativeServiceRuntime(val container: AppContainer, val applicationContext: 
             BridgePayloads.operation(result)
         }
     }
+    internal suspend fun retryManualWrite(id: String, action: String, body: String, owner: String): Map<String, Any?> = ownerWorkMutex.withLock {
+        check(currentGeneration() == owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
+        val request = BridgeOperationRequest(id, "manual_$action", "$action:$body", owner)
+        val result = container.bridgeOperations.retryMatchingRequest(request) {
+            container.manualTransactions.write(action, body)
+            null
+        }
+        changes.emit("all")
+        check(currentGeneration() == owner && container.ownerSessionManager.state.value is OwnerSessionState.SignedIn)
+        BridgePayloads.operation(result)
+    }
     companion object { private const val GENERATION = "rn_owner_generation_v1" }
 }
 

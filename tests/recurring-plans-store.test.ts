@@ -1,6 +1,6 @@
 import { readPlanOccurrences } from '../worker/recurring-plan-projection';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createD1Fixture, task24MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 import { createPlan, listPlans, updatePlan } from '../worker/recurring-plans';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -8,7 +8,7 @@ afterEach(async () => { while (fixtures.length) await fixtures.pop()!.dispose();
 const owner = { userId: 'owner', ledgerId: 'personal' };
 const input = { accountId: 'acct', currency: 'CAD', merchant: 'Transit', direction: 'expense' as const, amountMinor: 1250, frequency: 'monthly' as const, startDate: '2026-01-31', endDate: null };
 async function fixture() {
-  const result = await createD1Fixture([...task24MigrationNames, '0025-lunchflow-platform.sql', '0026-lunchflow-connection-mappings.sql', '0027-hosted-users-activation.sql', '0028-recurring-plans.sql']); fixtures.push(result);
+  const result = await createD1Fixture(currentMigrationNames); fixtures.push(result);
   await result.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
   await result.db.prepare("INSERT OR IGNORE INTO account_currencies(account_id,currency,ledger_id) VALUES('acct','CAD','personal')").run();
   return result.db;

@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { createD1Fixture, task24MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 import { provisionWebOwner } from './helpers/web-identity';
 import worker from '../worker/index';
 import { createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
@@ -8,7 +8,7 @@ const fixtures: Array<{ dispose(): Promise<void> }> = [];
 afterEach(async () => { while (fixtures.length) await fixtures.pop()!.dispose(); });
 
 it('serves the versioned mobile Wealth report only to an owner with Wealth read access', async () => {
-  const f = await createD1Fixture([...task24MigrationNames,'0025-lunchflow-platform.sql','0026-lunchflow-connection-mappings.sql','0027-hosted-users-activation.sql','0028-recurring-plans.sql','0029-budget.sql','0030-ai-settings.sql','0031-budget-tracking.sql','0032-ai-official-providers.sql','0033-wealth.sql']);
+  const f = await createD1Fixture(currentMigrationNames);
   fixtures.push(f); await provisionWebOwner(f.db);
   const now = new Date(), expiresAt = new Date(now.getTime() + 3_600_000).toISOString(), environmentHash = await hashSecret('sandbox');
   await f.db.prepare(`INSERT INTO owner_session_families(id,ledger_id,subject_hash,access_generation,refresh_generation,access_expires_at,refresh_expires_at,scope_json,environment_hash,created_at) VALUES('wealth-read-family','personal','subject',1,1,?,?,?, ?,?)`).bind(expiresAt,expiresAt,JSON.stringify(['wealth:read']),environmentHash,now.toISOString()).run();

@@ -8,6 +8,7 @@ vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{Nati
 // Runtime import keeps RN ambient declarations out of the independent React 18 web typecheck.
 const viewModule='../mobile/src/features/finance/FinanceViews';
 const {OverviewView,ActivityView,RecurringView}=await import(viewModule);
+const {ManualEntryForm}=await import('../mobile/src/features/finance/ManualEntryForm');
 const motion=await import('../mobile/src/features/auth/presentationPolicy');
 import {report,transaction,stream,states} from './fixtures/mobile-finance';
 
@@ -17,6 +18,29 @@ const text=(tree:any)=>JSON.stringify(tree.toJSON());
 const ready=(data:unknown)=>({phase:'ready',message:null,data});
 const actions={onRetry:()=>{},onLens:()=>{},onFilter:()=>{},onOpen:()=>{},onLoadMore:()=>{},onClose:()=>{},onSave:()=>{},onDraft:()=>{}};
 describe('native financial view fixtures and accessibility',()=>{
+  it('labels manual fields and lets a transfer specify its direction',()=>{
+    let draft={accountId:'account',date:'2026-11-07',merchant:'Coffee',amount:'12.34',currency:'CAD',kind:'transfer',direction:'out',category:'Food',note:''};
+    const account={id:'account',displayName:'Chequing',institution:'Bank',instrument:null,currencies:['CAD','USD'],lastSuccessfulSyncAt:null};
+    const props=()=>({dark:false,accounts:[account],draft,onDraft:(value:typeof draft)=>{draft=value;},mutation:{blocked:false,status:'ready'},onSave:()=>{},onClose:()=>{}});
+    const tree=render(ManualEntryForm,props());
+    expect(tree.root.findByProps({accessibilityLabel:'Description'})).toBeTruthy();
+    expect(tree.root.findByProps({accessibilityLabel:'Amount'}).props.keyboardType).toBe('decimal-pad');
+    act(()=>tree.root.findByProps({accessibilityLabel:'Into account'}).props.onPress());
+    expect(draft.direction).toBe('in');
+    act(()=>tree.update(React.createElement(ManualEntryForm,props())));
+    expect(tree.root.findByProps({accessibilityLabel:'Into account'}).props.accessibilityState.selected).toBe(true);
+    act(()=>tree.update(React.createElement(ManualEntryForm,{...props(),mutation:{blocked:true,status:'reconciliation_required'}})));
+    expect(tree.root.findByProps({accessibilityLabel:'Description'}).props.editable).toBe(false);
+    expect(tree.root.findByProps({accessibilityLabel:'Close'}).props.accessibilityState.disabled).toBe(false);
+  });
+  it('prevents invalid currency precision from being submitted',()=>{
+    const onSave=vi.fn();
+    const draft={accountId:'account',date:'2026-11-07',merchant:'Coffee',amount:'1.001',currency:'CAD',kind:'expense',direction:'out',category:'Food',note:''};
+    const account={id:'account',displayName:'Chequing',institution:'Bank',instrument:null,currencies:['CAD'],lastSuccessfulSyncAt:null};
+    const tree=render(ManualEntryForm,{dark:false,accounts:[account],draft,onDraft:()=>{},mutation:{blocked:false,status:'ready'},onSave,onClose:()=>{}});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Save transaction'}).props.onPress());
+    expect(onSave).not.toHaveBeenCalled();expect(text(tree)).toContain('correct decimal places');
+  });
   it('keeps independent Activity facets available across selection, loading and reset',()=>{
     const cny={...transaction,id:'cny',currency:'CNY',category:'Travel',status:'provisional',sourceLabel:'capture'};
     const facetRows=[transaction,cny];let filters:any={};

@@ -3,6 +3,7 @@ import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import { appendWealthEvent, commitWealthImport, createWealthImportPreview, readWealthEvents, readWealthReport, readWealthSnapshot, upsertWealthAccount, upsertWealthValuation } from '../worker/wealth-store';
 import type { CanonicalInstrument } from '../src/domain/wealth-types';
 import { cashFlowRecords } from '../worker/wealth-store-cashflows';
+import { decideManualMatch } from '../worker/manual-transactions';
 
 const scope = { userId: 'owner', ledgerId: 'personal' };
 const fixtures: Array<ReturnType<typeof createSqliteD1Fixture>> = [];
@@ -107,6 +108,59 @@ describe('PR 85 bank links and performance review', () => {
     expect(result.investmentCashFlows).toHaveLength(1);
     expect(result.investmentCashFlows[0]).toMatchObject({ linkedWealthSourceId: 'capital-correction:replacement', classification: 'external_contribution' });
     expect(result.totalByCurrency.CAD).toBe(10100);
+  });
+
+  it.each(['tx-1','source-row-1','bank-source-1'])('preserves wealth link %s across duplicate confirmation and reversal', async linked => {
+    const f = await fixture();
+    await appendWealthEvent(f.db, scope, capitalEvent('capital', linked));
+    await f.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank-tx','bank','2026-01-02','Bank record',100,'CAD','Investment','income','confirmed','plaid','bank-fingerprint','personal')").run();
+    const events=(await readWealthEvents(f.db,scope)).events;
+    expect(await cashFlowRecords(f.db,scope,events)).toEqual(expect.arrayContaining([expect.objectContaining({transactionId:'tx-1',linkedWealthSourceId:'capital'})]));
+    await decideManualMatch(f.db,scope,{manualId:'tx-1',bankId:'bank-tx',decision:'confirmed',expectedRevision:0});
+    expect(await cashFlowRecords(f.db,scope,events)).toEqual([expect.objectContaining({transactionId:'bank-tx',linkedWealthSourceId:'capital'})]);
+    expect((await report(f)).investmentCashFlows).toEqual([expect.objectContaining({linkedWealthSourceId:'capital',classification:'external_contribution'})]);
+    await decideManualMatch(f.db,scope,{manualId:'tx-1',bankId:'bank-tx',decision:'dismissed',expectedRevision:1});
+    expect(await cashFlowRecords(f.db,scope,events)).toEqual(expect.arrayContaining([expect.objectContaining({transactionId:'tx-1',linkedWealthSourceId:'capital'}),expect.objectContaining({transactionId:'bank-tx',linkedWealthSourceId:null})]));
+  });
+  it('rejects a second wealth event linked through the confirmed bank duplicate', async () => {
+    const f=await fixture();
+    await appendWealthEvent(f.db,scope,capitalEvent('capital','source-row-1'));
+    await f.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank-tx','bank','2026-01-02','Bank record',100,'CAD','Investment','income','confirmed','plaid','bank-fingerprint','personal')").run();
+    await f.db.prepare("INSERT INTO transaction_source_records(id,ledger_id,source_kind,identity_key,transaction_id,account_id,content_digest) VALUES('bank-source','personal','legacy','bank-identity','bank-tx','bank','digest')").run();
+    await decideManualMatch(f.db,scope,{manualId:'tx-1',bankId:'bank-tx',decision:'confirmed',expectedRevision:0});
+    await expect(appendWealthEvent(f.db,scope,capitalEvent('second-capital','bank-source'))).rejects.toMatchObject({code:'bank_link_conflict'});
+    await decideManualMatch(f.db,scope,{manualId:'tx-1',bankId:'bank-tx',decision:'dismissed',expectedRevision:1});
+    await expect(appendWealthEvent(f.db,scope,capitalEvent('second-capital','bank-source'))).resolves.toBeDefined();
+  });
+
+  it('rejects importing two wealth links for one confirmed manual-bank pair', async () => {
+    const f=await fixture();
+    await f.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank-tx','bank','2026-01-02','Bank record',100,'CAD','Investment','income','confirmed','plaid','bank-fingerprint','personal')").run();
+    await f.db.prepare("INSERT INTO transaction_source_records(id,ledger_id,source_kind,identity_key,transaction_id,account_id,content_digest) VALUES('bank-source','personal','legacy','bank-identity','bank-tx','bank','digest')").run();
+    await decideManualMatch(f.db,scope,{manualId:'tx-1',bankId:'bank-tx',decision:'confirmed',expectedRevision:0});
+    const preview=await createWealthImportPreview(f.db,scope,{csv:eventCsv([capitalEvent('first','source-row-1'),capitalEvent('second','bank-source')]),operationId:'duplicate-pair-preview'});
+    expect(preview.validationErrors).toEqual(expect.arrayContaining([expect.stringContaining('conflicts with another imported bank link')]));
+  });
+
+  it('flags conflicting wealth links when independently linked transactions become duplicates', async () => {
+    const f=await fixture();
+    await f.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank-tx','bank','2026-01-02','Bank record',100,'CAD','Investment','income','confirmed','plaid','bank-fingerprint','personal')").run();
+    await f.db.prepare("INSERT INTO transaction_source_records(id,ledger_id,source_kind,identity_key,transaction_id,account_id,content_digest) VALUES('bank-source','personal','legacy','bank-identity','bank-tx','bank','digest')").run();
+    await appendWealthEvent(f.db,scope,capitalEvent('first','source-row-1'));
+    await appendWealthEvent(f.db,scope,capitalEvent('second','bank-source'));
+    await decideManualMatch(f.db,scope,{manualId:'tx-1',bankId:'bank-tx',decision:'confirmed',expectedRevision:0});
+    const events=(await readWealthEvents(f.db,scope)).events;
+    expect(await cashFlowRecords(f.db,scope,events)).toEqual([expect.objectContaining({transactionId:'bank-tx',linkedWealthSourceId:null,linkConflict:true})]);
+  });
+
+  it('stops transferring the manual wealth link when a confirmed match becomes stale', async () => {
+    const f=await fixture();
+    await appendWealthEvent(f.db,scope,capitalEvent('capital','source-row-1'));
+    await f.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank-tx','bank','2026-01-02','Bank record',100,'CAD','Investment','income','confirmed','plaid','bank-fingerprint','personal')").run();
+    await decideManualMatch(f.db,scope,{manualId:'tx-1',bankId:'bank-tx',decision:'confirmed',expectedRevision:0});
+    await f.db.prepare("UPDATE transactions SET amount_minor=200 WHERE id='bank-tx'").run();
+    const events=(await readWealthEvents(f.db,scope)).events;
+    expect(await cashFlowRecords(f.db,scope,events)).toEqual(expect.arrayContaining([expect.objectContaining({transactionId:'tx-1',linkedWealthSourceId:'capital'}),expect.objectContaining({transactionId:'bank-tx',linkedWealthSourceId:null})]));
   });
 
   it('imports an alias-equivalent correction of an existing bank link', async () => {

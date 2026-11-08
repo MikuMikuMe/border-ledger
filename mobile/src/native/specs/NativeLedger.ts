@@ -23,6 +23,9 @@ export interface Spec extends TurboModule {
   getSnapshot(): Promise<Snapshot | null>;
   refreshSnapshot(): Promise<Snapshot | null>;
   readTransactions(query: ActivityQuery): Promise<Transactions>;
+  readManualMatches(offset:number): Promise<string>;
+  startManualWrite(operationId:string, action:string, body:string): Promise<Operation>;
+  resumeManualWrite(operationId:string): Promise<Operation>;
   readReport(query: ReportQuery): Promise<Report>;
   startCaptureSync(request: CaptureSyncRequest): Promise<Operation>;
   readonly onChanged: CodegenTypes.EventEmitter<Change>;

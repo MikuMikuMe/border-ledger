@@ -2,7 +2,7 @@ import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readLedgerReport } from '../worker/ledger-reports';
 import { readOwnerLedgerSnapshot } from '../worker/owner-ledger-snapshot';
-import { createD1Fixture, task22MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 
@@ -16,7 +16,7 @@ describe('ledger report and owner snapshot reads', () => {
   });
 
   it('excludes superseded alert transactions from both aggregates and snapshot activity', async () => {
-    const fixture = await createD1Fixture(task22MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await fixture.db.batch([
       fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
@@ -47,7 +47,7 @@ describe('ledger report and owner snapshot reads', () => {
   });
 
   it('excludes an annotated alert row when reconciliation rebinds its superseded projection to the statement', async () => {
-    const fixture = await createD1Fixture(task22MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await fixture.db.batch([
       fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
@@ -86,7 +86,7 @@ describe('ledger report and owner snapshot reads', () => {
   });
 
   it('keeps snapshot account arrays within the declared render bounds', async () => {
-    const fixture = await createD1Fixture(task22MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await fixture.db.prepare(`WITH RECURSIVE account_numbers(number) AS (
         SELECT 1

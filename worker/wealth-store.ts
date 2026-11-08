@@ -1,4 +1,5 @@
 import { wealthEventLineage } from './wealth-event-lineage';
+import { readConfirmedManualMatches } from './manual-match-predicate';
 import {
   canonicalEventFingerprint,
   instrumentKey,
@@ -933,9 +934,13 @@ interface BankSourceIdentity {
 async function bankSourceCandidates(db: D1Database, context: FinancialContext, linked: string): Promise<BankSourceIdentity> {
   const aliases = await db.prepare(`SELECT transaction_id,id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference
     FROM transaction_source_records WHERE ledger_id=? AND transaction_id IN (SELECT transaction_id FROM transaction_source_records WHERE ledger_id=? AND (? IN (id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference,transaction_id)))`).bind(context.ledgerId, context.ledgerId, linked).all<TransactionAliasRow>();
-  const candidates = new Set<string>([linked]);
-  for (const row of aliases.results) [row.transaction_id, row.id, row.identity_key, row.provider_transaction_id, row.provider_pending_transaction_id, row.bank_source_id, row.bank_row_id, row.event_id, row.bank_reference].forEach((value) => { if (value) candidates.add(value); });
-  return { values: [...candidates], transactionIds: [...new Set(aliases.results.map((row) => row.transaction_id))] };
+  const matches = await readConfirmedManualMatches(db,context.ledgerId,[linked,...aliases.results.map(row=>row.transaction_id)]);
+  const counterparts = [...new Set(matches.flatMap(match=>[match.manual_id,match.bank_id]))];
+  const extra = counterparts.length ? await db.prepare(`SELECT transaction_id,id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference FROM transaction_source_records WHERE ledger_id=? AND transaction_id IN (${counterparts.map(()=>'?').join(',')})`).bind(context.ledgerId,...counterparts).all<TransactionAliasRow>() : {results:[]};
+  const candidates = new Set<string>([linked,...counterparts]);
+  for (const row of [...aliases.results,...extra.results]) [row.transaction_id, row.id, row.identity_key, row.provider_transaction_id, row.provider_pending_transaction_id, row.bank_source_id, row.bank_row_id, row.event_id, row.bank_reference].forEach((value) => { if (value) candidates.add(value); });
+  const canonical = new Map(matches.map(match=>[match.manual_id,match.bank_id]));
+  return { values: [...candidates], transactionIds: [...new Set([...aliases.results,...extra.results].map(row=>canonical.get(row.transaction_id) ?? row.transaction_id))] };
 }
 
 async function bankSourceForWrite(db: D1Database, context: FinancialContext, linked: string): Promise<BankSourceIdentity> {

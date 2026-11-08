@@ -1,7 +1,7 @@
 import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it } from 'vitest';
 import worker from '../worker/index';
-import { createD1Fixture, task22MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 
@@ -11,7 +11,7 @@ afterEach(async () => {
 
 describe('Worker reconciliation routes', () => {
   it('uses a stable import operation and response identity when a commit is retried', async () => {
-    const fixture = await createD1Fixture(task22MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await provisionWebOwner(fixture.db);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
@@ -55,7 +55,7 @@ describe('Worker reconciliation routes', () => {
   });
 
   it('uses registered currencies for reads and reports while hiding superseded alert evidence', async () => {
-    const fixture = await createD1Fixture(task22MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await provisionWebOwner(fixture.db);
     await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)

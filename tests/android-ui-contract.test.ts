@@ -141,8 +141,8 @@ describe('Android React Native production surface', () => {
     for (const workflow of [appBuild, androidCi, androidRelease]) {
       expect(workflow).toContain('        env:\n          ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx');
       expect(workflow).not.toContain('    env:\n      ORG_GRADLE_PROJECT_borderLedgerCxxRoot: ${{ runner.temp }}/bl-cxx');
-      expect(workflow).toContain("platforms;android-37.0' --channel=3");
-      expect(workflow).not.toContain("platforms;android-37' --channel=3");
+      expect(workflow).toMatch(/(['"])platforms;android-37\.0\1 --channel=3/);
+      expect(workflow).not.toMatch(/(['"])platforms;android-37\1 --channel=3/);
     }
     expect(iosCore).not.toContain('platforms;android-37');
   });

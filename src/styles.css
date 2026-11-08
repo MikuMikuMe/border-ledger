@@ -394,7 +394,7 @@ h2 { margin-bottom: 0; font: 600 18px/1.15 'IBM Plex Sans', sans-serif; letter-s
 .lunchflow-connection-controls .lunchflow-actions button { min-height: 44px; font-size: 14px; }
 .lunchflow-connection-controls .lunchflow-state p { margin-block: 0 16px; line-height: 1.5; }
 
-.recurring-plan-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; padding: 18px 25px; }
+.recurring-plan-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 14px; padding: 18px 25px; }
 .recurring-plan-form label { display: grid; gap: 6px; font-size: 0.875rem; }
 .recurring-plan-form input, .recurring-plan-form select { min-height: 44px; min-width: 0; padding: 8px; border: 1px solid #89988f; border-radius: 6px; background: #fff; color: #263a30; }
 .recurring-plan-form > div { align-self: end; }
@@ -534,3 +534,15 @@ h2 { margin-bottom: 0; font: 600 18px/1.15 'IBM Plex Sans', sans-serif; letter-s
 
 .custom-daily-chart { overflow-x: auto; }
 .custom-daily-chart .chart-bars { min-width: 540px; }
+.manual-transactions { margin-bottom: 20px; padding: 24px; }
+.manual-form fieldset { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 14px; }
+.manual-form label { display: grid; gap: 6px; }
+.manual-form input, .manual-form select { min-width: 0; min-height: 44px; padding: 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel); color: inherit; }
+.manual-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.manual-actions button, .manual-transactions .section-heading button { min-height: 44px; font-size: 14px; }
+.manual-match { border-top: 1px solid var(--rule); padding: 12px 0; }
+.manual-match p { overflow-wrap: anywhere; }
+
+.manual-form legend { font-weight: 600; margin-bottom: 12px; }
+.manual-field-error { color: var(--danger); font-size: 13px; }
+.manual-form input[aria-invalid="true"] { border-color: var(--danger); }
