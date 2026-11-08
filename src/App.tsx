@@ -50,7 +50,7 @@ import { WealthView } from './components/wealth/WealthView';
 import './wealth.css';
 import MobileAuthorizationPage from './MobileAuthorizationPage';
 import { LunchFlowSection } from './lunchflow';
-import { ManualTransactions } from './components/ManualTransactions';
+import { ManualTransactions, parseAccountCurrencies } from './components/ManualTransactions';
 
 type View = 'overview' | 'budget' | 'recurring' | 'wealth' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
@@ -310,13 +310,6 @@ function mapApiAccount(value: Record<string, unknown>): AppAccount | null {
     plaidItemId: typeof value.plaid_item_id === 'string' ? value.plaid_item_id : null,
     provider: mapAccountProvider(value.provider),
   };
-}
-
-function parseAccountCurrencies(value: unknown, fallback: string): string[] {
-  try {
-    const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : value;
-    return Array.isArray(parsed) && parsed.length ? parsed.filter((code): code is string => typeof code === 'string' && !!getCurrencyMeta(code)) : [fallback];
-  } catch { return [fallback]; }
 }
 
 function mapApiPreferences(value: unknown): ReportingPreferences | null {

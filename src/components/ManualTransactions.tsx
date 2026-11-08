@@ -2,11 +2,18 @@ import { useEffect, useState, type Dispatch, type SetStateAction, type FormEvent
 import type { LedgerApi } from '../domain/api';
 import { LedgerApiError, ledgerSession } from '../domain/api';
 import { formatMoney } from '../domain/format';
-import { parseMoneyMinor } from '../domain/currencies';
+import { getCurrencyMeta, parseMoneyMinor } from '../domain/currencies';
 
 type Account = {id:string;name:string;institution:string;currency:string;currencies?:string[]};
 type Match = {manualId:string;bankId:string;manualDate:string;bankDate:string;manualMerchant:string;bankMerchant:string;amountMinor:number;currency:string;category:string;note:string|null;decision:'open'|'confirmed'|'dismissed'|'stale';revision:number};
 type Entry = {requestId:string;accountId:string;date:string;merchant:string;amount:string;currency:string;kind:string;direction:string;category:string;note:string};
+
+export function parseAccountCurrencies(value: unknown, fallback: string): string[] {
+  try {
+    const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) && parsed.length ? parsed.filter((code): code is string => typeof code === 'string' && !!getCurrencyMeta(code)) : [fallback];
+  } catch { return [fallback]; }
+}
 
 function today() { const now = new Date(); return new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,10); }
 function newEntry(accounts:Account[]):Entry { return {requestId:crypto.randomUUID(),accountId:accounts[0]?.id??'',date:today(),merchant:'',amount:'',currency:accounts[0]?.currency??'',kind:'expense',direction:'out',category:'',note:''}; }
