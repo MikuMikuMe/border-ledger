@@ -21,14 +21,20 @@ async function publishManual(db:D1Database,context:FinancialContext,statements:D
   }
 }
 
+async function sha256(value:string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 export async function createManualTransaction(db: D1Database, authority: FinancialContext, value: unknown) {
   const context = immutableFinancialContext(authority);
   await assertFinancialAuthority(db, context, 'ledger:review');
   const { requestId, accountId, date, merchant, category, currency, kind, amountMinor, note } = validateInput(value);
-  const id = await ledgerScopedIdentifier(context, 'manual-transaction', `manual-${requestId}`);
+  const transactionKey = requestId.length > 121 ? `manual-hash:${await sha256(requestId)}` : `manual-${requestId}`;
+  const id = await ledgerScopedIdentifier(context, 'manual-transaction', transactionKey);
   const sourceId = await ledgerScopedIdentifier(context, 'manual-source', `manual-source-${requestId}`);
   const content = JSON.stringify([accountId, date, merchant, amountMinor, currency, category, kind, note]);
-  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content))), b => b.toString(16).padStart(2, '0')).join('');
+  const digest = await sha256(content);
   const account = await db.prepare('SELECT 1 FROM accounts a JOIN account_currencies c ON c.account_id=a.id AND c.ledger_id=a.ledger_id WHERE a.id=? AND a.ledger_id=? AND c.currency=?').bind(accountId, context.ledgerId, currency).first();
   if (!account) throw new RangeError('Account or currency is not available.');
   await publishManual(db, context, [

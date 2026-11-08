@@ -21,6 +21,32 @@ describe('manual transaction creation', () => {
       await expect(createManualTransaction(fixture.db, owner, {...entry, amount: '1.00'})).rejects.toThrow();
     } finally { fixture.close(); }
   });
+  it.each([121,122,128])('keeps %i-character request IDs usable for retries, pagination and duplicate decisions', async (length) => {
+    const fixture=createSqliteD1Fixture();
+    try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
+      await fixture.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank','acct','2026-11-06','Coffee',-1234,'CAD','Food','expense','confirmed','plaid','bank','personal')").run();
+      const input={...entry,requestId:'a'.repeat(length)};
+      const saved=await createManualTransaction(fixture.db,owner,input);
+      expect(await createManualTransaction(fixture.db,owner,input)).toEqual(saved);
+      expect(saved.id.length).toBeLessThanOrEqual(128);
+      const first=await readMobileTransactionPage(fixture.db,owner,new URLSearchParams({limit:'1'}));
+      expect(first.items[0].id).toBe(saved.id);
+      const next=await readMobileTransactionPage(fixture.db,owner,new URLSearchParams({limit:'1',cursor:first.page.nextCursor!}));
+      expect(next.items[0].id).toBe('bank');
+      expect(await decideManualMatch(fixture.db,owner,{manualId:saved.id,bankId:'bank',decision:'confirmed',expectedRevision:0})).toMatchObject({revision:1});
+      expect(await decideManualMatch(fixture.db,owner,{manualId:saved.id,bankId:'bank',decision:'dismissed',expectedRevision:1})).toMatchObject({revision:2});
+    } finally {fixture.close();}
+  });
+  it('keeps distinct long request IDs with the same prefix separate', async () => {
+    const fixture=createSqliteD1Fixture();
+    try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
+      const first=await createManualTransaction(fixture.db,owner,{...entry,requestId:'a'.repeat(127)+'1'});
+      const second=await createManualTransaction(fixture.db,owner,{...entry,requestId:'a'.repeat(127)+'2'});
+      expect(first.id).not.toBe(second.id);
+    } finally {fixture.close();}
+  });
   it.each([['expense',-1234],['income',1234],['transfer',-1234],['refund',1234],['fee',-1234]])('stores %s with the ledger sign convention', async (kind, amountMinor) => {
     const fixture=createSqliteD1Fixture();
     try {
