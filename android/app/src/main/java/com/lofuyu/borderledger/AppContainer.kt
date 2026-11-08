@@ -153,6 +153,7 @@ class AppContainer(
     )
     val analysisRepository = HttpWorkerAnalysisApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
     val budgetRepository = HttpWorkerBudgetApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
+    val manualTransactions = com.lofuyu.borderledger.api.ManualTransactionApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
     val wealthRepository = HttpWorkerWealthApi(BuildConfig.MOBILE_API_ORIGIN, BuildConfig.MOBILE_ENVIRONMENT, ownerSessionManager)
     val recurringRepository = RecurringRepository(
         HttpWorkerRecurringApi(

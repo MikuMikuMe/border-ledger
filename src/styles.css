@@ -534,3 +534,11 @@ h2 { margin-bottom: 0; font: 600 18px/1.15 'IBM Plex Sans', sans-serif; letter-s
 
 .custom-daily-chart { overflow-x: auto; }
 .custom-daily-chart .chart-bars { min-width: 540px; }
+.manual-transactions { margin-bottom: 20px; padding: 24px; }
+.manual-form fieldset { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+.manual-form label { display: grid; gap: 6px; }
+.manual-form input, .manual-form select { min-width: 0; min-height: 44px; padding: 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); color: inherit; }
+.manual-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.manual-actions button { min-height: 44px; }
+.manual-match { border-top: 1px solid var(--rule); padding: 12px 0; }
+.manual-match p { overflow-wrap: anywhere; }

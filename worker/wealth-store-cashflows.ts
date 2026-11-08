@@ -1,6 +1,7 @@
 import { classifyWealthCashFlows } from '../src/domain/wealth';
 import type { ClassifiedWealthCashFlow, WealthCashFlowRecord, WealthEvent } from '../src/domain/wealth-types';
 import type { D1Database } from './db-types';
+import { notSupersededAlertTransactionPredicate } from './ledger-reports';
 import type { FinancialContext } from './financial-authority';
 
 interface TransactionRow {
@@ -234,7 +235,7 @@ export async function cashFlowRecords(db: D1Database, context: FinancialContext,
       (SELECT a.name FROM accounts a WHERE a.ledger_id=t.ledger_id AND a.id=t.account_id LIMIT 1) AS account_name,
       (SELECT wa.id FROM wealth_accounts wa WHERE wa.ledger_id=t.ledger_id AND wa.linked_bank_account_id=t.account_id ORDER BY wa.id LIMIT 1) AS wealth_account_id,
       (SELECT wa.name FROM wealth_accounts wa WHERE wa.ledger_id=t.ledger_id AND wa.linked_bank_account_id=t.account_id ORDER BY wa.id LIMIT 1) AS wealth_account_name
-      FROM transactions t WHERE t.ledger_id=? AND t.status='confirmed' AND (t.kind IN ('income','expense','refund','fee') OR (?=1 AND t.kind='transfer')) ORDER BY t.date,t.id`).bind(context.ledgerId, options.includeTransfers ? 1 : 0).all<TransactionRow>(),
+      FROM transactions t WHERE t.ledger_id=? AND t.status='confirmed' AND ${notSupersededAlertTransactionPredicate('t')} AND (t.kind IN ('income','expense','refund','fee') OR (?=1 AND t.kind='transfer')) ORDER BY t.date,t.id`).bind(context.ledgerId, options.includeTransfers ? 1 : 0).all<TransactionRow>(),
     db.prepare(`SELECT transaction_id,id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference
       FROM transaction_source_records WHERE ledger_id=? ORDER BY transaction_id,id`).bind(context.ledgerId).all<TransactionAliasRow>(),
   ]);

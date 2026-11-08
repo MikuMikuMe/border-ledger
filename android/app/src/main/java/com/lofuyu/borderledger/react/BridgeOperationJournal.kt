@@ -232,6 +232,12 @@ class BridgeOperationJournal(private val records: SecureRecordPort) {
         write: suspend () -> String?,
     ): BridgeOperation = retryExternalWithSameIdempotency(operationKey.domain(), write)
 
+    internal suspend fun retryMatchingRequest(request: BridgeOperationRequest, write: suspend () -> String?): BridgeOperation {
+        val value = mutex.withLock { requireNotNull(read(JournalOperationId(request.id))) }
+        requireMatches(value, request.domain())
+        return retryExternalWithSameIdempotency(BridgeOperationKey(request.id, request.owner), write)
+    }
+
     private suspend fun retryExternalWithSameIdempotency(
         operationKey: JournalKey,
         write: suspend () -> String?,

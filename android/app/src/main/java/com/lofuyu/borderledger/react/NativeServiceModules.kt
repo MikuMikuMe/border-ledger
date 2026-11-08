@@ -27,6 +27,9 @@ private val PENDING_DESTINATIONS = setOf(
 private val Double.isWholeNumber: Boolean
     get() = isFinite() && this == toInt().toDouble()
 
+private fun manualPendingKey(id: String): String = "manual_pending_" + java.security.MessageDigest.getInstance("SHA-256")
+    .digest(id.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
 private data class RecurringClassifyRequest(
     val operationId: String,
     val streamId: String,
@@ -241,6 +244,42 @@ class LedgerModule(context: ReactApplicationContext, private val r: NativeServic
             category = q.text("category"),
         )
         activityPayload(r.container.ledgerRepository.readOwnerTransactions(query))
+    }
+
+    override fun readManualMatches(offset: Double, p: Promise) = s.call(p) {
+        require(offset.isFinite() && offset == offset.toInt().toDouble())
+        r.container.manualTransactions.matches(offset.toInt())
+    }
+
+    override fun startManualWrite(operationId: String, action: String, body: String, p: Promise) = s.call(p) {
+        require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        require(action == "create" || action == "match")
+        require(body.toByteArray(Charsets.UTF_8).size <= 16384)
+        val input = org.json.JSONObject(body)
+        if (action == "create") require(input.optString("requestId") == operationId)
+        val owner = r.ownerGeneration()
+        val key = manualPendingKey(operationId)
+        val record = org.json.JSONObject().put("owner", owner).put("action", action).put("body", body).toString()
+        val prior = r.container.bridgeRecords.read(key)?.decodeToString()
+        require(prior == null || prior == record)
+        r.container.bridgeRecords.write(key, record.encodeToByteArray())
+        val result = r.write(WriteRequest(operationId, "manual_$action", "$action:$body", expectedOwner = owner) {
+            r.container.manualTransactions.write(action, body)
+            null
+        })
+        if (result["operationId"] != operationId || result["status"] in setOf("completed", "rejected", "revision_conflict", "failed_local", "canceled")) r.container.bridgeRecords.delete(key)
+        result
+    }
+
+    override fun resumeManualWrite(operationId: String, p: Promise) = s.call(p) {
+        require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        val owner = r.ownerGeneration()
+        val key = manualPendingKey(operationId)
+        val record = org.json.JSONObject(requireNotNull(r.container.bridgeRecords.read(key)).decodeToString())
+        require(record.getString("owner") == owner)
+        val result = r.retryManualWrite(operationId, record.getString("action"), record.getString("body"), owner)
+        if (result["status"] in setOf("completed", "rejected", "revision_conflict", "failed_local", "canceled")) r.container.bridgeRecords.delete(key)
+        result
     }
 
     override fun readReport(q: ReadableMap, p: Promise) = s.call(p) {

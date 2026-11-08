@@ -1,4 +1,6 @@
 import type {AiEgressBinding} from './ai-egress';
+import { createManualTransaction, listManualMatches, decideManualMatch, manualMatchOffset, ManualTransactionConflict } from './manual-transactions';
+import { notSupersededAlertTransactionPredicate } from './ledger-reports';
 import { handleAiApi } from './ai-http';
 import { handleBudgetApi } from './budget-http';
 import { handlePlanApi } from './recurring-plans-http';
@@ -735,18 +737,7 @@ function summarize(transactions: StoredTransaction[], includeProvisional: boolea
 }
 
 async function readTransactions(env: Env, context: LedgerContext, url: URL) {
-  const clauses: string[] = ['t.ledger_id = ?', `NOT (t.source = 'alert' AND EXISTS (
-    SELECT 1
-    FROM alert_projections superseded_alert
-    WHERE superseded_alert.ledger_id = t.ledger_id AND superseded_alert.state = 'superseded'
-      AND (superseded_alert.transaction_id = t.id OR EXISTS (
-        SELECT 1
-        FROM transaction_source_records alert_source
-        WHERE alert_source.ledger_id = t.ledger_id AND alert_source.transaction_id = t.id
-          AND alert_source.source_kind = 'alert'
-          AND alert_source.event_id = superseded_alert.event_id
-      ))
-  ))`];
+  const clauses: string[] = ['t.ledger_id = ?', notSupersededAlertTransactionPredicate('t')];
   const bindings: string[] = [context.ledgerId];
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
@@ -877,6 +868,7 @@ function validationErrorResponse(error: unknown) {
 }
 
 function serviceErrorResponse(error: unknown) {
+  if (error instanceof ManualTransactionConflict) return json({code:'revision_conflict',error:error.message},{status:409});
   if (error instanceof PlaidOwnershipConflictError) return json({ code:error.code,error:error.message },{status:error.status});
   if (error instanceof PreferenceRevisionConflictError) return json({ error: error.message, currentRevision: error.currentRevision }, { status: 409 });
   if (error instanceof LunchFlowError) return json({ error: error.message,code:error.code,retryable:error.retryable }, { status: error.status });
@@ -950,6 +942,7 @@ async function dispatchAuthorizedRoutes(handlers: readonly AuthorizedRouteDispat
 
 async function handleAccountsListRoute(_request: Request, env: Env, _url: URL, context: LedgerContext) {
   const result = await env.DB.prepare(`SELECT accounts.*,
+    (SELECT json_group_array(currency) FROM account_currencies WHERE ledger_id=accounts.ledger_id AND account_id=accounts.id) AS currencies_json,
     (SELECT item_id FROM plaid_accounts WHERE ledger_id = accounts.ledger_id AND account_id = accounts.id LIMIT 1) AS plaid_item_id,
     CASE
       WHEN EXISTS (SELECT 1 FROM lunchflow_accounts WHERE ledger_id = accounts.ledger_id AND account_id = accounts.id) THEN 'lunchflow'
@@ -971,6 +964,9 @@ const accountRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Ma
   ['GET /api/preferences', (request, env, _url, context) => handlePreferencesRequest(request, env, context)],
   ['PATCH /api/preferences', (request, env, _url, context) => handlePreferencesRequest(request, env, context)],
   ['GET /api/transactions', handleTransactionsRoute],
+  ['POST /api/transactions', async (request, env, _url, context) => json(await createManualTransaction(env.DB, context, await readJsonBody<unknown>(request, 16 * 1024)), { status: 201 })],
+  ['GET /api/transactions/manual-matches', async (_request, env, url, context) => json({ matches: await listManualMatches(env.DB, context, manualMatchOffset(url.searchParams)) })],
+  ['POST /api/transactions/manual-matches', async (request, env, _url, context) => json(await decideManualMatch(env.DB, context, await readJsonBody<unknown>(request, 16 * 1024)))],
 ]);
 
 async function handleAccountRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {

@@ -6,6 +6,7 @@ import {Action,ActivityView,OverviewView,RecurringView} from '../features/financ
 import {report,transaction,stream} from './financeFixtures';
 import type {ActivityQuery,Lens,Transaction,Stream} from '../features/finance/contracts';
 import type {LoadState} from '../features/finance/model';
+import {ManualEntryForm,type ManualDraft} from '../features/finance/ManualEntryForm';
 type Fixture={screen:'overview'|'activity'|'recurring';state:string;dark:boolean};
 declare global {var __borderLedgerFinanceFixture: {show(value:Fixture):void;hide():void}|undefined;}
 type FixtureDataProps={fixture:Fixture;lens:Lens;onLens(value:Lens):void;filters:Partial<ActivityQuery>;onFilter(value:Partial<ActivityQuery>):void;selected:Transaction|null;onSelect(value:Transaction|null):void;selectedStream:Stream|null;onSelectStream(value:Stream|null):void;draft:{category:string;note:string};onDraft(value:{category:string;note:string}):void;};
@@ -32,11 +33,15 @@ function fixtureRecurringData(state:string){
   const page=fixturePage(state),money=[{currency:'CAD',amountMinor:'1000'}];
   return {page,summary:{monthlyByCurrency:money,yearlyByCurrency:[{currency:'CAD',amountMinor:'12000'}],subscriptionByCurrency:money,actualCostByCurrency:[{currency:'CAD',amountMinor:'800'}],upcoming:[{stream,nextExpectedAmountMinor:'1000'}],latestPaymentChanges:[stream],streamCount:1,state:page.state,coverageWarnings:[],checkedAt:page.checkedAt,sourceUpdatedAt:page.sourceUpdatedAt,lastError:null}};
 }
+function ManualFixture({dark}:{dark:boolean}) {
+  const [draft,setDraft]=useState<ManualDraft>({accountId:'fixture_account',date:'2026-11-07',merchant:'Coffee shop',amount:'12.34',currency:'CAD',kind:'expense',direction:'out',category:'Food',note:''});
+  return <ManualEntryForm dark={dark} accounts={[{id:'fixture_account',displayName:'Everyday Chequing',institution:'Example Bank',instrument:null,currencies:['CAD','USD'],lastSuccessfulSyncAt:null}]} draft={draft} onDraft={setDraft} mutation={{blocked:false,status:'ready'}} onSave={()=>{}} onClose={()=>{}}/>;
+}
 function renderFixtureScreen(props:FixtureDataProps){
   const {fixture,lens,onLens,filters,onFilter,selected,onSelect,selectedStream,onSelectStream,draft,onDraft}=props,{dark,state,screen}=fixture;
   switch(screen){
     case 'overview': return <OverviewView dark={dark} state={fixtureResource(state,fixtureReport(state))} snapshot={null} lens={lens} onLens={onLens} currencies={['CAD','CNY','JPY']} onRetry={()=>{}}/>;
-    case 'activity': return <ActivityView dark={dark} state={fixtureResource(state,{items:fixtureTransactions(state),nextCursor:'fixture_page',limit:50})} filters={filters} onFilter={onFilter} onRetry={()=>{}} onOpen={()=>onSelect(transaction)} onLoadMore={()=>{}} selected={selected} draft={draft} onDraft={onDraft} mutation={fixtureActivityMutation(state)} onSave={()=>{}} onClose={()=>onSelect(null)}/>;
+    case 'activity': return state==='manual'?<ManualFixture dark={dark}/>:<ActivityView dark={dark} state={fixtureResource(state,{items:fixtureTransactions(state),nextCursor:'fixture_page',limit:50})} filters={filters} onFilter={onFilter} onRetry={()=>{}} onOpen={()=>onSelect(transaction)} onLoadMore={()=>{}} selected={selected} draft={draft} onDraft={onDraft} mutation={fixtureActivityMutation(state)} onSave={()=>{}} onClose={()=>onSelect(null)}/>;
     case 'recurring': return <RecurringView dark={dark} state={fixtureResource(state,fixtureRecurringData(state))} filters={filters} onFilter={onFilter} currencies={['CAD','CNY','USD','HKD','JPY']} selected={selectedStream} mutation={{blocked:false,status:'ready'}} onClassify={()=>{}} onClose={()=>onSelectStream(null)} onRetry={()=>{}} onOpen={()=>onSelectStream(stream)} onLoadMore={()=>{}}/>;
   }
 }

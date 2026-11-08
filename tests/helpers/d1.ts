@@ -22,6 +22,7 @@ export const task22MigrationNames = [...task20MigrationNames.slice(0, 11), '0011
 export const task23MigrationNames = [...task22MigrationNames, '0023-plaid-tenant-connections.sql'] as const;
 
 export const task24MigrationNames = [...task23MigrationNames, '0024-alert-raw-identities.sql'] as const;
+export const currentMigrationNames = [...task24MigrationNames, '0025-lunchflow-platform.sql', '0026-lunchflow-connection-mappings.sql', '0027-hosted-users-activation.sql', '0028-recurring-plans.sql', '0029-budget.sql', '0030-ai-settings.sql', '0031-budget-tracking.sql', '0032-ai-official-providers.sql', '0033-wealth.sql', '0034-manual-matches.sql'] as const;
 
 function migrationStatements(sql: string) {
   return sql

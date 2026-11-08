@@ -6,6 +6,7 @@ import {
   type FxRateSnapshotRow,
 } from './db-types';
 import { getCurrencyMeta } from '../src/domain/currencies';
+import { manualMatchPredicate } from './manual-match-predicate';
 import {
   convertMinorUnits,
   fetchFrankfurterSnapshot,
@@ -136,7 +137,8 @@ export function notSupersededAlertTransactionPredicate(alias = 't') {
   // transaction. The source record's event_id remains the immutable link to
   // the preserved alert transaction; retain the direct lookup for legacy rows
   // that predate transaction_source_records.
-  return `NOT (${alias}.source = 'alert' AND (
+  return `NOT EXISTS (SELECT 1 FROM manual_transaction_matches manual_match JOIN transactions bank_match ON bank_match.id=manual_match.bank_id
+    WHERE manual_match.ledger_id=${alias}.ledger_id AND manual_match.manual_id=${alias}.id AND manual_match.decision='confirmed' AND ${manualMatchPredicate(alias, 'bank_match')}) AND NOT (${alias}.source = 'alert' AND (
     EXISTS (
       SELECT 1
       FROM transaction_source_records alert_source

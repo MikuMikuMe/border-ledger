@@ -4,6 +4,7 @@ import { assessOccurrences } from '../src/domain/recurring-plan-matching';
 import type { PlanTransaction, AccountFreshness } from '../src/domain/recurring-plans';
 import { listPlans } from './recurring-plans';
 import { validDate } from './recurring-plan-validation';
+import { notSupersededAlertTransactionPredicate } from './ledger-reports';
 
 function shiftDate(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00Z`);
@@ -24,8 +25,8 @@ function validateProjection({from, to, today}: ProjectionQuery) {
   if (range < 0 || range > 120) throw new RangeError('Invalid projection range');
 }
 async function projectionTransactions(db: D1Database, context: LedgerContext, query: ProjectionQuery) {
-  const rows = await db.prepare(`SELECT id,account_id AS accountId,currency,merchant,kind,amount_minor AS amountMinor,status,date FROM transactions
-    WHERE ledger_id=? AND date>=? AND date<=? AND status IN ('confirmed','provisional') AND kind IN ('expense','income') LIMIT 10001`).bind(context.ledgerId,shiftDate(query.from,-21),shiftDate(query.to,21)).all<PlanTransaction>();
+  const rows = await db.prepare(`SELECT t.id,t.account_id AS accountId,t.currency,t.merchant,t.kind,t.amount_minor AS amountMinor,t.status,t.date FROM transactions t
+    WHERE t.ledger_id=? AND t.date>=? AND t.date<=? AND t.status IN ('confirmed','provisional') AND t.kind IN ('expense','income') AND ${notSupersededAlertTransactionPredicate('t')} LIMIT 10001`).bind(context.ledgerId,shiftDate(query.from,-21),shiftDate(query.to,21)).all<PlanTransaction>();
   if (rows.results.length > 10000) throw new Error('Too many transactions for this range');
   return rows.results;
 }

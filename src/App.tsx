@@ -50,13 +50,14 @@ import { WealthView } from './components/wealth/WealthView';
 import './wealth.css';
 import MobileAuthorizationPage from './MobileAuthorizationPage';
 import { LunchFlowSection } from './lunchflow';
+import { ManualTransactions } from './components/ManualTransactions';
 
 type View = 'overview' | 'budget' | 'recurring' | 'wealth' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
 type ChartRange = 'daily' | 'weekly' | 'monthly';
 type AppRoute = 'landing' | 'workspace' | 'mobile-authorization';
 type AccountProvider = 'plaid' | 'lunchflow' | null;
-type AppAccount = Omit<Account, 'currency' | 'provider'> & { currency: CurrencyCode; provider: AccountProvider };
+type AppAccount = Omit<Account, 'currency' | 'provider'> & { currency: CurrencyCode; provider: AccountProvider; currencies?: string[] };
 type CurrencyTotals = Record<string, number>;
 interface ChartEntry {
   day: string;
@@ -302,12 +303,20 @@ function mapApiAccount(value: Record<string, unknown>): AppAccount | null {
   return {
     ...identity,
     currency,
+    currencies: parseAccountCurrencies(value.currencies_json, currency),
     kind,
     status: mapAccountStatus(value.status),
     lastSyncedAt: typeof value.last_synced_at === 'string' ? value.last_synced_at : null,
     plaidItemId: typeof value.plaid_item_id === 'string' ? value.plaid_item_id : null,
     provider: mapAccountProvider(value.provider),
   };
+}
+
+function parseAccountCurrencies(value: unknown, fallback: string): string[] {
+  try {
+    const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) && parsed.length ? parsed.filter((code): code is string => typeof code === 'string' && !!getCurrencyMeta(code)) : [fallback];
+  } catch { return [fallback]; }
 }
 
 function mapApiPreferences(value: unknown): ReportingPreferences | null {
@@ -992,7 +1001,7 @@ function WorkspaceApp() {
           {activeView === 'budget' ? <BudgetView api={ledgerApi} initialMonth={monthWindow.end.slice(0,7)} accounts={accounts.filter(account=>account.kind==='chequing'||account.kind==='savings').map(account=>({id:account.id,name:account.name,currency:account.currency}))} /> : null}
           {activeView === 'recurring' ? <RecurringView today={monthWindow.end} startDate={monthWindow.start} endDate={monthWindow.end} accounts={accounts} /> : null}
           {activeView === 'wealth' ? <WealthView api={ledgerApi} linkedAccounts={accounts} /> : null}
-          {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} /> : null}
+          {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} manual={<ManualTransactions accounts={accounts} api={ledgerApi} onChanged={refreshWorkspace} />} /> : null}
           {activeView === 'imports' ? (
             <ImportsView
               accounts={accounts}
@@ -1387,7 +1396,7 @@ function ReviewRow({ label, detail, provisional = false }: { label: string; deta
   return <div className="review-row"><span className={`review-symbol ${provisional ? 'is-provisional' : ''}`}>{provisional ? <Bell size={13} /> : <CircleAlert size={13} />}</span><span><strong>{label}</strong><small>{detail}</small></span><MoreHorizontal size={16} className="muted-icon" /></div>;
 }
 
-function TransactionsView({ transactions, onExport }: { transactions: Transaction[]; onExport: () => void }) {
+function TransactionsView({ transactions, onExport, manual }: { transactions: Transaction[]; onExport: () => void; manual?: ReactNode }) {
   const [query, setQuery] = useState('');
   const [currency, setCurrency] = useState<CurrencyCode | 'all'>('all');
   const [category, setCategory] = useState<string | 'all'>('all');
@@ -1400,6 +1409,7 @@ function TransactionsView({ transactions, onExport }: { transactions: Transactio
 
   return <>
     <PageIntro action={<button type="button" className="outline-button" onClick={onExport}><FileCheck2 size={16} /> Export ledger</button>}><p className="eyebrow">THE FULL LEDGER</p><h1>Transactions</h1><p className="intro-copy">Search, sort, and annotate every record without losing its source.</p></PageIntro>
+    {manual}
     <section className="panel filter-panel"><div className="filter-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search merchant, category, or note" aria-label="Search transactions" />{query ? <button type="button" className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button> : null}</div><div className="filter-selects"><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value as CurrencyCode | 'all')}><option value="all">All currencies</option>{currencies.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>State</span><select value={status} onChange={(event) => setStatus(event.target.value as Transaction['status'] | 'all')}><option value="all">All states</option><option value="confirmed">Confirmed</option><option value="provisional">Provisional</option><option value="needs_review">Needs review</option></select></label><button type="button" className="icon-button filter-button" onClick={() => setMoreFiltersOpen((open) => !open)} aria-label="More filters" aria-expanded={moreFiltersOpen} aria-controls="transaction-more-filters"><SlidersHorizontal size={17} /></button></div>{moreFiltersOpen ? <div id="transaction-more-filters" className="more-filters" role="region" aria-label="Additional transaction filters"><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as Transaction['source'] | 'all')} aria-label="Source"><option value="all">All sources</option><option value="plaid">Plaid</option><option value="statement">Statement</option><option value="alert">BOC alert</option><option value="manual">Manual</option><option value="lunchflow">Lunch Flow</option></select></label></div> : null}</section>
     <section className="panel table-panel"><div className="table-toolbar"><span>{filtered.length} records</span><span className="table-toolbar-note"><BadgeCheck size={14} /> Confirmed and provisional states are kept distinct</span></div><TransactionTable transactions={filtered} /></section>
   </>;

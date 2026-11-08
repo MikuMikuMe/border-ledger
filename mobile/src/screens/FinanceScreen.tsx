@@ -10,6 +10,7 @@ import {Action,ActivityView,OverviewView,RecurringView} from '../features/financ
 import {recurringCurrencies} from '../features/finance/model';
 import {PlanPanel} from '../features/finance/PlanPanel';
 import type {Transaction,Stream} from '../features/finance/contracts';
+import {ManualTransactions} from '../features/finance/ManualTransactions';
 
 const ports:FinancePorts={
  ledger:NativeLedger,
@@ -59,9 +60,9 @@ function ActivityPanel({dark,controller,selected,draft,setSelected,setDraft}:{da
       if(controller.mutation.current().status==='completed')setSelected(null);
     });
   };
-  return <ActivityView dark={dark} state={controller.activity.current()} facetRows={controller.activityFacetRows} filters={controller.activityFilters} selected={selected} draft={draft} mutation={controller.mutation.current()}
+  return <><ManualTransactions dark={dark} controller={controller} operationId={operationId}/><ActivityView dark={dark} state={controller.activity.current()} facetRows={controller.activityFacetRows} filters={controller.activityFilters} selected={selected} draft={draft} mutation={controller.mutation.current()}
     onRetry={()=>{void controller.loadActivity();}} onFilter={filters=>{void controller.filterActivity(filters);}} onOpen={openTransaction}
-    onLoadMore={()=>{void controller.loadActivity(true);}} onClose={()=>setSelected(null)} onDraft={setDraft} onSave={saveTransaction}/>;
+    onLoadMore={()=>{void controller.loadActivity(true);}} onClose={()=>setSelected(null)} onDraft={setDraft} onSave={saveTransaction}/></>;
 }
 
 function openRecurringStream(controller:FinanceControllerInstance,id:string,onOpenRecurring:((id:string)=>void)|undefined,setStream:(value:Stream|null)=>void):void {

@@ -6,7 +6,7 @@ Reports use native reporting timezone/week-start preferences and server full-win
 
 Activity sends search/currency/category/state/source filters to the server, resets paging on filter changes, preserves server order and newer revisions, and exposes a native modal for provenance/category/note editing. Category/note drafts survive conflicts. Recurring exposes all registered currencies, classification filters, paging, monthly/yearly/subscription estimates, actual posted cost, upcoming and amount changes. Its summary window retains the Compose one-year-back/next-30-days policy in Toronto. `onOpenRecurring(id)` now opens Task 6's full detail/history modal in the shell, with source metadata, history paging and classification at the displayed revision.
 
-Financial writes use a native operation ID and the displayed expected revision. Before enabling writes the controller reads every native operation page. Running or ambiguous annotation/classification/Review/Plaid/account operations block additional writes. Lost promises query their receipt and never replay a write. An unresolved native receipt stays unresolved even if an entity appears changed; current state cannot prove the outcome of an individual write.
+Financial writes use a native operation ID and the displayed expected revision. Before enabling writes the controller reads every native operation page. Running or ambiguous annotation/classification/Review/Plaid/account operations block additional writes. Lost promises query their receipt and never replay a write. Manual transaction creation and duplicate decisions additionally permit a user-initiated retry of the exact encrypted request with the same idempotency identity; the server rejects conflicting revisions or request content. Other unresolved native receipts stay unresolved even if an entity appears changed; current state cannot prove the outcome of an individual write.
 
 `DetailsScreen` structurally checks the existing NativeRecurring/NativeReview/NativeAccounts/NativeSession modules. Review presents authoritative evidence, bounded candidates/links, supported keep-separate/ignore/link decisions, and category/note editing at the transaction annotation revision. Classification of alert events remains explicitly unavailable, as in Compose. Highest observed alert/stream revisions survive full refresh; new page membership/order and cursors remain server-controlled. Protected authorization failures clear all details resources, reject later writes, and fence late reads/events. Cached/offline rows remain readable with actions disabled.
 
@@ -19,6 +19,7 @@ Only a debug build loads `src/dev/FinanceFixtureHost`. It imports no native serv
 ```text
 node scripts/react-native-finance-fixture.cjs overview ready light
 node scripts/react-native-finance-fixture.cjs activity detail dark
+node scripts/react-native-finance-fixture.cjs activity manual light
 node scripts/react-native-finance-fixture.cjs recurring stale light
 node scripts/react-native-finance-fixture.cjs recurring-detail ready dark
 node scripts/react-native-finance-fixture.cjs review detail light

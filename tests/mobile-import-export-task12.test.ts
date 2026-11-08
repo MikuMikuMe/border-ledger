@@ -1,6 +1,6 @@
 import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createD1Fixture, task22MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 import worker from '../worker/index';
 import { createImportPreviewForOwner, commitImportForOwner, decideImportDuplicateForOwner } from '../worker/mobile-import';
 import { createOpaqueCredential, hashSecret, type OwnerContext, type OwnerScope } from '../worker/mobile-auth';
@@ -39,7 +39,7 @@ const ROUTE_ENVIRONMENT = 'sandbox';
 const ROUTE_SESSION_KEY = 'task12-route-session-key';
 
 async function createImportFixture() {
-  const fixture = await createD1Fixture(task22MigrationNames);
+  const fixture = await createD1Fixture(currentMigrationNames);
   await fixture.db.prepare(`INSERT INTO owner_session_families
     (id,ledger_id,subject_hash,access_generation,refresh_generation,access_expires_at,refresh_expires_at,scope_json,environment_hash)
     VALUES (?,?,?,1,1,?,?,?,?)`).bind(owner.familyId,owner.ledgerId,owner.subjectHash,owner.expiresAt,owner.expiresAt,
