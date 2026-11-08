@@ -1,4 +1,5 @@
 import { wealthEventLineage } from './wealth-event-lineage';
+import { readConfirmedManualMatches } from './manual-match-predicate';
 import { createWealthAccountRegistry } from '../src/domain/wealth';
 import type { WealthAccount, WealthEvent } from '../src/domain/wealth-types';
 import type { D1Database } from './db-types';
@@ -269,25 +270,37 @@ function aliasValues(row: BankAliasRow): string[] {
   return BANK_ALIAS_FIELDS.map((field) => row[field]).filter((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
+function groupBankAliases(aliases:readonly BankAliasRow[],canonical:ReadonlyMap<string,string>,matches:readonly {manual_id:string;bank_id:string}[]):BankAliasGroups {
+  const groups = new Map<string, Set<string>>();
+  for (const row of aliases) {
+    for (const value of aliasValues(row)) {
+      const transactions = groups.get(value) ?? new Set<string>();
+      transactions.add(canonical.get(row.transaction_id) ?? row.transaction_id);
+      groups.set(value, transactions);
+    }
+  }
+  for (const match of matches) {
+    for (const id of [match.manual_id,match.bank_id]) {
+      const transactions=groups.get(id) ?? new Set<string>();
+      transactions.add(match.bank_id);groups.set(id,transactions);
+    }
+  }
+  return groups;
+}
+
 async function readBankAliasGroups(db: D1Database, context: FinancialContext, links: readonly ImportedBankLink[]): Promise<BankAliasGroups> {
   const requested = [...new Set(links.map((link) => link.linkedBankSourceId))];
   if (requested.length === 0) return new Map();
   const placeholders = requested.map(() => '?').join(',');
   const match = BANK_ALIAS_FIELDS.map((field) => `${field} IN (${placeholders})`).join(' OR ');
   const matched = await db.prepare(`SELECT DISTINCT transaction_id FROM transaction_source_records WHERE ledger_id=? AND (${match})`).bind(context.ledgerId, ...BANK_ALIAS_FIELDS.flatMap(() => requested)).all<{ transaction_id: string }>();
-  const transactionIds = matched.results.map((row) => row.transaction_id);
+  const matches = await readConfirmedManualMatches(db,context.ledgerId,[...requested,...matched.results.map(row=>row.transaction_id)]);
+  const canonical = new Map(matches.map(match=>[match.manual_id,match.bank_id]));
+  const transactionIds = [...new Set([...matched.results.map(row=>row.transaction_id),...matches.flatMap(match=>[match.manual_id,match.bank_id])])];
   if (transactionIds.length === 0) return new Map();
   const transactionPlaceholders = transactionIds.map(() => '?').join(',');
   const aliases = await db.prepare(`SELECT transaction_id,id,identity_key,provider_transaction_id,provider_pending_transaction_id,bank_source_id,bank_row_id,event_id,bank_reference FROM transaction_source_records WHERE ledger_id=? AND transaction_id IN (${transactionPlaceholders})`).bind(context.ledgerId, ...transactionIds).all<BankAliasRow>();
-  const groups = new Map<string, Set<string>>();
-  for (const row of aliases.results) {
-    for (const value of aliasValues(row)) {
-      const transactions = groups.get(value) ?? new Set<string>();
-      transactions.add(row.transaction_id);
-      groups.set(value, transactions);
-    }
-  }
-  return groups;
+  return groupBankAliases(aliases.results,canonical,matches);
 }
 
 function bankAliasGroup(linked: string, aliases: BankAliasGroups): string | null {
