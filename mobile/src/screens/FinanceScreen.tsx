@@ -46,7 +46,7 @@ function OverviewPanel({dark,controller,currencies}:{dark:boolean;controller:Fin
   return <OverviewView dark={dark} state={controller.report.current()} previous={controller.previousReport.current()} snapshot={controller.snapshot.current().data} lens={controller.lens} currencies={currencies} onLens={lens=>{void controller.setLens(lens);}} onRetry={()=>{void controller.reload();}}/>;
 }
 
-function ActivityPanel({dark,controller,selected,draft,setSelected,setDraft}:{dark:boolean;controller:FinanceControllerInstance;selected:Transaction|null;draft:{category:string;note:string};setSelected(value:Transaction|null):void;setDraft(value:{category:string;note:string}):void}) {
+function ActivityPanel({dark,controller,selected,draft,setSelected,setDraft,manualRequest}:{dark:boolean;controller:FinanceControllerInstance;selected:Transaction|null;draft:{category:string;note:string};setSelected(value:Transaction|null):void;setDraft(value:{category:string;note:string}):void;manualRequest:number}) {
   const openTransaction=(id:string)=>{
     const transaction=controller.activity.current().data?.items.find(row=>row.id===id);
     if(!transaction)return;
@@ -60,7 +60,7 @@ function ActivityPanel({dark,controller,selected,draft,setSelected,setDraft}:{da
       if(controller.mutation.current().status==='completed')setSelected(null);
     });
   };
-  return <><ManualTransactions dark={dark} controller={controller} operationId={operationId}/><ActivityView dark={dark} state={controller.activity.current()} facetRows={controller.activityFacetRows} filters={controller.activityFilters} selected={selected} draft={draft} mutation={controller.mutation.current()}
+  return <><ManualTransactions dark={dark} controller={controller} operationId={operationId} manualRequest={manualRequest}/><ActivityView dark={dark} state={controller.activity.current()} facetRows={controller.activityFacetRows} filters={controller.activityFilters} selected={selected} draft={draft} mutation={controller.mutation.current()}
     onRetry={()=>{void controller.loadActivity();}} onFilter={filters=>{void controller.filterActivity(filters);}} onOpen={openTransaction}
     onLoadMore={()=>{void controller.loadActivity(true);}} onClose={()=>setSelected(null)} onDraft={setDraft} onSave={saveTransaction}/></>;
 }
@@ -86,12 +86,12 @@ function RecurringPanel({dark,controller,stream,setStream,onOpenRecurring}:{dark
     onLoadMore={()=>{void controller.loadRecurring(true);}} onClose={()=>setStream(null)} onClassify={classification=>classifyRecurringStream(controller,stream,classification,setStream)}/></>;
 }
 
-function FinanceDestination({dark,destination,controller,currencies,selected,stream,draft,setSelected,setStream,setDraft,onOpenRecurring}:{dark:boolean;destination:FinanceDestination;controller:FinanceControllerInstance;currencies:string[];selected:Transaction|null;stream:Stream|null;draft:{category:string;note:string};setSelected(value:Transaction|null):void;setStream(value:Stream|null):void;setDraft(value:{category:string;note:string}):void;onOpenRecurring?(id:string):void}) {
+function FinanceDestination({dark,destination,controller,currencies,selected,stream,draft,setSelected,setStream,setDraft,onOpenRecurring,manualRequest}:{dark:boolean;destination:FinanceDestination;controller:FinanceControllerInstance;currencies:string[];selected:Transaction|null;stream:Stream|null;draft:{category:string;note:string};setSelected(value:Transaction|null):void;setStream(value:Stream|null):void;setDraft(value:{category:string;note:string}):void;onOpenRecurring?(id:string):void;manualRequest:number}) {
   if(destination==='overview')return <OverviewPanel dark={dark} controller={controller} currencies={currencies}/>;
-  if(destination==='activity')return <ActivityPanel dark={dark} controller={controller} selected={selected} draft={draft} setSelected={setSelected} setDraft={setDraft}/>;
+  if(destination==='activity')return <ActivityPanel dark={dark} controller={controller} selected={selected} draft={draft} setSelected={setSelected} setDraft={setDraft} manualRequest={manualRequest}/>;
   return <RecurringPanel dark={dark} controller={controller} stream={stream} setStream={setStream} onOpenRecurring={onOpenRecurring}/>;
 }
-export function FinanceScreen({dark,destination,onOpenRecurring}: {dark:boolean;destination:FinanceDestination;onOpenRecurring?(id:string):void}) {
+export function FinanceScreen({dark,destination,onOpenRecurring,manualRequest=0}: {dark:boolean;destination:FinanceDestination;onOpenRecurring?(id:string):void;manualRequest?:number}) {
   const [,render]=useReducer(n=>n+1,0),controller=useMemo(()=>new FinanceController(ports,render),[]);
   const [selected,setSelected]=useState<Transaction|null>(null),[stream,setStream]=useState<Stream|null>(null),[draft,setDraft]=useState({category:'',note:''});
   const currentDestination=useRef(destination);currentDestination.current=destination;
@@ -112,7 +112,7 @@ export function FinanceScreen({dark,destination,onOpenRecurring}: {dark:boolean;
   const currencies=currencyOptions(controller);
   return <View>
     {snapshot.message?<Text accessibilityLiveRegion="polite" style={{color:dark?'#FFB4AB':'#A83F3F',fontSize:15}}>{snapshot.message}</Text>:null}
-    <FinanceDestination dark={dark} destination={destination} controller={controller} currencies={currencies} selected={selected} stream={stream} draft={draft} setSelected={setSelected} setStream={setStream} setDraft={setDraft} onOpenRecurring={onOpenRecurring}/>
+    <FinanceDestination dark={dark} destination={destination} controller={controller} currencies={currencies} selected={selected} stream={stream} draft={draft} setSelected={setSelected} setStream={setStream} setDraft={setDraft} onOpenRecurring={onOpenRecurring} manualRequest={manualRequest}/>
     {mutation.blocked&&mutation.status!=='saving'?<Action dark={dark} label="Refresh submitted operation status" onPress={()=>{void controller.recover();}}/>:null}
   </View>;
 }

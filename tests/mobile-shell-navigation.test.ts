@@ -17,10 +17,25 @@ afterEach(() => {if (tree) act(() => tree.unmount());});
 const label = (node: any): string => node.findAllByType('Text').map((text: any) => text.children.join('')).join(' ');
 const press = (name: string) => act(() => tree.root.findAllByType('Pressable').find((node: any) => label(node).startsWith(name)).props.onPress());
 function mount(initialDestination = 'overview', onSignOut = async () => {}) {
-  act(() => {tree = create(React.createElement(ShellNavigation, {dark: false, initialDestination, onAbout() {}, onSignOut, renderPage: (page: string) => React.createElement('Page', {page})}));});
+  act(() => {tree = create(React.createElement(ShellNavigation, {dark: false, initialDestination, onAbout() {}, onSignOut, renderPage: (page: string, _open: unknown, manualRequest: number) => React.createElement('Page', {page, manualRequest})}));});
 }
 const current = () => tree.root.findByType('Page').props.page;
 describe('Android shell navigation', () => {
+  it('opens the Activity add menu and dismisses it with Back', () => {
+    mount('activity');
+    press('+ Add');
+    expect(tree.root.findAllByType('Pressable').some((node: any) => label(node) === 'Manual transaction')).toBe(true);
+    act(() => {device.back?.();});
+    expect(current()).toBe('activity');
+    expect(tree.root.findAllByType('Pressable').some((node: any) => label(node) === 'Manual transaction')).toBe(false);
+  });
+  it('dismisses outside the add menu and sends a manual request when selected', () => {
+    mount('activity'); press('+ Add');
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss add menu'}).props.onPress());
+    expect(tree.root.findAllByType('Pressable').some((node: any) => label(node) === 'Manual transaction')).toBe(false);
+    press('+ Add'); press('Manual transaction');
+    expect(tree.root.findByType('Page').props.manualRequest).toBe(1);
+  });
   it('keeps four primary destinations outside the scrolling content and exposes every secondary page', () => {
     mount();
     const tabs = tree.root.findAllByType('Pressable').filter((node: any) => node.props.accessibilityRole === 'tab');

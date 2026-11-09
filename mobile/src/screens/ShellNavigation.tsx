@@ -49,7 +49,7 @@ type Props = {
   isFocused?: boolean;
   onAbout(): void;
   onSignOut(): Promise<void>;
-  renderPage(page: Page, onOpen: (page: Page) => void): React.ReactNode;
+  renderPage(page: Page, onOpen: (page: Page) => void, manualRequest: number): React.ReactNode;
 };
 function MorePage({dark, onOpen, onAbout, onSignOut, busy, status}: {dark: boolean; onOpen(page: Page): void; onAbout(): void; onSignOut(): void; busy: boolean; status: string}) {
   return <>
@@ -62,26 +62,36 @@ function MorePage({dark, onOpen, onAbout, onSignOut, busy, status}: {dark: boole
     {status ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.signOut, themeStyles[Number(dark)].error]}>{status}</Text> : null}
   </>;
 }
-function useShellPath(initialDestination: ShellDestination, isFocused: boolean) {
+function useShellPath(initialDestination: ShellDestination, isFocused: boolean, menuOpen: boolean, closeMenu: () => void) {
   const [path, setPath] = useState<Page[]>(() => initialPath(initialDestination));
   const selected = path[path.length - 1];
   useEffect(() => setPath(initialPath(initialDestination)), [initialDestination]);
   useEffect(() => {
     if (!isFocused) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (menuOpen) { closeMenu(); return true; }
       if (path.length === 1 && selected === 'overview') return false;
       setPath(backPath(path));
       return true;
     });
     return () => subscription.remove();
-  }, [isFocused, path, selected]);
+  }, [isFocused, path, selected, menuOpen, closeMenu]);
   return {path, setPath, selected};
 }
 function SettingsLinks({dark, onOpen}: {dark: boolean; onOpen(page: Page): void}) {
   return <><Text accessibilityRole="header" style={[styles.section, themeStyles[Number(dark)].muted]}>Capture and access</Text>{settingsLinks.map(page => <NavigationRow key={page} page={page} dark={dark} onOpen={onOpen}/>)}</>;
 }
+function QuickAdd({dark, open, onToggle, onManual}: {dark: boolean; open: boolean; onToggle(): void; onManual(): void}) {
+  return <View style={styles.quickAdd}>
+    {open ? <Pressable accessibilityRole="button" accessibilityLabel="Manual transaction" onPress={onManual} style={[styles.addMenu, dark && styles.addMenuDark]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>Manual transaction</Text></Pressable> : null}
+    <Pressable accessibilityRole="button" accessibilityLabel="Add transaction options" accessibilityState={{expanded: open}} onPress={onToggle} style={[styles.addButton, dark && styles.addButtonDark]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>+ Add</Text></Pressable>
+  </View>;
+}
 export function ShellNavigation({dark, initialDestination, isFocused = true, onAbout, onSignOut, renderPage}: Props) {
-  const {path, setPath, selected} = useShellPath(initialDestination, isFocused);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [manualRequest, setManualRequest] = useState(0);
+  const {path, setPath, selected} = useShellPath(initialDestination, isFocused, menuOpen, () => setMenuOpen(false));
+  useEffect(() => setMenuOpen(false), [selected]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
@@ -99,11 +109,13 @@ export function ShellNavigation({dark, initialDestination, isFocused = true, onA
       {canGoBack ? <Pressable accessibilityRole="button" accessibilityLabel={`Back to ${titles[path[path.length - 2]]}`} onPress={() => setPath(backPath(path))} style={styles.back}><Text style={[styles.backText, themeStyles[Number(dark)].text]}>Back</Text></Pressable> : null}
       <Text accessibilityRole="header" style={[styles.title, themeStyles[Number(dark)].text]}>{titles[selected]}</Text>
     </View>
-    <ScrollView ref={scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
+    <ScrollView ref={scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, selected === 'activity' && styles.activityContent]}>
       {selected === 'settings' ? <SettingsLinks dark={dark} onOpen={open}/> : null}
-      {selected === 'more' ? <MorePage dark={dark} onOpen={open} onAbout={onAbout} onSignOut={() => {void signOut();}} busy={busy} status={status}/> : renderPage(selected, open)}
+      {selected === 'more' ? <MorePage dark={dark} onOpen={open} onAbout={onAbout} onSignOut={() => {void signOut();}} busy={busy} status={status}/> : renderPage(selected, open, manualRequest)}
 
     </ScrollView>
+    {menuOpen ? <Pressable accessibilityRole="button" accessibilityLabel="Dismiss add menu" onPress={() => setMenuOpen(false)} style={styles.menuBackdrop}/> : null}
+    {selected === 'activity' ? <QuickAdd dark={dark} open={menuOpen} onToggle={() => setMenuOpen(value => !value)} onManual={() => {setMenuOpen(false); setManualRequest(value => value + 1);}}/> : null}
     <BottomBar selected={selected} dark={dark} onSelect={page => setPath([page])}/>
   </SafeAreaView>;
 }
@@ -114,6 +126,15 @@ const styles = StyleSheet.create({
   back: {minWidth: 48, minHeight: 48, justifyContent: 'center'},
   backText: {fontFamily: 'DMSans', fontSize: 16, color: '#1B6B5B'},
   content: {width: '100%', maxWidth: 720, alignSelf: 'center', paddingHorizontal: 22, paddingBottom: 32},
+  activityContent: {paddingBottom: 100},
+  menuBackdrop: {position: 'absolute', top: 0, bottom: 0, left: 0, right: 0},
+  quickAdd: {position: 'absolute', right: 22, bottom: 108, alignItems: 'flex-end', gap: 8},
+  addButton: {minHeight: 48, minWidth: 92, paddingHorizontal: 18, justifyContent: 'center', alignItems: 'center', borderRadius: 12, backgroundColor: '#D2E9DF'},
+  addButtonDark: {backgroundColor: '#244C3D'},
+  addMenu: {minHeight: 48, paddingHorizontal: 16, justifyContent: 'center', borderRadius: 8, borderWidth: 1, borderColor: '#D2CCC0', backgroundColor: '#FBF9F4'},
+  addMenuDark: {backgroundColor: '#1D2925', borderColor: '#43534B'},
+  addLabel: {fontFamily: 'DMSans', fontSize: 16, fontWeight: '600', color: '#174B37'},
+  addLabelDark: {color: '#EEF1E8'},
   section: {fontFamily: 'DMSans', fontSize: 14, fontWeight: '600', color: '#68706D', marginTop: 28, marginBottom: 8},
   row: {minHeight: 56, paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#D2CCC0'},
   rowTitle: {fontFamily: 'DMSans', fontSize: 18, color: '#18201F', fontWeight: '500'},

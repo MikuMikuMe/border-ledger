@@ -1,8 +1,8 @@
-import React,{useEffect,useState} from 'react';
+import React,{useEffect,useRef,useState} from 'react';
 import {View} from 'react-native';
 import NativeLedger from '../../native/specs/NativeLedger';
 import NativeSession from '../../native/specs/NativeSession';
-import {Action,Card,Copy} from './FinanceViews';
+import {Action,Card,Copy,DetailModal} from './FinanceViews';
 import {ManualEntryForm,type ManualDraft} from './ManualEntryForm';
 import {formatMoney} from './model';
 import type {FinanceController} from './FinanceController';
@@ -48,9 +48,30 @@ async function writeManualOperation(action:'create'|'match',body:Record<string,u
     setMessage('');await controller.mutation.submit(id,()=>NativeLedger.startManualWrite(id,action,JSON.stringify(body)),key=>NativeSession.queryOperation({operationId:key}));
     if(controller.mutation.current().status==='completed'){setOpen(false);await Promise.all([controller.reload(),load()]);setMessage(action==='create'?'Transaction saved.':'Duplicate decision saved.');}
 }
-export function ManualTransactions({dark,controller,operationId}:{dark:boolean;controller:FinanceController;operationId:()=>string}){
-  const accounts=controller.snapshot.current().data?.accounts??[];
+function ManualStatus({dark,message,pending,matches,accounts,blocked,onRefresh,onResume,onDecide}:{dark:boolean;message:string;pending:string|null;matches:Match[];accounts:Account[];blocked:boolean;onRefresh():void;onResume():void;onDecide(match:Match,decision:'confirmed'|'dismissed'):void}) {
+  if(![message,pending,matches.length].some(Boolean))return null;
+  return <Card dark={dark}>
+    {message?<Copy dark={dark}>{message}</Copy>:null}
+    {message?<Action dark={dark} label="Refresh manual transaction status" onPress={onRefresh}/>:null}
+    {pending?<Action dark={dark} label="Retry submitted manual change" onPress={onResume}/>:null}
+    <MatchList dark={dark} accounts={accounts} matches={matches} blocked={blocked} onDecide={onDecide}/>
+  </Card>;
+}
+function AccountStatus({dark,snapshot,onRetry,onClose}:{dark:boolean;snapshot:ReturnType<FinanceController['snapshot']['current']>;onRetry():void;onClose():void}) {
+  const loading=snapshot.phase==='loading',empty=snapshot.phase==='ready'&&snapshot.data?.accounts.length===0;
+  return <DetailModal dark={dark} title="Add transaction" onClose={onClose}>
+    <Copy dark={dark}>{loading?'Loading accounts…':empty?'Add an account before recording a transaction.':'Accounts are unavailable. Refresh and try again.'}</Copy>
+    {!loading&&!empty?<Action dark={dark} label="Refresh accounts" onPress={onRetry}/>:null}
+    <Action dark={dark} label="Close" onPress={onClose}/>
+  </DetailModal>;
+}
+function needsDraft(open:boolean,draft:ManualDraft,accounts:Account[]){return open&&!draft.accountId&&accounts.length>0;}
+export function ManualTransactions({dark,controller,operationId,manualRequest}:{dark:boolean;controller:FinanceController;operationId:()=>string;manualRequest:number}){
+  const snapshot=controller.snapshot.current(), accounts=snapshot.data?.accounts??[];
+  const lastRequest=useRef(manualRequest);
   const [draft,setDraft]=useState<ManualDraft>(()=>initial(accounts)),[open,setOpen]=useState(false),[matches,setMatches]=useState<Match[]>([]),[message,setMessage]=useState(''),[pending,setPending]=useState<string|null>(null);
+  useEffect(()=>{if(lastRequest.current!==manualRequest){lastRequest.current=manualRequest;setDraft(initial(accounts));setOpen(true);}},[manualRequest]);
+  useEffect(()=>{if(needsDraft(open,draft,accounts))setDraft(initial(accounts));},[open,accounts,draft.accountId]);
   const mutation=controller.mutation.current();
   const load=()=>loadManualStatus(setMatches,setPending,setMessage);
   useEffect(()=>{void load();const subscription=NativeLedger.onChanged(()=>{void load();});return()=>subscription.remove();},[]);
@@ -58,14 +79,10 @@ export function ManualTransactions({dark,controller,operationId}:{dark:boolean;c
   const create=()=>{const id=operationId();void write('create',{...draft,requestId:id,note:draft.note.trim()||null},id);};
   const decide=(match:Match,decision:'confirmed'|'dismissed')=>{const id=operationId();void write('match',{manualId:match.manualId,bankId:match.bankId,decision,expectedRevision:match.revision},id);};
   const resume=()=>resumeManualOperation(pending,controller,load,setMessage);
-  return <Card dark={dark}>
-    <Copy dark={dark} heading>Manual transactions</Copy>
-    <Action dark={dark} label="Add transaction" disabled={!accounts.length||mutation.blocked} onPress={()=>{setDraft(initial(accounts));setOpen(true);}}/>
-    {!accounts.length?<Copy dark={dark}>Add an account before recording a transaction.</Copy>:null}
-    {message?<Copy dark={dark}>{message}</Copy>:null}
-    {message?<Action dark={dark} label="Refresh manual transaction status" onPress={()=>{setMessage('');void load();}}/>:null}
-    {pending?<Action dark={dark} label="Retry submitted manual change" onPress={()=>{void resume();}}/>:null}
-    <MatchList dark={dark} accounts={accounts} matches={matches} blocked={mutation.blocked} onDecide={decide}/>
-    {open?<ManualEntryForm dark={dark} accounts={accounts} draft={draft} onDraft={setDraft} mutation={mutation} onSave={create} onClose={()=>setOpen(false)}/>:null}
-  </Card>;
+  const formReady=open&&accounts.some(account=>account.id===draft.accountId);
+  return <>
+    <ManualStatus dark={dark} message={message} pending={pending} matches={matches} accounts={accounts} blocked={mutation.blocked} onRefresh={()=>{setMessage('');void load();}} onResume={()=>{void resume();}} onDecide={decide}/>
+    {formReady?<ManualEntryForm dark={dark} accounts={accounts} draft={draft} onDraft={setDraft} mutation={mutation} onSave={create} onClose={()=>setOpen(false)}/>:null}
+    {open&&!formReady?<AccountStatus dark={dark} snapshot={snapshot} onRetry={()=>{void controller.reload();}} onClose={()=>setOpen(false)}/>:null}
+  </>;
 }
