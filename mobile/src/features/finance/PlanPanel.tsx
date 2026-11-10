@@ -1,3 +1,4 @@
+import {useAccessibilityReturnFocus} from './accessibilityFocus';
 import React,{useCallback,useEffect,useState} from 'react';
 import {View} from 'react-native';
 import NativeRecurring,{type Plan,type PlanDraft,type PlanOccurrence} from '../../native/specs/NativeRecurring';
@@ -25,6 +26,7 @@ function PlanFeedback({dark,error,gate}:{dark:boolean;error:string|null;gate:Mut
 export function PlanPanel({dark,accounts,timeZone,gate,operationId}:{dark:boolean;accounts:Account[];timeZone:string;gate:MutationGate;operationId():string}) {
   const [plans,setPlans]=useState<Plan[]>([]),[occurrences,setOccurrences]=useState<PlanOccurrence[]>([]),[error,setError]=useState<string|null>(null),[loading,setLoading]=useState(false);
   const [draft,setDraft]=useState<Draft|null>(null),[editing,setEditing]=useState<Plan|null>(null);
+  const {remember}=useAccessibilityReturnFocus(Boolean(draft));
   const today=todayIn(timeZone),load=useCallback(async()=>{setLoading(true);setError(null);try{const [p,o]=await Promise.all([NativeRecurring.readPlans(),NativeRecurring.readPlanOccurrences({startDate:shift(today,-30),endDate:shift(today,30)})]);setPlans(p);setOccurrences(o);}catch{setError('Could not load recurring plans. Refresh to try again.');}finally{setLoading(false);}},[today]);
   useEffect(()=>{void load();},[load]);
   async function save(value:Draft,existing:Plan|null) {
@@ -37,7 +39,7 @@ export function PlanPanel({dark,accounts,timeZone,gate,operationId}:{dark:boolea
   const toggle=(plan:Plan)=>{void save({...fromPlan(plan),enabled:!plan.enabled},plan);};
   return <>
     <PlanFeedback dark={dark} error={error} gate={gate}/>
-    <PlanView dark={dark} plans={plans} occurrences={occurrences} busy={loading||gate.current().blocked} onAdd={()=>{setEditing(null);setDraft(newDraft(accounts,today));}} onEdit={plan=>{setEditing(plan);setDraft(fromPlan(plan));}} onToggle={toggle} onRefresh={()=>void load()}/>
-    {draft?<PlanEditor dark={dark} draft={draft} accounts={accounts} editing={Boolean(editing)} busy={gate.current().blocked} onChange={setDraft} onSave={()=>void save(draft,editing)} onClose={()=>setDraft(null)}/>:null}
+    <PlanView onActivate={remember} dark={dark} plans={plans} occurrences={occurrences} busy={loading||gate.current().blocked} onAdd={()=>{setEditing(null);setDraft(newDraft(accounts,today));}} onEdit={plan=>{setEditing(plan);setDraft(fromPlan(plan));}} onToggle={toggle} onRefresh={()=>void load()}/>
+    {draft?<PlanEditor dark={dark} draft={draft} accounts={accounts} editing={Boolean(editing)} busy={gate.current().blocked} saving={gate.current().status==='saving'} onChange={setDraft} onSave={()=>void save(draft,editing)} onClose={()=>setDraft(null)}/>:null}
   </>;
 }

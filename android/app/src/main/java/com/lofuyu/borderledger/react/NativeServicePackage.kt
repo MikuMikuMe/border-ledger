@@ -21,6 +21,7 @@ class NativeServicePackage(private val runtime: NativeServiceRuntime): BaseReact
         "NativeFiles" -> FilesModule(context,runtime)
         "NativePreferences" -> PreferencesModule(context,runtime)
         "NativeDatePicker" -> DatePickerModule(context)
+        "NativeAccessibilityFocus" -> AccessibilityFocusModule(context)
         "NativeWealthFixture" -> debugWealthFixture(context)
         else -> null
     }
@@ -34,6 +35,7 @@ class NativeServicePackage(private val runtime: NativeServiceRuntime): BaseReact
         modules.mapValues { (name, type) -> ReactModuleInfo(name, type.name, false, false, false, true) }
             .toMutableMap().apply {
                 put("NativeDatePicker", ReactModuleInfo("NativeDatePicker", DatePickerModule::class.java.name, false, false, false, false))
+                put("NativeAccessibilityFocus", ReactModuleInfo("NativeAccessibilityFocus", AccessibilityFocusModule::class.java.name, false, false, false, false))
                 debugWealthFixtureClass()?.let { type -> put("NativeWealthFixture", ReactModuleInfo("NativeWealthFixture", type.name, false, false, false, false)) }
             }
     }

@@ -10,7 +10,7 @@ const legacy = migrations.filter(name => name < '0021');
 const cutover = migrations.filter(name => name >= '0021');
 
 describe('complete owner cutover and recovery rehearsal', () => {
-  it('preserves full synthetic history through every migration and restores the exact captured pre-cutover export', async () => {
+  it('preserves synthetic history and projects annotations through migrations while restoring the exact pre-cutover export', async () => {
     expect(legacy).toHaveLength(21); expect(legacy).toContain('0011-native-connections.sql');
     const original = await createD1Fixture(legacy);
     const restored = await createD1Fixture([]);
@@ -30,7 +30,8 @@ describe('complete owner cutover and recovery rehearsal', () => {
       await applyMigrations(original.db, cutover);
       for (const [table, { columns, rows }] of Object.entries(before)) {
         const actual = (await original.db.prepare(`SELECT ${columns.map(quoteIdentifier).join(',')} FROM ${quoteIdentifier(table)}`).all()).results;
-        expect(actual.sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))), table).toEqual(rows);
+        const expected = table === 'transactions' ? rows.map(row => row.id === 'old-tx' ? {...row, note:'Owner annotation'} : row) : rows;
+        expect(actual.sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))), table).toEqual(expected.sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
       }
       expect(await financialSnapshot(query)).toEqual(beforeFinancial);
       expect(await original.db.prepare("SELECT id,user_id FROM ledgers").first()).toEqual({ id: 'personal', user_id: 'owner' });

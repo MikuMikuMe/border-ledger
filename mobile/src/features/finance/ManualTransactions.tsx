@@ -1,8 +1,9 @@
-import React,{useEffect,useRef,useState} from 'react';
+import React,{useContext,useEffect,useRef,useState} from 'react';
 import {View} from 'react-native';
 import NativeLedger from '../../native/specs/NativeLedger';
 import NativeSession from '../../native/specs/NativeSession';
 import {Action,Card,Copy,DetailModal} from './FinanceViews';
+import {ManualEntryFocusContext} from './accessibilityFocus';
 import {ManualEntryForm,type ManualDraft} from './ManualEntryForm';
 import {formatMoney} from './model';
 import type {FinanceController} from './FinanceController';
@@ -59,17 +60,18 @@ function ManualStatus({dark,message,pending,matches,accounts,blocked,onRefresh,o
 }
 function AccountStatus({dark,snapshot,onRetry,onClose}:{dark:boolean;snapshot:ReturnType<FinanceController['snapshot']['current']>;onRetry():void;onClose():void}) {
   const loading=snapshot.phase==='loading',empty=snapshot.phase==='ready'&&snapshot.data?.accounts.length===0;
-  return <DetailModal dark={dark} title="Add transaction" onClose={onClose}>
+  return <DetailModal dark={dark} title="Add transaction" onClose={onClose} dismissOutside compactClose closeLabel="Close">
     <Copy dark={dark}>{loading?'Loading accounts…':empty?'Add an account before recording a transaction.':'Accounts are unavailable. Refresh and try again.'}</Copy>
     {!loading&&!empty?<Action dark={dark} label="Refresh accounts" onPress={onRetry}/>:null}
-    <Action dark={dark} label="Close" onPress={onClose}/>
   </DetailModal>;
 }
 function needsDraft(open:boolean,draft:ManualDraft,accounts:Account[]){return open&&!draft.accountId&&accounts.length>0;}
 export function ManualTransactions({dark,controller,operationId,manualRequest}:{dark:boolean;controller:FinanceController;operationId:()=>string;manualRequest:number}){
+  const notifyOpen=useContext(ManualEntryFocusContext);
   const snapshot=controller.snapshot.current(), accounts=snapshot.data?.accounts??[];
   const lastRequest=useRef(manualRequest);
   const [draft,setDraft]=useState<ManualDraft>(()=>initial(accounts)),[open,setOpen]=useState(false),[matches,setMatches]=useState<Match[]>([]),[message,setMessage]=useState(''),[pending,setPending]=useState<string|null>(null);
+  useEffect(()=>{notifyOpen(open);return()=>notifyOpen(false);},[open,notifyOpen]);
   useEffect(()=>{if(lastRequest.current!==manualRequest){lastRequest.current=manualRequest;setDraft(initial(accounts));setOpen(true);}},[manualRequest]);
   useEffect(()=>{if(needsDraft(open,draft,accounts))setDraft(initial(accounts));},[open,accounts,draft.accountId]);
   const mutation=controller.mutation.current();

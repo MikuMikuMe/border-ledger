@@ -4,11 +4,13 @@ const require=createRequire(new URL('../mobile/package.json',import.meta.url));
 const React=require('react');
 const {create,act}=require('react-test-renderer');
 const pickDate=vi.hoisted(()=>vi.fn());
-vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{NativeDatePicker:{pick:pickDate}},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
+const confirmDiscard=vi.hoisted(()=>vi.fn());
+vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{NativeDatePicker:{pick:pickDate}},Alert:{alert:confirmDiscard},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
 // Runtime import keeps RN ambient declarations out of the independent React 18 web typecheck.
 const viewModule='../mobile/src/features/finance/FinanceViews';
 const {OverviewView,ActivityView,RecurringView}=await import(viewModule);
 const {ManualEntryForm}=await import('../mobile/src/features/finance/ManualEntryForm');
+const {PlanEditor}=await import('../mobile/src/features/finance/PlanEditor');
 const motion=await import('../mobile/src/features/auth/presentationPolicy');
 import {report,transaction,stream,states} from './fixtures/mobile-finance';
 
@@ -18,6 +20,47 @@ const text=(tree:any)=>JSON.stringify(tree.toJSON());
 const ready=(data:unknown)=>({phase:'ready',message:null,data});
 const actions={onRetry:()=>{},onLens:()=>{},onFilter:()=>{},onOpen:()=>{},onLoadMore:()=>{},onClose:()=>{},onSave:()=>{},onDraft:()=>{}};
 describe('native financial view fixtures and accessibility',()=>{
+  it('dismisses an unchanged Activity detail on backdrop press and confirms a dirty draft',()=>{
+    const onClose=vi.fn();
+    const props={...actions,onClose,dark:false,state:ready({items:[transaction],nextCursor:null,limit:50}),filters:{},selected:transaction,draft:{category:transaction.category??'',note:transaction.note??''},mutation:{blocked:false,status:'ready'}};
+    const tree=render(ActivityView,props);
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Activity detail'}).props.onPress());
+    expect(onClose).toHaveBeenCalledTimes(1);
+    act(()=>tree.update(React.createElement(ActivityView,{...props,draft:{category:'Changed',note:''}})));
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Activity detail'}).props.onPress());
+    expect(onClose).toHaveBeenCalledTimes(1);expect(confirmDiscard).toHaveBeenCalled();
+  });
+  it('uses the same guarded close for Back and preserves a draft while saving',()=>{
+    confirmDiscard.mockClear();const onClose=vi.fn();
+    const props={...actions,onClose,dark:false,state:ready({items:[transaction],nextCursor:null,limit:50}),filters:{},selected:transaction,draft:{category:'Changed',note:''},mutation:{blocked:false,status:'ready'}};
+    const tree=render(ActivityView,props);
+    act(()=>tree.root.findAllByType('Modal')[0].props.onRequestClose());
+    expect(confirmDiscard).toHaveBeenCalledTimes(1);expect(onClose).not.toHaveBeenCalled();
+    act(()=>confirmDiscard.mock.calls[0][2][1].onPress());expect(onClose).toHaveBeenCalledTimes(1);
+    act(()=>tree.update(React.createElement(ActivityView,{...props,mutation:{blocked:true,status:'saving'}})));
+    act(()=>tree.root.findAllByType('Modal')[0].props.onRequestClose());expect(confirmDiscard).toHaveBeenCalledTimes(1);
+    expect(tree.root.findByProps({accessibilityLabel:'Category'}).props.editable).toBe(false);
+    expect(tree.root.findByProps({accessibilityLabel:'Note'}).props.editable).toBe(false);
+  });
+  it('does not claim an uncertain Activity save was unsuccessful',()=>{
+    confirmDiscard.mockClear();
+    const props={...actions,dark:false,state:ready({items:[transaction],nextCursor:null,limit:50}),filters:{},selected:transaction,draft:{category:'Changed',note:''},mutation:{blocked:true,status:'reconciliation_required'}};
+    const tree=render(ActivityView,props);
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Activity detail'}).props.onPress());
+    expect(confirmDiscard.mock.calls[0][1]).not.toContain('have not been saved');
+  });
+  it('protects a changed recurring plan from outside dismissal',()=>{
+    confirmDiscard.mockClear();const onClose=vi.fn();
+    const draft={accountId:'a',currency:'CAD',merchant:'',amount:'',direction:'expense',frequency:'monthly',startDate:'2026-11-01',endDate:null,enabled:true};
+    const props={dark:false,draft,accounts:[],editing:false,busy:false,onChange:()=>{},onSave:()=>{},onClose};
+    const tree=render(PlanEditor,props);
+    act(()=>tree.update(React.createElement(PlanEditor,{...props,draft:{...draft,merchant:'Coffee'}})));
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Add recurring plan'}).props.onPress());
+    expect(confirmDiscard).toHaveBeenCalledTimes(1);expect(onClose).not.toHaveBeenCalled();
+    act(()=>tree.update(React.createElement(PlanEditor,{...props,saving:true,draft:{...draft,merchant:'Coffee'}})));
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Add recurring plan'}).props.onPress());
+    expect(confirmDiscard).toHaveBeenCalledTimes(1);expect(onClose).not.toHaveBeenCalled();
+  });
   it('labels manual fields and lets a transfer specify its direction',()=>{
     let draft={accountId:'account',date:'2026-11-07',merchant:'Coffee',amount:'12.34',currency:'CAD',kind:'transfer',direction:'out',category:'Food',note:''};
     const account={id:'account',displayName:'Chequing',institution:'Bank',instrument:null,currencies:['CAD','USD'],lastSuccessfulSyncAt:null};
@@ -32,6 +75,16 @@ describe('native financial view fixtures and accessibility',()=>{
     act(()=>tree.update(React.createElement(ManualEntryForm,{...props(),mutation:{blocked:true,status:'reconciliation_required'}})));
     expect(tree.root.findByProps({accessibilityLabel:'Description'}).props.editable).toBe(false);
     expect(tree.root.findByProps({accessibilityLabel:'Close'}).props.accessibilityState.disabled).toBe(false);
+  });
+  it('confirms before dismissing a changed manual transaction',()=>{
+    confirmDiscard.mockClear();const onClose=vi.fn();
+    const initial={accountId:'account',date:'2026-11-07',merchant:'',amount:'',currency:'CAD',kind:'expense',direction:'out',category:'',note:''};
+    const account={id:'account',displayName:'Chequing',institution:'Bank',instrument:null,currencies:['CAD'],lastSuccessfulSyncAt:null};
+    const props={dark:false,accounts:[account],draft:initial,onDraft:()=>{},mutation:{blocked:false,status:'ready'},onSave:()=>{},onClose};
+    const tree=render(ManualEntryForm,props);
+    act(()=>tree.update(React.createElement(ManualEntryForm,{...props,draft:{...initial,merchant:'Coffee'}})));
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Add transaction'}).props.onPress());
+    expect(confirmDiscard).toHaveBeenCalled();expect(onClose).not.toHaveBeenCalled();
   });
   it('prevents invalid currency precision from being submitted',()=>{
     const onSave=vi.fn();
@@ -58,6 +111,8 @@ describe('native financial view fixtures and accessibility',()=>{
     act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Currency: All')[0].props.onPress());
     act(()=>tree.update(React.createElement(ActivityView,props(ready({items:[],nextCursor:null,limit:50})))));
     expect(filters.currency).toBeNull();expect(labels()).toContain('Currency: CAD');expect(labels()).toContain('Currency: CNY');
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Activity filters'}).props.onPress());
+    expect(labels()).not.toContain('Currency: CNY');
   });
   it.each(['loading','offline','error','locked'])('renders %s with a labeled retry and live status',phase=>{
     const tree=render(ActivityView,{...actions,dark:false,state:{phase,data:null,message:phase==='loading'?null:'Recoverable fixture status'},filters:{},selected:null});
@@ -87,6 +142,15 @@ describe('native financial view fixtures and accessibility',()=>{
     act(()=>start.props.onChangeText('2026-02-28'));
     act(()=>tree.root.findByProps({accessibilityLabel:'Apply range'}).props.onPress());
     expect(onLens).toHaveBeenCalledWith(expect.objectContaining({window:'Custom',startDate:'2026-02-28',endDate:'2026-03-01'}));
+  });
+  it('asks before discarding an edited custom date range',()=>{
+    confirmDiscard.mockClear();
+    const tree=render(OverviewView,{...actions,dark:false,state:ready(report),snapshot:null,lens:{window:'Month',include:false,source:null,target:null},currencies:['CAD']});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Report window: Custom'}).props.onPress());
+    act(()=>tree.root.findByProps({accessibilityLabel:'Start date (YYYY-MM-DD)'}).props.onChangeText('2026-09-01'));
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Custom date range'}).props.onPress());
+    expect(confirmDiscard).toHaveBeenCalledTimes(1);
+    expect(tree.root.findByProps({accessibilityLabel:'Start date (YYYY-MM-DD)'}).props.value).toBe('2026-09-01');
   });
   it('lets the user pick a start date while keeping typed input available',async()=>{
     pickDate.mockResolvedValueOnce('2026-09-15');
@@ -206,6 +270,13 @@ describe('native financial view fixtures and accessibility',()=>{
     expect(labels.filter((v:string)=>v.endsWith(' JPY'))).toHaveLength(1);
     expect(labels.filter((v:string)=>v.endsWith(' CAD'))).toHaveLength(0);
     expect(labels).toContain('No non-zero totals.');
+  });
+  it('dismisses recurring selection outside unless a save is running',()=>{
+    const onClose=vi.fn(),props={...actions,onClose,dark:false,state:ready({page:null,summary:null}),filters:{},currencies:[],selected:stream,mutation:{blocked:false,status:'ready'}};
+    const tree=render(RecurringView,props);
+    act(()=>tree.root.findByProps({accessibilityLabel:`Dismiss ${stream.merchantName}`}).props.onPress());expect(onClose).toHaveBeenCalledTimes(1);
+    act(()=>tree.update(React.createElement(RecurringView,{...props,mutation:{blocked:true,status:'saving'}})));
+    act(()=>tree.root.findByProps({accessibilityLabel:`Dismiss ${stream.merchantName}`}).props.onPress());expect(onClose).toHaveBeenCalledTimes(1);
   });
   it('renders recurring monthly/yearly/subscription/actual separately and opens the stream',()=>{
     let id='';

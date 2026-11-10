@@ -2,6 +2,8 @@ import React, {useEffect, useRef, useState} from 'react';
 import {BackHandler, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 
+import {ManualEntryFocusContext,useAccessibilityReturnFocus,type FocusTarget} from '../features/finance/accessibilityFocus';
+
 import type {ShellDestination} from '@/features/auth/authModel';
 
 export type Page = ShellDestination | 'more' | 'devices' | 'files' | 'budget' | 'wealth';
@@ -81,15 +83,19 @@ function useShellPath(initialDestination: ShellDestination, isFocused: boolean, 
 function SettingsLinks({dark, onOpen}: {dark: boolean; onOpen(page: Page): void}) {
   return <><Text accessibilityRole="header" style={[styles.section, themeStyles[Number(dark)].muted]}>Capture and access</Text>{settingsLinks.map(page => <NavigationRow key={page} page={page} dark={dark} onOpen={onOpen}/>)}</>;
 }
-function QuickAdd({dark, open, onToggle, onManual}: {dark: boolean; open: boolean; onToggle(): void; onManual(): void}) {
+function QuickAdd({dark, open, onToggle, onManual}: {dark: boolean; open: boolean; onToggle(): void; onManual(ref:FocusTarget): void}) {
+  const trigger=useRef<React.ComponentRef<typeof View>>(null);
+  const {remember,suppress}=useAccessibilityReturnFocus(open);
   return <View style={styles.quickAdd}>
-    {open ? <Pressable accessibilityRole="button" accessibilityLabel="Manual transaction" onPress={onManual} style={[styles.addMenu, dark && styles.addMenuDark]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>Manual transaction</Text></Pressable> : null}
-    <Pressable accessibilityRole="button" accessibilityLabel="Add transaction options" accessibilityState={{expanded: open}} onPress={onToggle} style={[styles.addButton, dark && styles.addButtonDark]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>+ Add</Text></Pressable>
+    {open ? <Pressable accessibilityRole="button" accessibilityLabel="Manual transaction" onPress={()=>{suppress();onManual(trigger);}} style={[styles.addMenu, dark && styles.addMenuDark]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>Manual transaction</Text></Pressable> : null}
+    <Pressable ref={trigger} accessibilityRole="button" accessibilityLabel="Add transaction options" accessibilityState={{expanded: open}} onPress={()=>{if(!open)remember(trigger);onToggle();}} style={[styles.addButton, dark && styles.addButtonDark]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>+ Add</Text></Pressable>
   </View>;
 }
 export function ShellNavigation({dark, initialDestination, isFocused = true, onAbout, onSignOut, renderPage}: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [manualRequest, setManualRequest] = useState(0);
+  const [manualOpen,setManualOpen]=useState(false);
+  const {remember:rememberManual}=useAccessibilityReturnFocus(manualOpen);
   const {path, setPath, selected} = useShellPath(initialDestination, isFocused, menuOpen, () => setMenuOpen(false));
   useEffect(() => setMenuOpen(false), [selected]);
   const [status, setStatus] = useState('');
@@ -104,7 +110,7 @@ export function ShellNavigation({dark, initialDestination, isFocused = true, onA
     try { await onSignOut(); } catch { setStatus('Sign-out could not finish. Please try again.'); }
     finally { setBusy(false); }
   };
-  return <SafeAreaView style={[styles.safe, themeStyles[Number(dark)].safe]} edges={['top', 'bottom', 'left', 'right']}>
+  return <ManualEntryFocusContext.Provider value={setManualOpen}><SafeAreaView style={[styles.safe, themeStyles[Number(dark)].safe]} edges={['top', 'bottom', 'left', 'right']}>
     <View style={styles.header}>
       {canGoBack ? <Pressable accessibilityRole="button" accessibilityLabel={`Back to ${titles[path[path.length - 2]]}`} onPress={() => setPath(backPath(path))} style={styles.back}><Text style={[styles.backText, themeStyles[Number(dark)].text]}>Back</Text></Pressable> : null}
       <Text accessibilityRole="header" style={[styles.title, themeStyles[Number(dark)].text]}>{titles[selected]}</Text>
@@ -115,9 +121,9 @@ export function ShellNavigation({dark, initialDestination, isFocused = true, onA
 
     </ScrollView>
     {menuOpen ? <Pressable accessibilityRole="button" accessibilityLabel="Dismiss add menu" onPress={() => setMenuOpen(false)} style={styles.menuBackdrop}/> : null}
-    {selected === 'activity' ? <QuickAdd dark={dark} open={menuOpen} onToggle={() => setMenuOpen(value => !value)} onManual={() => {setMenuOpen(false); setManualRequest(value => value + 1);}}/> : null}
+    {selected === 'activity' ? <QuickAdd dark={dark} open={menuOpen} onToggle={() => setMenuOpen(value => !value)} onManual={ref => {rememberManual(ref);setMenuOpen(false); setManualRequest(value => value + 1);}}/> : null}
     <BottomBar selected={selected} dark={dark} onSelect={page => setPath([page])}/>
-  </SafeAreaView>;
+  </SafeAreaView></ManualEntryFocusContext.Provider>;
 }
 const styles = StyleSheet.create({
   safe: {flex: 1, backgroundColor: '#F3EFE6'}, darkSafe: {backgroundColor: '#101715'},

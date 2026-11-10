@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import {useAccessibilityReturnFocus} from '../features/finance/accessibilityFocus';
+import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -89,7 +90,7 @@ function AuthCard({ presentation, status, staySignedIn, onToggle, onSignIn }: { 
 
 function LoginOptions({ open, display, onClose, onAppearance, onAbout }: { open: boolean; display: DisplaySnapshot; onClose(): void; onAppearance(mode: DisplaySnapshot['appearanceMode']): Promise<void>; onAbout(): void }) {
   return <Modal visible={open} transparent animationType={display.reducedMotion ? 'none' : 'fade'} onRequestClose={onClose}>
-    <View style={styles.modalBackdrop}><View style={styles.menu} accessibilityViewIsModal><ScrollView>
+    <View style={styles.modalBackdrop}><Pressable accessibilityRole="button" accessibilityLabel="Dismiss login options" onPress={onClose} style={StyleSheet.absoluteFill}/><View style={styles.menu} accessibilityViewIsModal><ScrollView>
       <Text style={styles.menuTitle}>Appearance</Text>
       {APPEARANCES.map(mode => <Pressable key={mode} accessibilityRole="radio" accessibilityLabel={`Appearance: ${mode}`} accessibilityState={{ selected: display.appearanceMode === mode }} style={[styles.menuItem, display.appearanceMode === mode && styles.menuItemSelected]} onPress={async () => { onClose(); await onAppearance(mode); }}><Text style={styles.menuItemText}>{mode}</Text></Pressable>)}
       <Pressable accessibilityRole="button" accessibilityLabel="About" style={styles.menuItem} onPress={() => { onClose(); onAbout(); }}><Text style={styles.menuItemText}>About</Text></Pressable>
@@ -101,6 +102,8 @@ function LoginOptions({ open, display, onClose, onAppearance, onAbout }: { open:
 export function LoginScreen({ session, display, active, onSignIn, onAppearance, onAbout }: Props) {
   const [staySignedIn, setStaySignedIn] = useState<boolean>(initialAuthControls().staySignedIn);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const optionsTrigger=useRef<React.ComponentRef<typeof View>>(null);
+  const {remember:rememberOptions,suppress:suppressOptions}=useAccessibilityReturnFocus(optionsOpen);
   const [localStatus, setLocalStatus] = useState('');
   const { height, fontScale } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -121,7 +124,7 @@ export function LoginScreen({ session, display, active, onSignIn, onAppearance, 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} bounces={false}>
         <Animated.View style={[styles.brandRow, entrance.brand]}>
           <Text style={styles.brand}>Border Ledger</Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="Login options" accessibilityHint="Appearance and About" onPress={()=>setOptionsOpen(true)} style={({pressed})=>[styles.options,pressed&&styles.pressed]}><Text style={styles.optionsText}>•••</Text></Pressable>
+          <Pressable accessibilityRole="button" ref={optionsTrigger} accessibilityLabel="Login options" accessibilityHint="Appearance and About" onPress={()=>{rememberOptions(optionsTrigger);setOptionsOpen(true);}} style={({pressed})=>[styles.options,pressed&&styles.pressed]}><Text style={styles.optionsText}>•••</Text></Pressable>
         </Animated.View>
         <Animated.View style={[styles.hero,{marginTop:heroGap},entrance.hero]}>
           <Text style={styles.kicker}>Personal finance, composed.</Text>
@@ -133,7 +136,7 @@ export function LoginScreen({ session, display, active, onSignIn, onAppearance, 
         </Animated.View>
       </ScrollView>
     </SafeAreaView>
-    <LoginOptions open={optionsOpen} display={display} onClose={()=>setOptionsOpen(false)} onAppearance={onAppearance} onAbout={onAbout}/>
+    <LoginOptions open={optionsOpen} display={display} onClose={()=>setOptionsOpen(false)} onAppearance={onAppearance} onAbout={()=>{suppressOptions();onAbout();}}/>
   </View>;
 }
 

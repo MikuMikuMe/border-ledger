@@ -99,7 +99,7 @@ export async function readMobileTransactionPage(db: D1Database, context: LedgerC
   }
   if (query) {
     const needle = `%${query}%`;
-    clauses.push('(t.id LIKE ? OR t.merchant LIKE ? OR a.name LIKE ? OR t.category LIKE ? OR COALESCE(t.note, \'\') LIKE ?)');
+    clauses.push('(t.id LIKE ? OR t.merchant LIKE ? OR a.name LIKE ? OR COALESCE(annotation.category, t.category) LIKE ? OR COALESCE(CASE WHEN annotation.revision IS NULL THEN t.note ELSE annotation.note END, \'\') LIKE ?)');
     bindings.push(needle, needle, needle, needle, needle);
   }
   if (currency !== null) {
@@ -115,15 +115,20 @@ export async function readMobileTransactionPage(db: D1Database, context: LedgerC
     bindings.push(source);
   }
   if (category !== null) {
-    clauses.push('t.category = ?');
+    clauses.push('COALESCE(annotation.category, t.category) = ?');
     bindings.push(category);
   }
 
   const result = await db.prepare(`SELECT t.id, t.account_id, t.date, t.merchant, t.amount_minor, t.currency,
-      t.category, t.kind, t.status, t.source, t.note,
-      (SELECT MAX(annotation.revision) FROM annotation_revisions annotation
-        WHERE annotation.ledger_id = t.ledger_id AND annotation.transaction_id = t.id) AS annotation_revision
+      COALESCE(annotation.category, t.category) AS category, t.kind, t.status, t.source,
+      CASE WHEN annotation.revision IS NULL THEN t.note ELSE annotation.note END AS note,
+      annotation.revision AS annotation_revision
     FROM transactions t JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
+    LEFT JOIN annotation_revisions annotation ON annotation.id = (
+      SELECT latest.id FROM annotation_revisions latest
+      WHERE latest.ledger_id = t.ledger_id AND latest.transaction_id = t.id
+      ORDER BY latest.revision DESC LIMIT 1
+    )
     WHERE ${clauses.join(' AND ')}
     ORDER BY t.date DESC, t.id DESC LIMIT ?`).bind(...bindings, limit + 1).all<TransactionRow>();
   const hasMore = result.results.length > limit;

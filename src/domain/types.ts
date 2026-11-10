@@ -44,6 +44,7 @@ export interface Transaction<Code extends CurrencyCode = CurrencyCode> {
   source: TransactionSource;
   fingerprint: string;
   note?: string;
+  annotationRevision?: number;
   bankReference?: string | null;
   sourceIdentity?: StatementSourceIdentity;
 }

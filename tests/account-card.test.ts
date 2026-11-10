@@ -113,7 +113,7 @@ describe('account card options', () => {
       accounts: [{ id: 'plaid-acct-1', name: 'Everyday Chequing', mask: '1234', type: 'depository', subtype: 'checking' }],
     }));
 
-    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(container.querySelector('section[aria-labelledby="plaid-account-selection-title"]')).not.toBeNull();
     expect(container.textContent).toContain('Choose which accounts to connect');
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/plaid/exchange'))).toBe(false);
   });

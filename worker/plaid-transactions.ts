@@ -68,7 +68,7 @@ export async function plaidTransactionStatements(db:D1Database,context:LedgerCon
       fingerprint,note,plaid_item_id,provider_transaction_id,provider_pending_transaction_id,fx_lock_date)
       VALUES (?,?,?,?,?,?,?,?,?,?,'plaid',?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
       date=excluded.date,merchant=excluded.merchant,amount_minor=excluded.amount_minor,currency=excluded.currency,
-      category=excluded.category,kind=excluded.kind,status=excluded.status,fingerprint=excluded.fingerprint,note=excluded.note,
+      category=CASE WHEN EXISTS(SELECT 1 FROM annotation_revisions ar WHERE ar.ledger_id=transactions.ledger_id AND ar.transaction_id=transactions.id) THEN transactions.category ELSE excluded.category END,kind=excluded.kind,status=excluded.status,fingerprint=excluded.fingerprint,note=CASE WHEN EXISTS(SELECT 1 FROM annotation_revisions ar WHERE ar.ledger_id=transactions.ledger_id AND ar.transaction_id=transactions.id) THEN transactions.note ELSE excluded.note END,
       provider_transaction_id=COALESCE(excluded.provider_transaction_id,transactions.provider_transaction_id),
       provider_pending_transaction_id=COALESCE(excluded.provider_pending_transaction_id,transactions.provider_pending_transaction_id),updated_at=CURRENT_TIMESTAMP`)
       .bind(id,context.ledgerId,mapped.accountId,mapped.date,mapped.merchant,mapped.amountMinor,mapped.currency,mapped.category,mapped.kind,mapped.status,

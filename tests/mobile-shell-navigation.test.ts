@@ -3,21 +3,22 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 const require = createRequire(new URL('../mobile/package.json', import.meta.url));
 const React = require('react');
 const {act, create} = require('react-test-renderer');
-const device = vi.hoisted(() => ({back: undefined as undefined | (() => boolean)}));
+const device = vi.hoisted(() => ({back: undefined as undefined | (() => boolean), focus:vi.fn()}));
 vi.mock('../mobile/node_modules/react-native/index.js', () => ({
-  Text: 'Text', View: 'View', Pressable: 'Pressable', ScrollView: 'ScrollView',
+  Text: 'Text', View: 'View', Pressable: 'Pressable', ScrollView: 'ScrollView', Platform:{OS:'android'},NativeModules:{NativeAccessibilityFocus:{focus:device.focus}},AccessibilityInfo:{setAccessibilityFocus:vi.fn()},findNodeHandle:(node:any)=>node?.tag??null,
   StyleSheet: {create: (value: unknown) => value, hairlineWidth: 1},
   BackHandler: {addEventListener: (_: string, handler: () => boolean) => {device.back = handler; return {remove() {device.back = undefined;}};}},
 }));
 vi.mock('../mobile/node_modules/react-native-safe-area-context/lib/commonjs/index.js', () => ({SafeAreaView: 'SafeAreaView'}));
 const {ShellNavigation} = await import('../mobile/src/screens/ShellNavigation');
+const {ManualEntryFocusContext} = await import('../mobile/src/features/finance/accessibilityFocus');
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
 let tree: any;
-afterEach(() => {if (tree) act(() => tree.unmount());});
+afterEach(() => {if (tree) act(() => tree.unmount());vi.useRealTimers();device.focus.mockClear();});
 const label = (node: any): string => node.findAllByType('Text').map((text: any) => text.children.join('')).join(' ');
 const press = (name: string) => act(() => tree.root.findAllByType('Pressable').find((node: any) => label(node).startsWith(name)).props.onPress());
 function mount(initialDestination = 'overview', onSignOut = async () => {}) {
-  act(() => {tree = create(React.createElement(ShellNavigation, {dark: false, initialDestination, onAbout() {}, onSignOut, renderPage: (page: string, _open: unknown, manualRequest: number) => React.createElement('Page', {page, manualRequest})}));});
+  act(() => {tree = create(React.createElement(ShellNavigation, {dark: false, initialDestination, onAbout() {}, onSignOut, renderPage: (page: string, _open: unknown, manualRequest: number) => React.createElement('Page', {page, manualRequest})}),{createNodeMock:(element:any)=>({tag:element.props.accessibilityLabel==='Add transaction options'?88:1,scrollTo:()=>{}})});});
 }
 const current = () => tree.root.findByType('Page').props.page;
 describe('Android shell navigation', () => {
@@ -28,6 +29,21 @@ describe('Android shell navigation', () => {
     act(() => {device.back?.();});
     expect(current()).toBe('activity');
     expect(tree.root.findAllByType('Pressable').some((node: any) => label(node) === 'Manual transaction')).toBe(false);
+  });
+  it('returns screen-reader focus to Add after dismissing the menu', () => {
+    vi.useFakeTimers();mount('activity');press('+ Add');act(()=>{device.back?.();});
+    act(()=>vi.runAllTimers());expect(device.focus).toHaveBeenCalledWith(88);
+  });
+  it('does not return focus to Add while opening manual entry', () => {
+    vi.useFakeTimers();mount('activity');press('+ Add');press('Manual transaction');
+    act(()=>vi.runAllTimers());expect(device.focus).not.toHaveBeenCalled();
+  });
+  it('returns focus to Add when the manual transaction dialog closes', () => {
+    vi.useFakeTimers();
+    function Page({manualRequest}: {manualRequest:number}) {const notify=React.useContext(ManualEntryFocusContext);React.useEffect(()=>{if(manualRequest)notify(true);},[manualRequest,notify]);return React.createElement('Pressable',{accessibilityLabel:'Close synthetic form',onPress:()=>notify(false)});}
+    act(()=>{tree=create(React.createElement(ShellNavigation,{dark:false,initialDestination:'activity',onAbout(){},onSignOut:async()=>{},renderPage:(_page:string,_open:unknown,manualRequest:number)=>React.createElement(Page,{manualRequest})}),{createNodeMock:(element:any)=>({tag:element.props.accessibilityLabel==='Add transaction options'?88:1,scrollTo:()=>{}})});});
+    press('+ Add');press('Manual transaction');act(()=>tree.root.findByProps({accessibilityLabel:'Close synthetic form'}).props.onPress());
+    act(()=>vi.runAllTimers());expect(device.focus).toHaveBeenCalledWith(88);
   });
   it('dismisses outside the add menu and sends a manual request when selected', () => {
     mount('activity'); press('+ Add');

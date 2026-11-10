@@ -1,3 +1,4 @@
+import { annotateMobileTransaction, MobileReviewError } from './mobile-review';
 import type {AiEgressBinding} from './ai-egress';
 import { createManualTransaction, listManualMatches, decideManualMatch, manualMatchOffset, ManualTransactionConflict } from './manual-transactions';
 import { notSupersededAlertTransactionPredicate } from './ledger-reports';
@@ -736,6 +737,10 @@ function summarize(transactions: StoredTransaction[], includeProvisional: boolea
   }, totals);
 }
 
+function projectAnnotation({ annotation_category, annotation_note, ...transaction }: StoredTransaction & { annotation_revision: number | null; annotation_category: string | null; annotation_note: string | null }) {
+  if (transaction.annotation_revision === null) return { ...transaction, annotation_revision: 0 };
+  return { ...transaction, category: annotation_category!, note: annotation_note };
+}
 async function readTransactions(env: Env, context: LedgerContext, url: URL) {
   const clauses: string[] = ['t.ledger_id = ?', notSupersededAlertTransactionPredicate('t')];
   const bindings: string[] = [context.ledgerId];
@@ -756,9 +761,15 @@ async function readTransactions(env: Env, context: LedgerContext, url: URL) {
   if (to) { clauses.push('t.date <= ?'); bindings.push(to); }
   if (currency && currency !== 'all') { clauses.push('currency = ?'); bindings.push(currency); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const statement = env.DB.prepare(`SELECT t.* FROM transactions t ${where} ORDER BY t.date DESC, t.created_at DESC LIMIT 500`).bind(...bindings);
-  const result = await statement.all<StoredTransaction>();
-  return result.results;
+  const statement = env.DB.prepare(`SELECT t.*, ar.revision AS annotation_revision,
+      ar.category AS annotation_category, ar.note AS annotation_note
+    FROM transactions t LEFT JOIN annotation_revisions ar ON ar.id = (
+      SELECT latest.id FROM annotation_revisions latest
+      WHERE latest.ledger_id=t.ledger_id AND latest.transaction_id=t.id
+      ORDER BY latest.revision DESC LIMIT 1
+    ) ${where} ORDER BY t.date DESC, t.created_at DESC LIMIT 500`).bind(...bindings);
+  const result = await statement.all<StoredTransaction & { annotation_revision: number | null; annotation_category: string | null; annotation_note: string | null }>();
+  return result.results.map(projectAnnotation);
 }
 
 async function handleImportCommit(request: Request, env: Env, _url: URL, context: LedgerContext) {
@@ -878,6 +889,7 @@ function serviceErrorResponse(error: unknown) {
 }
 
 function knownErrorResponse(error: unknown) {
+  if (error instanceof MobileReviewError) return json({code:error.code,error:error.message,currentRevision:error.currentRevision},{status:error.status});
   return validationErrorResponse(error) ?? serviceErrorResponse(error);
 }
 
@@ -970,6 +982,11 @@ const accountRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Ma
 ]);
 
 async function handleAccountRoutes(request: Request, env: Env, url: URL, context: LedgerContext) {
+  const annotation = url.pathname.match(/^\/api\/transactions\/([^/]+)\/annotation$/);
+  if (request.method === 'PATCH' && annotation) {
+    let id:string;try {id=decodeURIComponent(annotation[1]);} catch {throw new RequestValidationError('The transaction id is not valid.');}
+    return json(await annotateMobileTransaction(env.DB,context,id,await readJsonBody<unknown>(request,16*1024)));
+  }
   const handler = accountRouteHandlers.get(`${request.method} ${url.pathname}`);
   return handler ? handler(request, env, url, context) : null;
 }
