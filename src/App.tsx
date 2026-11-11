@@ -1,5 +1,7 @@
 import {useDismissible} from './components/useDismissible';
 import { TransactionDetail } from './components/TransactionDetail';
+import {ChartRangePicker,chartRangeLabels,type ChartRange} from './components/ChartRangePicker';
+import {StateBadge,TransactionTable} from './components/TransactionTable';
 import type { LedgerApi } from './domain/api';
 import {BudgetView} from './components/BudgetView';
 import { PrivateSession, useLedgerApi } from './components/PrivateSession';
@@ -12,14 +14,12 @@ import {
   Bell,
   BookOpen,
   Check,
-  ChevronDown,
   CircleAlert,
   CircleHelp,
   CloudUpload,
   Database,
   FileCheck2,
   FileUp,
-  Filter,
   Landmark,
   LayoutDashboard,
   Link2,
@@ -54,10 +54,10 @@ import './wealth.css';
 import MobileAuthorizationPage from './MobileAuthorizationPage';
 import { LunchFlowSection } from './lunchflow';
 import { ManualTransactions, parseAccountCurrencies } from './components/ManualTransactions';
+export {TransactionTable} from './components/TransactionTable';
 
 type View = 'overview' | 'budget' | 'recurring' | 'wealth' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
-type ChartRange = 'daily' | 'weekly' | 'monthly';
 type AppRoute = 'landing' | 'workspace' | 'mobile-authorization';
 type AccountProvider = 'plaid' | 'lunchflow' | null;
 type AppAccount = Omit<Account, 'currency' | 'provider'> & { currency: CurrencyCode; provider: AccountProvider; currencies?: string[] };
@@ -138,12 +138,6 @@ interface ReportingPreferences {
   preferredCurrency: CurrencyCode | null;
   revision: number;
 }
-
-const chartRangeLabels: Record<ChartRange, string> = {
-  daily: 'Daily',
-  weekly: 'Weekly',
-  monthly: 'Monthly',
-};
 
 const landingWindows: ReportWindow[] = [
   { key: 'today', label: 'Today', start: '2026-10-12', end: '2026-10-12' },
@@ -332,14 +326,6 @@ function mapApiPreferences(value: unknown): ReportingPreferences | null {
 function mapApiTransactionSource(value: unknown): Transaction['source'] | null {
   const sourceValue = typeof value === 'string' ? value : '';
   return ['statement', 'plaid', 'alert', 'manual', 'lunchflow'].includes(sourceValue) ? sourceValue as Transaction['source'] : null;
-}
-
-function transactionSourceLabel(source: Transaction['source']) {
-  if (source === 'plaid') return 'Plaid';
-  if (source === 'alert') return 'BOC alert';
-  if (source === 'manual') return 'Manual';
-  if (String(source) === 'lunchflow') return 'Lunch Flow';
-  return 'Statement';
 }
 
 function mapApiTransaction(value: Record<string, unknown>): Transaction | null {
@@ -1289,8 +1275,6 @@ function Overview({
   const reviewTransactions = transactions.filter((transaction) => transaction.status === 'needs_review' || transaction.status === 'provisional').slice(0, 3);
   const reviewCount = report.reviewCount;
   const [chartRange, setChartRange] = useState<ChartRange>('daily');
-  const [chartRangeOpen, setChartRangeOpen] = useState(false);
-  const {container:chartRangeRef,dismiss:dismissChartRange}=useDismissible(chartRangeOpen,()=>setChartRangeOpen(false));
 
   return (
     <>
@@ -1325,7 +1309,7 @@ function Overview({
 
       <section className="overview-grid">
         <div className="panel chart-panel">
-          <div className="section-heading"><div><p className="eyebrow">THE DAILY PULSE</p><h2>Spending rhythm</h2></div><div className="chart-range-control" ref={chartRangeRef}><button type="button" className="quiet-button" onClick={() => setChartRangeOpen((open) => !open)} aria-expanded={chartRangeOpen} aria-controls="chart-range-menu">{chartRangeLabels[chartRange]} <ChevronDown size={15} /></button>{chartRangeOpen ? <div id="chart-range-menu" className="chart-range-menu" role="region" aria-label="Chart period options">{(Object.keys(chartRangeLabels) as ChartRange[]).map((range) => <button type="button" key={range} className={chartRange === range ? 'is-selected' : undefined} onClick={() => { setChartRange(range); dismissChartRange(); }}>{chartRangeLabels[range]}</button>)}</div> : null}</div></div>
+          <div className="section-heading"><div><p className="eyebrow">THE DAILY PULSE</p><h2>Spending rhythm</h2></div><ChartRangePicker range={chartRange} onChange={setChartRange}/></div>
           <div className="chart-legend">{chartCurrenciesForReport(report, preferredCurrency).map((currency) => <span key={currency}><i className={`legend-dot ${currency === 'CAD' ? 'cad-dot' : currency === 'CNY' ? 'cny-dot' : ''}`} style={currency === 'CAD' || currency === 'CNY' ? undefined : { backgroundColor: 'var(--muted)' }} /> {currency}</span>)}<span className="chart-period">{chartPeriodLabel(chartRange, selectedWindow)}</span></div>
           <SpendingChart range={chartRange} report={report} includeProvisional={includeProvisional} selectedWindow={selectedWindow} preferredCurrency={preferredCurrency} />
         </div>
@@ -1418,15 +1402,6 @@ function TransactionsView({ transactions, onExport, manual, api, onChanged }: { 
     <section className="panel filter-panel"><div className="filter-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search merchant, category, or note" aria-label="Search transactions" />{query ? <button type="button" className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button> : null}</div><div className="filter-selects"><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value as CurrencyCode | 'all')}><option value="all">All currencies</option>{currencies.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>State</span><select value={status} onChange={(event) => setStatus(event.target.value as Transaction['status'] | 'all')}><option value="all">All states</option><option value="confirmed">Confirmed</option><option value="provisional">Provisional</option><option value="needs_review">Needs review</option></select></label><button type="button" className="icon-button filter-button" onClick={() => setMoreFiltersOpen((open) => !open)} aria-label="More filters" aria-expanded={moreFiltersOpen} aria-controls="transaction-more-filters"><SlidersHorizontal size={17} /></button></div>{moreFiltersOpen ? <div id="transaction-more-filters" className="more-filters" role="region" aria-label="Additional transaction filters"><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as Transaction['source'] | 'all')} aria-label="Source"><option value="all">All sources</option><option value="plaid">Plaid</option><option value="statement">Statement</option><option value="alert">BOC alert</option><option value="manual">Manual</option><option value="lunchflow">Lunch Flow</option></select></label></div> : null}</section>
     <section className="panel table-panel"><div className="table-toolbar"><span>{filtered.length} records</span><span className="table-toolbar-note"><BadgeCheck size={14} /> Confirmed and provisional states are kept distinct</span></div><TransactionTable transactions={filtered} onOpen={setSelectedTransaction} /></section>{selectedTransaction?<TransactionDetail transaction={selectedTransaction} api={api} onChanged={onChanged} onClose={()=>setSelectedTransaction(null)}/>:null}
   </>;
-}
-
-export function TransactionTable({ transactions, compact = false, onOpen }: { transactions: Transaction[]; compact?: boolean; onOpen?(transaction:Transaction):void }) {
-  return <div className={`transaction-table-wrap ${compact ? 'is-compact' : ''}`}><table className="transaction-table"><thead><tr><th scope="col">Date</th><th scope="col">Merchant</th><th scope="col">Category</th><th scope="col">Source</th><th scope="col">State</th><th scope="col" className="amount-cell">Amount</th></tr></thead><tbody>{transactions.map((transaction) => <tr key={transaction.id} className={onOpen?'transaction-row-open':undefined} onClick={onOpen?event=>{event.currentTarget.querySelector('button')?.focus();onOpen(transaction);}:undefined}><td className="date-cell">{formatDate(transaction.date)}</td><td>{onOpen?<button type="button" className="merchant-name transaction-open">{transaction.merchant}</button>:<strong className="merchant-name">{transaction.merchant}</strong>}{transaction.note ? <small className="note-line">{transaction.note}</small> : null}</td><td><span className={`category-mark ${transaction.currency.toLowerCase()}`} />{transaction.category}</td><td><span className="source-name">{transactionSourceLabel(transaction.source)}</span></td><td><StateBadge status={transaction.status} /></td><td className={`amount-cell ${transaction.kind === 'refund' || transaction.kind === 'income' ? 'is-credit' : ''}`}>{transaction.kind === 'income' || transaction.kind === 'refund' ? '+' : transaction.kind === 'transfer' ? '↔ ' : '− '}{formatMoney(Math.abs(transaction.amountMinor), transaction.currency, { signDisplay: 'never' })}</td></tr>)}</tbody></table>{transactions.length === 0 ? <div className="empty-state"><Filter size={22} /><strong>No records match that filter.</strong><span>Try a wider search or clear one of the filters.</span></div> : null}</div>;
-}
-
-function StateBadge({ status }: { status: Transaction['status'] }) {
-  const label = status === 'needs_review' ? 'Needs review' : status === 'provisional' ? 'Provisional' : 'Confirmed';
-  return <span className={`state-badge ${status}`}><span className="state-dot" />{label}</span>;
 }
 
 async function sha256File(file: File) {

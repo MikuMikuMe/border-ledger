@@ -77,20 +77,28 @@ function boundedFilter(params: URLSearchParams, name: string, max: number) {
   return value;
 }
 
-/** Owner-only canonical Activity page. The source currency and amount sign are
- * preserved exactly as stored; the Android client decides only how to display
- * them, never how to convert them. */
-export async function readMobileTransactionPage(db: D1Database, context: LedgerContext, params: URLSearchParams) {
-  const { limit, cursor } = pageQuery(params);
-  const query = boundedFilter(params, 'query', MAX_QUERY_LENGTH)?.trim() || null;
-  const currency = params.get('currency');
-  if (currency !== null && getCurrencyMeta(currency) === null) invalid('The transaction currency is not valid.');
-  const status = params.get('status');
-  if (status !== null && !VALID_STATUSES.has(status)) invalid('The transaction status is not valid.');
-  const source = params.get('source');
-  if (source !== null && !VALID_SOURCES.has(source)) invalid('The transaction source is not valid.');
-  const category = boundedFilter(params, 'category', MAX_CATEGORY_LENGTH);
+function validatedTransactionFilter(params: URLSearchParams, name: 'currency' | 'status' | 'source') {
+  const value = params.get(name);
+  if (value === null) return null;
+  const valid = name === 'currency'
+    ? getCurrencyMeta(value) !== null
+    : (name === 'status' ? VALID_STATUSES : VALID_SOURCES).has(value);
+  if (!valid) invalid(`The transaction ${name} is not valid.`);
+  return value;
+}
 
+function readTransactionFilters(params: URLSearchParams) {
+  const query = boundedFilter(params, 'query', MAX_QUERY_LENGTH)?.trim() || null;
+  return {
+    query,
+    currency: validatedTransactionFilter(params, 'currency'),
+    status: validatedTransactionFilter(params, 'status'),
+    source: validatedTransactionFilter(params, 'source'),
+    category: boundedFilter(params, 'category', MAX_CATEGORY_LENGTH),
+  };
+}
+
+function buildTransactionWhere(context:LedgerContext,cursor:TransactionCursor|null,{query,currency,status,source,category}:ReturnType<typeof readTransactionFilters>){
   const clauses = ['t.ledger_id = ?', notSupersededAlertTransactionPredicate('t')];
   const bindings: unknown[] = [context.ledgerId];
   if (cursor) {
@@ -118,7 +126,16 @@ export async function readMobileTransactionPage(db: D1Database, context: LedgerC
     clauses.push('COALESCE(annotation.category, t.category) = ?');
     bindings.push(category);
   }
+  return {clauses,bindings};
+}
 
+/** Owner-only canonical Activity page. The source currency and amount sign are
+ * preserved exactly as stored; the Android client decides only how to display
+ * them, never how to convert them. */
+export async function readMobileTransactionPage(db: D1Database, context: LedgerContext, params: URLSearchParams) {
+  const { limit, cursor } = pageQuery(params);
+  const filters=readTransactionFilters(params);
+  const {clauses,bindings}=buildTransactionWhere(context,cursor,filters);
   const result = await db.prepare(`SELECT t.id, t.account_id, t.date, t.merchant, t.amount_minor, t.currency,
       COALESCE(annotation.category, t.category) AS category, t.kind, t.status, t.source,
       CASE WHEN annotation.revision IS NULL THEN t.note ELSE annotation.note END AS note,
@@ -131,8 +148,12 @@ export async function readMobileTransactionPage(db: D1Database, context: LedgerC
     )
     WHERE ${clauses.join(' AND ')}
     ORDER BY t.date DESC, t.id DESC LIMIT ?`).bind(...bindings, limit + 1).all<TransactionRow>();
-  const hasMore = result.results.length > limit;
-  const rows = hasMore ? result.results.slice(0, limit) : result.results;
+  return transactionPage(result.results, limit);
+}
+
+function transactionPage(results: TransactionRow[], limit: number) {
+  const hasMore = results.length > limit;
+  const rows = hasMore ? results.slice(0, limit) : results;
   const last = rows.at(-1);
   return {
     items: rows.map((row) => ({
