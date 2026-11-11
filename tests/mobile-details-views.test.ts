@@ -2,7 +2,8 @@ import {createRequire} from 'node:module';
 import {describe,it,expect,vi} from 'vitest';
 const require=createRequire(new URL('../mobile/package.json',import.meta.url));
 const React=require('react');const {create,act}=require('react-test-renderer');
-vi.mock('../mobile/node_modules/react-native/index.js',()=>({Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
+const confirmDiscard=vi.hoisted(()=>vi.fn());
+vi.mock('../mobile/node_modules/react-native/index.js',()=>({Alert:{alert:confirmDiscard},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
 const modulePath='../mobile/src/features/details/DetailsViews';
 const {RecurringDetailView,ReviewView,AccountsView}=await import(modulePath);
 import {account,connection,detail,alert,link} from './fixtures/mobile-details';
@@ -26,10 +27,24 @@ describe('detail view fixtures and accessibility',()=>{
     expect(tree.root.findAll((n:any)=>n.type==='Modal')[0].props.onShow).toBeTypeOf('function');
     expect(tree.root.findAll((n:any)=>n.type==='Text'&&n.props.numberOfLines)).toHaveLength(0);
   });
+  it('dismisses recurring detail outside but stays open while saving',()=>{
+    const onClose=vi.fn(),props={...actions,onClose,dark:false,state:ready(detail),mutation};
+    const tree=render(RecurringDetailView,props);
+    act(()=>button(tree,'Dismiss Recurring detail').props.onPress());expect(onClose).toHaveBeenCalledTimes(1);
+    act(()=>tree.update(React.createElement(RecurringDetailView,{...props,mutation:{blocked:true,status:'saving'}})));
+    act(()=>button(tree,'Dismiss Recurring detail').props.onPress());expect(onClose).toHaveBeenCalledTimes(1);
+  });
   it('keeps an explicit recurring detail refresh available while conflict classification is disabled',()=>{
     let refreshed=false;const tree=render(RecurringDetailView,{...actions,dark:false,state:ready(detail),mutation:{blocked:false,status:'revision_conflict'},onRetry:()=>{refreshed=true;}});
     expect(button(tree,'Classify as excluded').props.disabled).toBe(true);expect(button(tree,'Refresh recurring detail').props.disabled).toBe(false);
     act(()=>button(tree,'Refresh recurring detail').props.onPress());expect(refreshed).toBe(true);
+  });
+  it('protects edited review annotations when dismissing outside',()=>{
+    confirmDiscard.mockClear();const onClose=vi.fn();
+    const tree=render(ReviewView,{...actions,onClose,dark:false,state:ready({items:[alert],nextCursor:null,limit:50}),selected:alert,draft:{category:'Travel',note:'Draft'},mutation});
+    act(()=>button(tree,'Dismiss Review evidence').props.onPress());
+    expect(confirmDiscard).toHaveBeenCalledTimes(1);expect(onClose).not.toHaveBeenCalled();
+    act(()=>confirmDiscard.mock.calls[0][2][1].onPress());expect(onClose).toHaveBeenCalledTimes(1);
   });
   it('shows bounded review evidence and preserves the annotation draft during revision conflict',()=>{
     const tree=render(ReviewView,{...actions,dark:false,state:ready({items:[alert],nextCursor:'next',limit:50}),selected:alert,draft:{category:'Travel',note:'Preserve me'},mutation:{blocked:false,status:'revision_conflict'}});

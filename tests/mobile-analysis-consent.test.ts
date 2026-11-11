@@ -2,7 +2,8 @@ import {createRequire} from 'node:module';
 import {expect,it,vi} from 'vitest';
 const require=createRequire(new URL('../mobile/package.json',import.meta.url));
 const React=require('react');const {create,act}=require('react-test-renderer');
-vi.mock('../mobile/node_modules/react-native/index.js',()=>({Text:'Text',View:'View',Switch:'Switch',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
+const nativeFocus=vi.hoisted(()=>vi.fn());
+vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{NativeAccessibilityFocus:{focus:nativeFocus}},Platform:{OS:'android'},Text:'Text',View:'View',Switch:'Switch',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:(node:any)=>node?.tag??null,StyleSheet:{create:(v:unknown)=>v}}));
 vi.mock('../mobile/src/native/specs/NativeAnalysis',()=>({default:{execute:async()=>'{"configurations":[],"detailedTransactions":false}'}}));
 const {AnalysisContent}=await import('../mobile/src/features/budget/AnalysisContent');
 (globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;
@@ -28,4 +29,15 @@ it('keeps provider errors and the draft visible in the settings panel',async()=>
  await act(async()=>{tree.root.findByProps({accessibilityLabel:'Save or replace key'}).props.onPress();await Promise.resolve();});
  expect(JSON.stringify(tree.root.findByType('Modal').findAllByType('Text').map((n:any)=>n.children))).toContain('Cannot save');
  expect(tree.root.findByProps({accessibilityLabel:'API key'}).props.value).toBe('secret');
+ act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Provider and privacy settings'}).props.onPress());
+ act(()=>tree.root.findByProps({accessibilityLabel:'Show provider and privacy settings'}).props.onPress());
+ expect(tree.root.findByProps({accessibilityLabel:'API key'}).props.value).toBe('secret');
+});
+
+it('returns focus to provider settings after closing',async()=>{
+ vi.useFakeTimers();nativeFocus.mockClear();let tree:any;
+ await act(async()=>{tree=create(React.createElement(AnalysisContent,{dark:false,month:'2026-10'}),{createNodeMock:(element:any)=>({tag:element.props.accessibilityLabel==='Show provider and privacy settings'?111:17})});});
+ act(()=>tree.root.findByProps({accessibilityLabel:'Show provider and privacy settings'}).props.onPress());
+ act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Provider and privacy settings'}).props.onPress());
+ act(()=>vi.runAllTimers());expect(nativeFocus).toHaveBeenCalledWith(111);act(()=>tree.unmount());vi.useRealTimers();
 });

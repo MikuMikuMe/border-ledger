@@ -1,3 +1,4 @@
+import { annotateMobileTransaction } from '../worker/mobile-review';
 import { expect, it } from 'vitest';
 import { setup, connect, SECOND_LEDGER, OWNER_LEDGER, browser, token, deferred } from './helpers/lunchflow-platform';
 import { resolveLunchFlowScope } from '../worker/lunchflow-scope';
@@ -55,6 +56,14 @@ async function selectedFixture(){
  await service.selectAccounts(selection);await service.sync();
  return {...f,id,env,service};
 }
+it('preserves a user annotation when the provider resyncs',async()=>{
+ const f=await selectedFixture();try{
+  const row=await f.db.prepare("SELECT id FROM transactions WHERE source='lunchflow'").first<{id:string}>();
+  await annotateMobileTransaction(f.db,SECOND_LEDGER,row!.id,{expectedRevision:0,category:'Dining',note:'Lunch'});
+  await f.service.sync();
+  expect(await f.db.prepare('SELECT category,note FROM transactions WHERE id=?').bind(row!.id).first()).toEqual({category:'Dining',note:'Lunch'});
+ }finally{f.close();}
+});
 it.each(['snapshot','selection'] as const)('fences disconnect immediately before the %s batch including metadata and receipts',async operation=>{
  const f=await selectedFixture();try{
   const scope=(await resolveLunchFlowScope(f.db,SECOND_LEDGER,f.id))!;

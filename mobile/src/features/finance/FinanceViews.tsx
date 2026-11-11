@@ -1,7 +1,8 @@
+import {useAccessibilityReturnFocus} from './accessibilityFocus';
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {validDateRange} from '../../../../src/domain/reporting';
 import {ReducedMotionContext} from '../auth/presentationPolicy';
-import {AccessibilityInfo,ActivityIndicator,findNodeHandle,KeyboardAvoidingView,Modal,NativeModules,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
+import {AccessibilityInfo,ActivityIndicator,Alert,findNodeHandle,KeyboardAvoidingView,Modal,NativeModules,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
 import type {ActivityQuery,Report,Snapshot,Transaction,Transactions,Stream,Lens,RecurringData,MutationState} from './contracts';
 import {comparableTotals,fillReportDays,filterActivity,formatMoney,recurringMessage,reportingCurrencies,reportView,type LoadState,type Window} from './model';
 
@@ -11,20 +12,22 @@ export function Copy({dark,children,heading=false,error=false}:Theme&{children:R
   const p=palette(dark);return <Text accessibilityRole={heading?'header':undefined} style={[styles.copy,{color:error?p.error:p.text},heading&&styles.heading]}>{children}</Text>;
 }
 export function Card({dark,children}:Theme&{children:React.ReactNode}) {const p=palette(dark);return <View style={[styles.card,{backgroundColor:p.surface,borderColor:p.border}]}>{children}</View>;}
-export function DetailModal({dark,title,onClose,children}:Theme&{title:string;onClose():void;children:React.ReactNode}) {
+export function DetailModal({dark,title,onClose,children,dismissOutside=false,compactClose=false,closeLabel}:Theme&{title:string;onClose():void;children:React.ReactNode;dismissOutside?:boolean;compactClose?:boolean;closeLabel?:string}) {
   const heading=useRef<React.ElementRef<typeof Text>>(null),reducedMotion=useContext(ReducedMotionContext);
   return <Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={onClose} onShow={()=>{const node=findNodeHandle(heading.current);if(node)AccessibilityInfo.setAccessibilityFocus(node);}}>
     <KeyboardAvoidingView behavior="padding" style={{flex:1,justifyContent:'center',padding:18,backgroundColor:'#00000080'}}>
-      <View accessibilityViewIsModal style={[styles.card,{maxHeight:'90%',backgroundColor:palette(dark).surface,borderColor:palette(dark).border}]}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.section}><Text ref={heading} accessible accessibilityRole="header" style={[styles.heading,{color:palette(dark).text}]}>{title}</Text>{children}</ScrollView></View>
+      {dismissOutside?<Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${title}`} onPress={onClose} style={StyleSheet.absoluteFill}/>:null}
+      <View accessibilityViewIsModal style={[styles.card,{maxHeight:'90%',backgroundColor:palette(dark).surface,borderColor:palette(dark).border}]}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.section}><View style={{flexDirection:"row",alignItems:"center",gap:8}}><Text ref={heading} accessible accessibilityRole="header" style={[styles.heading,{color:palette(dark).text,flex:1}]}>{title}</Text>{compactClose?<Pressable accessibilityRole="button" accessibilityLabel={closeLabel??`Close ${title}`} onPress={onClose} style={{minHeight:48,minWidth:48,alignItems:"center",justifyContent:"center"}}><Text style={{fontSize:14,color:palette(dark).accent}}>Close</Text></Pressable>:null}</View>{children}</ScrollView></View>
     </KeyboardAvoidingView>
   </Modal>;
 }
-export function Action({dark,label,text,value,onPress,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;value?:string;onPress():void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
-  const p=palette(dark);return <Pressable accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={onPress} disabled={disabled} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
+export function Action({dark,label,text,value,onPress,onActivate,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;value?:string;onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
+  const p=palette(dark),ref=useRef<React.ComponentRef<typeof View>>(null);return <Pressable ref={ref} accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={()=>{onActivate?.(ref);onPress();}} disabled={disabled} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
 }
-export function LedgerRow({dark,label,title,amount,details,accessibilityDetails=details,onPress}:Theme&{label:string;title:string;amount?:string;details:string[];accessibilityDetails?:string[];onPress():void}) {
+export function LedgerRow({dark,label,title,amount,details,accessibilityDetails=details,onPress,onActivate}:Theme&{label:string;title:string;amount?:string;details:string[];accessibilityDetails?:string[];onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void}) {
   const p=palette(dark);
-  return <Pressable accessibilityRole="button" accessibilityLabel={[label,amount,...accessibilityDetails].filter(Boolean).join(' · ')} onPress={onPress} style={({pressed})=>[styles.ledgerRow,{borderColor:p.border},pressed&&styles.rowPressed]}>
+  const rowRef=useRef<React.ComponentRef<typeof View>>(null);
+  return <Pressable ref={rowRef} accessibilityRole="button" accessibilityLabel={[label,amount,...accessibilityDetails].filter(Boolean).join(' · ')} onPress={()=>{onActivate?.(rowRef);onPress();}} style={({pressed})=>[styles.ledgerRow,{borderColor:p.border},pressed&&styles.rowPressed]}>
     <View style={styles.ledgerTop}><Text style={[styles.ledgerTitle,{color:p.text}]}>{title}</Text>{amount?<Text style={[styles.ledgerAmount,{color:p.text}]}>{amount}</Text>:null}</View>
     {details.map((detail,index)=><Text key={index} style={[styles.ledgerMeta,{color:p.muted}]}>{detail}</Text>)}
   </Pressable>;
@@ -35,14 +38,15 @@ function Choices({dark,label,values,value,onChange,searchable=false}:Theme&{labe
 }
 function FilterDisclosure({dark,label,summary,children,modal=false}:Theme&{label:string;summary:string;children:React.ReactNode;modal?:boolean}) {
   const [expanded,setExpanded]=useState(false),p=palette(dark);
-  const heading=useRef<React.ElementRef<typeof Text>>(null),reducedMotion=useContext(ReducedMotionContext);
+  const heading=useRef<React.ElementRef<typeof Text>>(null),trigger=useRef<React.ComponentRef<typeof View>>(null),reducedMotion=useContext(ReducedMotionContext);
+  const {remember:rememberOpener}=useAccessibilityReturnFocus(modal&&expanded);
   return <View>
-    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{expanded}} onPress={()=>setExpanded(!expanded)} style={{minHeight:48,paddingVertical:12}}>
+    <Pressable ref={trigger} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{expanded}} onPress={()=>{if(!expanded)rememberOpener(trigger);setExpanded(!expanded);}} style={{minHeight:48,paddingVertical:12}}>
       <Text style={[styles.disclosureLabel,{color:p.accent}]}>{modal?label:`${expanded?'Hide':'Show'} ${label.toLowerCase()}`}</Text>
       <Text style={[styles.reportNote,{color:p.muted}]}>{summary}</Text>
     </Pressable>
     {expanded?(modal?<Modal transparent visible animationType={reducedMotion?'none':'slide'} onRequestClose={()=>setExpanded(false)} onShow={()=>{const node=findNodeHandle(heading.current);if(node)AccessibilityInfo.setAccessibilityFocus(node);}}>
-      <KeyboardAvoidingView behavior="padding" style={styles.sheetBackdrop}><View accessibilityViewIsModal style={[styles.sheet,{backgroundColor:p.surface}]}><View style={styles.sheetHeader}><Text ref={heading} accessible accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>{label}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Close ${label}`} onPress={()=>setExpanded(false)} style={styles.sheetClose}><Text style={[styles.disclosureLabel,{color:p.accent}]}>Done</Text></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>{children}</ScrollView></View></KeyboardAvoidingView>
+      <KeyboardAvoidingView behavior="padding" style={styles.sheetBackdrop}><Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${label}`} onPress={()=>setExpanded(false)} style={StyleSheet.absoluteFill}/><View accessibilityViewIsModal style={[styles.sheet,{backgroundColor:p.surface}]}><View style={styles.sheetHeader}><Text ref={heading} accessible accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>{label}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Close ${label}`} onPress={()=>setExpanded(false)} style={styles.sheetClose}><Text style={[styles.disclosureLabel,{color:p.accent}]}>Done</Text></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>{children}</ScrollView></View></KeyboardAvoidingView>
     </Modal>:children):null}
   </View>;
 }
@@ -120,6 +124,9 @@ function PeriodComparison({dark,current,previous,lens}:Theme&{current:Report;pre
 export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLens,onRetry}:Theme&{state:LoadState<Report>;previous?:LoadState<Report>;snapshot:Snapshot|null;lens:Lens;currencies:string[];onLens(value:Lens):void;onRetry():void}) {
   const report=state.data,view=report?reportView(report,lens.include,lens.source):null;
   const [customOpen,setCustomOpen]=useState(false),[start,setStart]=useState(''),[end,setEnd]=useState('');
+  const {remember:rememberCustom}=useAccessibilityReturnFocus(customOpen);
+  const initialRange=useRef({start:'',end:''});
+  const closeRange=()=>{if(start===initialRange.current.start&&end===initialRange.current.end){setCustomOpen(false);return;}Alert.alert('Discard changes?','Your date range changes have not been applied.',[{text:'Keep editing',style:'cancel'},{text:'Discard',style:'destructive',onPress:()=>setCustomOpen(false)}]);};
   const valid=validDateRange(start,end),p=palette(dark);
   const [pickerError,setPickerError]=useState(false);
   const chooseDate=async(value:string,update:(date:string)=>void)=>{try{setPickerError(false);const date:string|null=await NativeModules.NativeDatePicker.pick(value);if(date)update(date);}catch{setPickerError(true);}};
@@ -127,8 +134,8 @@ export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLen
     <Choices dark={dark} label="Source currency (no conversion)" values={currencies} value={lens.source} onChange={source=>onLens({...lens,source})}/>
     <Choices dark={dark} label="Reporting currency" searchable values={reportingCurrencies} value={lens.target} onChange={target=>onLens({...lens,target})}/></FilterDisclosure>;
   return <View style={styles.overview}>
-    <View style={styles.periods}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} text={window} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}<Action dark={dark} label="Report window: Custom" text="Custom" selected={lens.window==='Custom'} radio onPress={()=>{setStart(lens.startDate??report?.from??'');setEnd(lens.endDate??report?.to??'');setCustomOpen(true);}}/></View>
-    {customOpen?<DetailModal dark={dark} title="Custom date range" onClose={()=>setCustomOpen(false)}><Copy dark={dark}>Start date (YYYY-MM-DD)</Copy><TextInput accessibilityLabel="Start date (YYYY-MM-DD)" value={start} onChangeText={setStart} placeholder="YYYY-MM-DD" placeholderTextColor={p.muted} autoCapitalize="none" style={[styles.input,{color:p.text,borderColor:p.border}]}/><Action dark={dark} label="Choose start date" onPress={()=>{void chooseDate(start,setStart);}}/><Copy dark={dark}>End date (YYYY-MM-DD)</Copy><TextInput accessibilityLabel="End date (YYYY-MM-DD)" value={end} onChangeText={setEnd} placeholder="YYYY-MM-DD" placeholderTextColor={p.muted} autoCapitalize="none" style={[styles.input,{color:p.text,borderColor:p.border}]}/><Action dark={dark} label="Choose end date" onPress={()=>{void chooseDate(end,setEnd);}}/>{pickerError?<Copy dark={dark} error>Could not open the calendar. Enter the date above.</Copy>:null}{!valid?<View accessibilityLiveRegion="polite"><Copy dark={dark} error>Enter valid dates with the start on or before the end.</Copy></View>:null}<Action dark={dark} label="Apply range" disabled={!valid} onPress={()=>{if(valid){onLens({...lens,window:'Custom',startDate:start,endDate:end});setCustomOpen(false);}}}/><Action dark={dark} label="Cancel" onPress={()=>setCustomOpen(false)}/></DetailModal>:null}
+    <View style={styles.periods}>{(['Today','Week','Month'] as Window[]).map(window=><Action key={window} dark={dark} label={`Report window: ${window}`} text={window} selected={window===lens.window} radio onPress={()=>onLens({...lens,window})}/>)}<Action dark={dark} label="Report window: Custom" onActivate={rememberCustom} text="Custom" selected={lens.window==='Custom'} radio onPress={()=>{const initial={start:lens.startDate??report?.from??'',end:lens.endDate??report?.to??''};initialRange.current=initial;setStart(initial.start);setEnd(initial.end);setCustomOpen(true);}}/></View>
+    {customOpen?<DetailModal dark={dark} title="Custom date range" onClose={closeRange} dismissOutside compactClose><Copy dark={dark}>Start date (YYYY-MM-DD)</Copy><TextInput accessibilityLabel="Start date (YYYY-MM-DD)" value={start} onChangeText={setStart} placeholder="YYYY-MM-DD" placeholderTextColor={p.muted} autoCapitalize="none" style={[styles.input,{color:p.text,borderColor:p.border}]}/><Action dark={dark} label="Choose start date" onPress={()=>{void chooseDate(start,setStart);}}/><Copy dark={dark}>End date (YYYY-MM-DD)</Copy><TextInput accessibilityLabel="End date (YYYY-MM-DD)" value={end} onChangeText={setEnd} placeholder="YYYY-MM-DD" placeholderTextColor={p.muted} autoCapitalize="none" style={[styles.input,{color:p.text,borderColor:p.border}]}/><Action dark={dark} label="Choose end date" onPress={()=>{void chooseDate(end,setEnd);}}/>{pickerError?<Copy dark={dark} error>Could not open the calendar. Enter the date above.</Copy>:null}{!valid?<View accessibilityLiveRegion="polite"><Copy dark={dark} error>Enter valid dates with the start on or before the end.</Copy></View>:null}<Action dark={dark} label="Apply range" disabled={!valid} onPress={()=>{if(valid){onLens({...lens,window:'Custom',startDate:start,endDate:end});setCustomOpen(false);}}}/></DetailModal>:null}
 
     {state.phase!=='ready'||!report?<Status dark={dark} state={state} onRetry={onRetry} label="report"/>:null}
     {!report?reportFilters:null}
@@ -169,37 +176,48 @@ function ActivityFilters({dark,facetRows,filters,onFilter}:{dark:boolean;facetRo
     <FilterDisclosure dark={dark} modal label="Activity filters" summary={`${activityFacetNames.filter(name=>filters[name]).length} active`}>{activityFacetNames.map(name=><ActivityFacet key={name} dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter} name={name}/>)}</FilterDisclosure>
   </>;
 }
-function ActivityRow({dark,transaction,onOpen}:{dark:boolean;transaction:Transaction;onOpen(id:string):void}){
+function ActivityRow({dark,transaction,onOpen,onActivate}:{dark:boolean;transaction:Transaction;onOpen(id:string):void;onActivate(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void}){
   const title=transaction.merchant??'Merchant unavailable';
   const date=transaction.occurredAt.replace('T',' ').replace(/Z$/,' UTC');
   const details=[`${date} · ${transaction.status} · ${transaction.kind}`,transaction.category??'Uncategorized'];
-  return <LedgerRow dark={dark} label={`Open activity: ${title}`} title={title} amount={`${formatMoney(transaction.signedMinorUnits,transaction.currency)} ${transaction.currency}`} details={details} accessibilityDetails={[...details,`Account: ${transaction.accountLabel??'unavailable'} · Source: ${transaction.sourceLabel??'unavailable'}`]} onPress={()=>onOpen(transaction.id)}/>;
+  return <LedgerRow dark={dark} label={`Open activity: ${title}`} title={title} amount={`${formatMoney(transaction.signedMinorUnits,transaction.currency)} ${transaction.currency}`} details={details} accessibilityDetails={[...details,`Account: ${transaction.accountLabel??'unavailable'} · Source: ${transaction.sourceLabel??'unavailable'}`]} onActivate={onActivate} onPress={()=>onOpen(transaction.id)}/>;
 }
-function ActivityResults({dark,state,rows,onLoadMore,onOpen}:{dark:boolean;state:LoadState<Transactions>;rows:Transaction[];onLoadMore():void;onOpen(id:string):void}){
+function ActivityResults({dark,state,rows,onLoadMore,onOpen,onActivate}:{dark:boolean;state:LoadState<Transactions>;rows:Transaction[];onLoadMore():void;onOpen(id:string):void;onActivate(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void}){
   return <>
     {state.data&&rows.length===0?<Copy dark={dark}>No activity matches this search.</Copy>:null}
-    {rows.map(transaction=><ActivityRow key={transaction.id} dark={dark} transaction={transaction} onOpen={onOpen}/>)}
+    {rows.map(transaction=><ActivityRow key={transaction.id} dark={dark} transaction={transaction} onOpen={onOpen} onActivate={onActivate}/>)}
     {state.data?.nextCursor?<Action dark={dark} label="Load more Activity" onPress={onLoadMore} disabled={state.phase==='loading'}/>:null}
   </>;
 }
+export function confirmDiscardChanges(onClose:()=>void){
+  Alert.alert('Discard changes?','Your local category and note changes may be lost. Check the operation status before trying again.',[{text:'Keep editing',style:'cancel'},{text:'Discard',style:'destructive',onPress:onClose}]);
+}
 function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose}:{dark:boolean;selected:Transaction;draft:{category:string;note:string};mutation:MutationState;onDraft(value:{category:string;note:string}):void;onSave():void;onClose():void}){
   const p=palette(dark);
-  return <DetailModal dark={dark} title="Activity detail" onClose={onClose}>
+  const close=()=>{
+    if(mutation.status==='saving')return;
+    if(draft.category!==(selected.category??'')||draft.note!==(selected.note??'')){
+      confirmDiscardChanges(onClose);return;
+    }
+    onClose();
+  };
+  return <DetailModal dark={dark} title="Activity detail" onClose={close} dismissOutside compactClose>
     <Copy dark={dark}>{selected.merchant??'Merchant unavailable'} · {selected.currency} {formatMoney(selected.signedMinorUnits,selected.currency)}</Copy>
     <Copy dark={dark}>{selected.occurredAt} · {selected.status} · {selected.kind}</Copy>
     <Copy dark={dark}>Account: {selected.accountLabel??'unavailable'} · Source: {selected.sourceLabel??'unavailable'} · Revision {selected.revision}</Copy>
-    <Copy dark={dark}>Category</Copy><TextInput accessibilityLabel="Category" value={draft.category} maxLength={80} onChangeText={category=>onDraft({...draft,category})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
-    <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
+    <Copy dark={dark}>Category</Copy><TextInput accessibilityLabel="Category" editable={!mutation.blocked} value={draft.category} maxLength={80} onChangeText={category=>onDraft({...draft,category})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
+    <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" editable={!mutation.blocked} value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
     <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Changes affect only the category and note.</Copy>
-    <Action dark={dark} label="Save annotation" onPress={onSave} disabled={mutation.blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/><Action dark={dark} label="Close Activity detail" onPress={onClose}/>
+    <Action dark={dark} label="Save annotation" onPress={onSave} disabled={mutation.blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/>
   </DetailModal>;
 }
 export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave}:ActivityProps) {
   const rows=state.data?.items??[],visibleRows=filterActivity(rows,filters);
+  const {remember:rememberOpener}=useAccessibilityReturnFocus(Boolean(selected));
   return <View style={styles.section}>
     <ActivityFilters dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter}/>
     <Status dark={dark} state={state} onRetry={onRetry} label="Activity"/>
-    <ActivityResults dark={dark} state={state} rows={visibleRows} onLoadMore={onLoadMore} onOpen={onOpen}/>
+    <ActivityResults dark={dark} state={state} rows={visibleRows} onLoadMore={onLoadMore} onOpen={onOpen} onActivate={rememberOpener}/>
     {selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={mutation} onDraft={onDraft} onSave={onSave} onClose={onClose}/>:null}
   </View>;
 }
@@ -222,7 +240,8 @@ function mutationMessage(status:string){return mutationMessages[status]??mutatio
 function mutationError(status:string){return status==='revision_conflict'||status==='rejected'||status==='reconciliation_required';}
 export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,onOpen,onLoadMore,selected,onClose,onClassify,mutation}:Theme&{state:LoadState<RecurringData>;filters:{currency?:string|null;classification?:string|null};currencies:string[];onRetry():void;onFilter(value:{currency?:string|null;classification?:string|null}):void;onOpen(id:string):void;onLoadMore():void;selected?:Stream|null;onClose?():void;onClassify?(classification:string):void;mutation?:MutationState}) {
   const page=state.data?.page,summary=state.data?.summary;
-  const row=(s:Stream,support:string,key:string)=><LedgerRow dark={dark} key={key} label={`Open recurring: ${s.merchantName??'Merchant unavailable'}`} title={s.merchantName??'Merchant unavailable'} amount={s.averageAmountMinor===null?'Unavailable':formatMoney(s.averageAmountMinor,s.currency)} details={[`${s.currency} · ${s.classification} · ${s.frequency} · Source ${s.sourceStatus}`,`Next expected: ${s.predictedNextDate??'unavailable'} · ${support}`]} onPress={()=>onOpen(s.id)}/>;
+  const {remember:rememberRecurring}=useAccessibilityReturnFocus(Boolean(selected));
+  const row=(s:Stream,support:string,key:string)=><LedgerRow dark={dark} key={key} label={`Open recurring: ${s.merchantName??'Merchant unavailable'}`} title={s.merchantName??'Merchant unavailable'} amount={s.averageAmountMinor===null?'Unavailable':formatMoney(s.averageAmountMinor,s.currency)} details={[`${s.currency} · ${s.classification} · ${s.frequency} · Source ${s.sourceStatus}`,`Next expected: ${s.predictedNextDate??'unavailable'} · ${support}`]} onActivate={rememberRecurring} onPress={()=>onOpen(s.id)}/>;
   return <View style={styles.section}>
     <Copy dark={dark}>Expected commitments stay separate from actual posted cost.</Copy>
     <FilterDisclosure dark={dark} modal label="Recurring filters" summary={`${filters.currency??'All currencies'} / ${filters.classification??'All classifications'}`}><Choices dark={dark} label="Recurring currency" values={currencies} value={filters.currency??null} onChange={currency=>onFilter({...filters,currency})}/>
@@ -237,7 +256,7 @@ export function RecurringView({dark,state,filters,currencies,onRetry,onFilter,on
     </>:null}
     {page?.items.map(s=>row(s,`Revision ${s.revision}`,s.id))}
     {page?.nextCursor?<Action dark={dark} label="Load more Recurring" disabled={state.phase==='loading'} onPress={onLoadMore}/>:null}
-    {selected?<DetailModal dark={dark} title={selected.merchantName??'Merchant unavailable'} onClose={()=>onClose?.()}><Copy dark={dark}>{selected.currency} · {selected.classification} · Revision {selected.revision}</Copy><Copy dark={dark}>Classification</Copy><View style={styles.wrap}>{['unclassified','subscription','bill','other','excluded'].map(c=><Action key={c} dark={dark} label={`Classify as ${c}`} selected={selected.classification===c} disabled={(mutation?.blocked??true)||mutation?.status==='revision_conflict'} onPress={()=>onClassify?.(c)}/>)}</View>{mutation?<MutationStatus dark={dark} mutation={mutation}/>:null}<Action dark={dark} label="Close recurring selection" onPress={()=>onClose?.()}/></DetailModal>:null}
+    {selected?<DetailModal dark={dark} title={selected.merchantName??'Merchant unavailable'} onClose={()=>{if(mutation?.status!=='saving')onClose?.();}} dismissOutside compactClose closeLabel={'Close recurring selection'}><Copy dark={dark}>{selected.currency} · {selected.classification} · Revision {selected.revision}</Copy><Copy dark={dark}>Classification</Copy><View style={styles.wrap}>{['unclassified','subscription','bill','other','excluded'].map(c=><Action key={c} dark={dark} label={`Classify as ${c}`} selected={selected.classification===c} disabled={(mutation?.blocked??true)||mutation?.status==='revision_conflict'} onPress={()=>onClassify?.(c)}/>)}</View>{mutation?<MutationStatus dark={dark} mutation={mutation}/>:null}</DetailModal>:null}
   </View>;
 }
 const styles=StyleSheet.create({

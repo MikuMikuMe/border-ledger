@@ -1,3 +1,5 @@
+import {plaidTransactionStatements} from '../worker/plaid-transactions';
+import { annotateMobileTransaction } from '../worker/mobile-review';
 import { afterEach, expect, it, vi } from 'vitest';
 import worker from '../worker/index';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
@@ -89,6 +91,17 @@ it('keeps two users with equal raw transaction IDs isolated through the actual q
  expect(sources.results).toEqual([{provider_item_id:'same-item',provider_transaction_id:'raw-transaction'},{provider_item_id:'same-item',provider_transaction_id:'raw-transaction'}]);
 });
 
+it('preserves user annotations when Plaid updates the same transaction',async()=>{
+ const {db,env,job}=await setup();
+ vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({added:[transaction],modified:[],removed:[],next_cursor:'complete',has_more:false}));
+ expect(await deliver(env,job)).toEqual({acked:1,retried:0});
+ const row=await db.prepare("SELECT id FROM transactions WHERE source='plaid'").first<{id:string}>();
+ await annotateMobileTransaction(db,OWNER_LEDGER,row!.id,{expectedRevision:0,category:'Dining',note:'Lunch'});
+ const item=await db.prepare('SELECT item_id FROM plaid_items WHERE ledger_id=?').bind(OWNER_LEDGER.ledgerId).first<{item_id:string}>();
+ const mapped=mapPlaidTransaction(transaction,{accountId:'plaid-same-account',itemId:item!.item_id})!;
+ await db.batch((await plaidTransactionStatements(db,OWNER_LEDGER,mapped)).statements);
+ expect(await db.prepare('SELECT category,note FROM transactions WHERE id=?').bind(row!.id).first()).toEqual({category:'Dining',note:'Lunch'});
+});
 it('acknowledges a completed redelivery without fetching or changing the committed snapshot',async()=>{
  const {db,env,job}=await setup();
  const fetch=vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({added:[transaction],modified:[],removed:[],next_cursor:'newer',has_more:false}));

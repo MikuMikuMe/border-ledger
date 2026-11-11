@@ -1,6 +1,7 @@
 import { reportingDateForInstant } from '../src/domain/alert-lifecycle';
 import { getCurrencyMeta } from '../src/domain/currencies';
 import { appendAnnotationRevision } from './annotation-store';
+import { hashSecret } from './mobile-auth';
 import type { D1Database, D1Statement } from './db-types';
 import {
   applyAlertReview,
@@ -750,7 +751,9 @@ function isAnnotationConflict(error: unknown) {
   return isUniqueConflict(error) || isReviewStateConflict(error);
 }
 
-export async function annotateMobileTransaction(db: D1Database, suppliedContext: OwnerContext, transactionId: string, body: unknown) {
+async function annotationSubject(context:FinancialContext) { return 'subjectHash' in context ? context.subjectHash : hashSecret(context.userId); }
+
+export async function annotateMobileTransaction(db: D1Database, suppliedContext: FinancialContext, transactionId: string, body: unknown) {
   const context = immutableFinancialContext(suppliedContext);
   await assertFinancialAuthority(db, context, 'ledger:review');
   boundedId(transactionId, 'transactionId');
@@ -768,7 +771,7 @@ export async function annotateMobileTransaction(db: D1Database, suppliedContext:
     annotationId = await appendAnnotationRevision(db, context, {
       id: annotationId,
       transactionId,
-      authorSubjectHash: context.subjectHash,
+      authorSubjectHash: await annotationSubject(context),
       revision,
       category: input.category,
       note: input.note,

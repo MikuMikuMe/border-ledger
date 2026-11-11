@@ -50,6 +50,11 @@ describe('manual transaction account states',()=>{
     }
     act(()=>tree.unmount());
   });
+  it('dismisses the account loading dialog outside',async()=>{
+    const {tree}=await render({phase:'loading',data:null,message:null});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Add transaction'}).props.onPress());
+    expect(tree.root.findAllByType('Modal')).toHaveLength(0);act(()=>tree.unmount());
+  });
   it('keeps duplicate review and submitted-change recovery visible',async()=>{
     native.matches=[{manualId:'manual',bankId:'bank',accountId:'boc',manualDate:'2026-11-08',bankDate:'2026-11-08',manualMerchant:'Coffee',bankMerchant:'Coffee',amountMinor:100,currency:'CNY',category:'Food',note:null,decision:'open',revision:1}];
     native.operations=[{operationId:'pending',kind:'manual_create',status:'reconciliation_required'}];

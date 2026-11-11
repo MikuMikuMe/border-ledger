@@ -1,12 +1,13 @@
 import {createRequire} from 'node:module';
 import {beforeEach,describe,expect,it,vi} from 'vitest';
+const nativeFocus=vi.hoisted(()=>vi.fn());
 const animationTrace=vi.hoisted(()=>({durations:[] as number[],delays:[] as number[]}));
 const require=createRequire(new URL('../mobile/package.json',import.meta.url));
 const React=require('react');const {create,act}=require('react-test-renderer');
-vi.mock('../mobile/node_modules/react-native/index.js',()=>({Text:'Text',View:'View',Pressable:'Pressable',Modal:'Modal',ScrollView:'ScrollView',useWindowDimensions:()=>({width:412,height:915,fontScale:1}),StyleSheet:{create:(v:unknown)=>v}}));
+vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{NativeAccessibilityFocus:{focus:nativeFocus}},Platform:{OS:'android'},AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:(node:any)=>node?.tag??null,Text:'Text',View:'View',Pressable:'Pressable',Modal:'Modal',ScrollView:'ScrollView',useWindowDimensions:()=>({width:412,height:915,fontScale:1}),StyleSheet:{create:(v:unknown)=>v}}));
 vi.mock('../mobile/node_modules/react-native-safe-area-context/lib/commonjs/index.js',()=>({SafeAreaView:'SafeAreaView',useSafeAreaInsets:()=>({top:52,bottom:24,left:0,right:0})}));
 vi.mock('@/components/ui/button',()=>({Button:'Pressable'}));
-vi.mock('@/components/ui/text',()=>({Text:'Text'}));
+vi.mock('@/components/ui/text',()=>({NativeModules:{NativeAccessibilityFocus:{focus:nativeFocus}},Platform:{OS:'android'},AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:(node:any)=>node?.tag??null,Text:'Text'}));
 vi.mock('@/components/threads/ThreadField',()=>({ThreadField:'ThreadField'}));
 vi.mock('@/features/auth/authModel',async()=>await import('../mobile/src/features/auth/authModel'));
 vi.mock('@/features/auth/presentationPolicy',()=>({LOGIN_ACTION_COLORS:{background:'#174B37',foreground:'#F4F0E6'}}));
@@ -22,6 +23,15 @@ beforeEach(()=>{animationTrace.durations.length=0;animationTrace.delays.length=0
 const render=(extra={})=>{let tree:any;act(()=>{tree=create(React.createElement(LoginScreen,{...defaults,...extra}));});return tree;};
 const control=(tree:any,label:string)=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel===label)[0];
 describe('canonical native login without auth behavior changes',()=>{
+ it('returns focus to login options after dismissal but not after About navigation',()=>{
+  vi.useFakeTimers();nativeFocus.mockClear();let tree:any;
+  act(()=>{tree=create(React.createElement(LoginScreen,defaults),{createNodeMock:(element:any)=>({tag:element.props.accessibilityLabel==='Login options'?88:17})});});
+  act(()=>control(tree,'Login options').props.onPress());act(()=>control(tree,'Dismiss login options').props.onPress());
+  act(()=>vi.runAllTimers());expect(nativeFocus).toHaveBeenCalledWith(88);
+  nativeFocus.mockClear();act(()=>control(tree,'Login options').props.onPress());act(()=>control(tree,'About').props.onPress());
+  act(()=>vi.runAllTimers());expect(nativeFocus).not.toHaveBeenCalled();act(()=>tree.unmount());vi.useRealTimers();
+ });
+ it('closes login options when tapping outside',()=>{const tree=render();act(()=>control(tree,'Login options').props.onPress());act(()=>control(tree,'Dismiss login options').props.onPress());expect(tree.root.findAll((n:any)=>n.type==='Modal')[0].props.visible).toBe(false);});
  it('does not clip the 48dp options target inside a shorter header row',()=>{const tree=render();const options=control(tree,'Login options');expect(options.parent.props.style[0].height).toBeGreaterThanOrEqual(48);expect(options.props.style({pressed:false})[0].minWidth).toBeGreaterThanOrEqual(48);expect(options.props.style({pressed:false})[0].minHeight).toBeGreaterThanOrEqual(48);});
  it('renders original copy, plain wordmark and unchecked default',()=>{const tree=render();const json=JSON.stringify(tree.toJSON());for(const text of ['Personal finance, composed.','See the flow.','Keep the perspective.','Welcome back','Passkey ready','Bank passwords never enter Border Ledger.'])expect(json).toContain(text);expect(json).not.toContain('CROSS-BORDER');expect(json).not.toContain('Private');expect(control(tree,'Stay signed in for up to 30 days').props.accessibilityState.checked).toBe(false);});
  it('passes only the chosen stay flag and keeps busy sign-in disabled',async()=>{const sign=vi.fn(async()=>{});const tree=render({onSignIn:sign});await act(async()=>control(tree,'Sign in securely').props.onPress());expect(sign).toHaveBeenLastCalledWith(false);act(()=>control(tree,'Stay signed in for up to 30 days').props.onPress());await act(async()=>control(tree,'Sign in securely').props.onPress());expect(sign).toHaveBeenLastCalledWith(true);act(()=>tree.update(React.createElement(LoginScreen,{...defaults,session:{...session,state:'signing_in'}})));expect(control(tree,'Sign in securely').props.disabled).toBe(true);});

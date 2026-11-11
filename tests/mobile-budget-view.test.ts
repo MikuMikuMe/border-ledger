@@ -47,6 +47,9 @@ describe('Android budget content',()=>{
   act(()=>tree.root.findByProps({accessibilityLabel:'Edit envelope Food'}).props.onPress());
   expect(tree.root.findByType('Modal').props.visible).toBe(true);
   act(()=>tree.root.findByProps({accessibilityLabel:'Outgoing month for Food'}).props.onChangeText('2026-11'));
+  act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Edit Food envelope'}).props.onPress());
+  act(()=>tree.root.findByProps({accessibilityLabel:'Edit envelope Food'}).props.onPress());
+  expect(tree.root.findByProps({accessibilityLabel:'Outgoing month for Food'}).props.value).toBe('2026-11');
   act(()=>tree.root.findByProps({accessibilityLabel:'Preview rollover for Food'}).props.onPress());
   expect(preview).toHaveBeenCalledWith('Food','2026-11','carry_all');expect(tree.root.findAllByType('Modal')).toHaveLength(0);
   act(()=>tree.root.findByProps({accessibilityLabel:'Edit envelope Food'}).props.onPress());

@@ -89,7 +89,7 @@ describe('Android Wealth typed write flow', () => {
     expect(JSON.stringify(tree.toJSON())).toContain('Enter a valid date');
     fill({ label: 'Event date (YYYY-MM-DD)', value: '2024-02-01' });
     choose({ label: 'Choose Event date' });
-    choose({ label: 'Close date picker' });
+    choose({ label: 'Dismiss Event date picker' });
     expect(tree.root.findByProps({ accessibilityLabel: 'Event date (YYYY-MM-DD)' }).props.value).toBe('2024-02-01');
     choose({ label: 'Choose Event date' });
     choose({ label: 'February 29, 2024' });
@@ -110,6 +110,8 @@ describe('Android Wealth typed write flow', () => {
     act(() => tree.root.findByProps({ accessibilityLabel: 'Choose Wealth action' }).props.onPress());
     expect(JSON.stringify(tree.toJSON())).toContain('Transactions');
     expect(tree.root.findByProps({ accessibilityLabel: 'Reverse event' })).toBeTruthy();
+    act(() => tree.root.findByProps({ accessibilityLabel: 'Dismiss action chooser' }).props.onPress());
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Reverse event' })).toHaveLength(0);
   });
   it('uses Web Crypto entropy when randomUUID is unavailable', () => {
     const originalCrypto = (globalThis as { crypto?: unknown }).crypto;
@@ -273,6 +275,9 @@ describe('Android Wealth typed write flow', () => {
     fill({ label: 'Amount (for example 125.00)', value: '125.00' });
     choose({ label: 'Choose a confirmed Activity record' });
     fill({ label: 'Search Activity records', value: 'Brokerage' });
+    choose({ label: 'Dismiss Choose an Activity record' });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Amount (for example 125.00)' }).props.value).toBe('125.00');
+    choose({ label: 'Choose a confirmed Activity record' });
     choose({ label: '2026-11-01 · Brokerage transfer · Everyday chequing · CAD 125.00' });
     expect(tree.root.findByProps({ accessibilityLabel: 'Choose a confirmed Activity record' }).props.accessibilityValue.text).toContain('Brokerage transfer');
     choose({ label: 'Save event' });
@@ -437,6 +442,8 @@ describe('Android Wealth typed write flow', () => {
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Choose source column for date' }).props.onPress(); });
     expect(tree.root.findAllByType('Modal')).toHaveLength(1);
     act(() => { tree.root.findByProps({ accessibilityLabel: 'posted_on for date' }).props.onPress(); });
+    act(() => { tree.root.findByProps({ accessibilityLabel: 'Dismiss column mapping' }).props.onPress(); });
+    act(() => { tree.root.findByProps({ accessibilityLabel: 'Show CSV column mapping' }).props.onPress(); });
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Re-preview mapped CSV' }).props.onPress(); });
     expect(remap).toHaveBeenCalledWith({ date: 'posted_on' });
   });

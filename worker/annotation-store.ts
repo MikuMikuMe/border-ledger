@@ -46,7 +46,9 @@ export async function appendAnnotationRevision(db: D1Database, suppliedContext: 
     input.transactionId, context.ledgerId,
     input.transactionId, context.ledgerId, input.revision - 1,
   ]);
-  await publishReview(db, context, [revisionGuard, statement]);
+  const update = db.prepare('UPDATE transactions SET category=?, note=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND ledger_id=?')
+    .bind(input.category, input.note, input.transactionId, context.ledgerId);
+  await publishReview(db, context, [revisionGuard, statement, update]);
   return id;
 }
 

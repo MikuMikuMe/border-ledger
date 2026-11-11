@@ -1,6 +1,11 @@
+import {useDismissible} from './components/useDismissible';
+import { TransactionDetail } from './components/TransactionDetail';
+import {ChartRangePicker,chartRangeLabels,type ChartRange} from './components/ChartRangePicker';
+import {StateBadge,TransactionTable} from './components/TransactionTable';
+import type { LedgerApi } from './domain/api';
 import {BudgetView} from './components/BudgetView';
 import { PrivateSession, useLedgerApi } from './components/PrivateSession';
-import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -9,14 +14,12 @@ import {
   Bell,
   BookOpen,
   Check,
-  ChevronDown,
   CircleAlert,
   CircleHelp,
   CloudUpload,
   Database,
   FileCheck2,
   FileUp,
-  Filter,
   Landmark,
   LayoutDashboard,
   Link2,
@@ -51,10 +54,10 @@ import './wealth.css';
 import MobileAuthorizationPage from './MobileAuthorizationPage';
 import { LunchFlowSection } from './lunchflow';
 import { ManualTransactions, parseAccountCurrencies } from './components/ManualTransactions';
+export {TransactionTable} from './components/TransactionTable';
 
 type View = 'overview' | 'budget' | 'recurring' | 'wealth' | 'transactions' | 'imports' | 'accounts';
 type UtilityPanel = 'notifications' | 'profile' | null;
-type ChartRange = 'daily' | 'weekly' | 'monthly';
 type AppRoute = 'landing' | 'workspace' | 'mobile-authorization';
 type AccountProvider = 'plaid' | 'lunchflow' | null;
 type AppAccount = Omit<Account, 'currency' | 'provider'> & { currency: CurrencyCode; provider: AccountProvider; currencies?: string[] };
@@ -135,12 +138,6 @@ interface ReportingPreferences {
   preferredCurrency: CurrencyCode | null;
   revision: number;
 }
-
-const chartRangeLabels: Record<ChartRange, string> = {
-  daily: 'Daily',
-  weekly: 'Weekly',
-  monthly: 'Monthly',
-};
 
 const landingWindows: ReportWindow[] = [
   { key: 'today', label: 'Today', start: '2026-10-12', end: '2026-10-12' },
@@ -331,13 +328,6 @@ function mapApiTransactionSource(value: unknown): Transaction['source'] | null {
   return ['statement', 'plaid', 'alert', 'manual', 'lunchflow'].includes(sourceValue) ? sourceValue as Transaction['source'] : null;
 }
 
-function transactionSourceLabel(source: Transaction['source']) {
-  if (source === 'plaid') return 'Plaid';
-  if (source === 'alert') return 'BOC alert';
-  if (String(source) === 'lunchflow') return 'Lunch Flow';
-  return 'Statement';
-}
-
 function mapApiTransaction(value: Record<string, unknown>): Transaction | null {
   const currency = typeof value.currency === 'string' && getCurrencyMeta(value.currency) ? value.currency : null;
   const kind = ['expense', 'income', 'transfer', 'refund', 'fee'].includes(value.kind as string) ? value.kind as Transaction['kind'] : null;
@@ -357,6 +347,7 @@ function mapApiTransaction(value: Record<string, unknown>): Transaction | null {
     source,
     fingerprint: value.fingerprint,
     note: typeof value.note === 'string' ? value.note : undefined,
+    annotationRevision: nonNegativeSafeInteger(value.annotation_revision) ?? undefined,
   };
 }
 
@@ -586,7 +577,10 @@ function WorkspaceApp() {
   const [reportStatus, setReportStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [reportError, setReportError] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const mobileNavTrigger=useRef<HTMLButtonElement>(null);
+  const closeMobileNav=()=>{setMobileNavOpen(false);mobileNavTrigger.current?.focus();};
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel>(null);
+  const {container:utilityRef,dismiss:dismissUtility} = useDismissible(utilityPanel,()=>setUtilityPanel(null));
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [plaidBusy, setPlaidBusy] = useState(false);
@@ -598,7 +592,7 @@ function WorkspaceApp() {
   const selectedWindow = (selectedWindowKey === 'custom' ? customWindow : reportingWindows.find((window) => window.key === selectedWindowKey)) ?? reportingWindows[2];
   const monthWindow = reportingWindows.find((window) => window.key === 'month') ?? reportingWindows[2];
 
-  const refreshWorkspace = async () => {
+  const refreshWorkspace = async (throwOnFailure = false) => {
     setWorkspaceStatus('loading');
     setWorkspaceError(null);
     try {
@@ -614,6 +608,7 @@ function WorkspaceApp() {
       setTransactions([]);
       setWorkspaceStatus('error');
       setWorkspaceError(connectionErrorMessage(error));
+      if (throwOnFailure === true) throw error;
     }
   };
 
@@ -731,7 +726,7 @@ function WorkspaceApp() {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setMobileNavOpen(false);
+        if(mobileNavOpen)closeMobileNav();
         setUtilityPanel(null);
       }
     };
@@ -906,7 +901,7 @@ function WorkspaceApp() {
             <p className="brand-name">Border Ledger</p>
             <p className="brand-caption">private spending desk</p>
           </div>
-          <button type="button" className="icon-button nav-close" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation"><X size={18} /></button>
+          <button type="button" className="icon-button nav-close" onClick={closeMobileNav} aria-label="Close navigation"><X size={18} /></button>
         </div>
 
         <div className="nav-section-label">Workspace</div>
@@ -936,12 +931,12 @@ function WorkspaceApp() {
       </aside>
 
       {mobileNavOpen ? (
-        <button type="button" className="nav-backdrop" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation menu" />
+        <button type="button" className="nav-backdrop" onClick={closeMobileNav} aria-label="Close navigation menu" />
       ) : null}
 
       <main className="main-column">
-        <header className="topbar">
-          <button type="button" className="icon-button mobile-menu" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-expanded={mobileNavOpen} aria-controls="mobile-navigation"><Menu size={21} /></button>
+        <div ref={utilityRef}><header className="topbar">
+          <button type="button" className="icon-button mobile-menu" ref={mobileNavTrigger} onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-expanded={mobileNavOpen} aria-controls="mobile-navigation"><Menu size={21} /></button>
           <div className="breadcrumb"><span>Personal</span><span className="breadcrumb-slash">/</span><strong>{navItems.find((item) => item.id === activeView)?.label}</strong></div>
           <div className="topbar-actions">
             <span className="sync-label"><span className="live-dot" /> {syncLabel(accounts)}</span>
@@ -952,19 +947,20 @@ function WorkspaceApp() {
 
         {utilityPanel === 'notifications' ? (
           <section id="notifications-panel" className="utility-panel" role="region" aria-label="Notifications">
-            <div className="utility-panel-heading"><div><p className="eyebrow">NOTIFICATIONS</p><h2>Review queue</h2></div><button type="button" className="icon-button" onClick={() => setUtilityPanel(null)} aria-label="Close notifications"><X size={16} /></button></div>
+            <div className="utility-panel-heading"><div><p className="eyebrow">NOTIFICATIONS</p><h2>Review queue</h2></div><button type="button" className="icon-button" onClick={dismissUtility} aria-label="Close notifications"><X size={16} /></button></div>
             <p>{alertCount} records are waiting for review.</p>
             <button type="button" className="text-button" onClick={() => { setActiveView('imports'); setUtilityPanel(null); }}>Open review desk <ArrowUpRight size={14} /></button>
           </section>
         ) : null}
         {utilityPanel === 'profile' ? (
           <section id="profile-panel" className="utility-panel" role="region" aria-label="Profile">
-            <div className="utility-panel-heading"><div><p className="eyebrow">PRIVATE SESSION</p><h2>Profile</h2></div><button type="button" className="icon-button" onClick={() => setUtilityPanel(null)} aria-label="Close profile menu"><X size={16} /></button></div>
+            <div className="utility-panel-heading"><div><p className="eyebrow">PRIVATE SESSION</p><h2>Profile</h2></div><button type="button" className="icon-button" onClick={dismissUtility} aria-label="Close profile menu"><X size={16} /></button></div>
             <p>GitHub sign-in through Cloudflare Access</p>
             <span className="utility-panel-note">This personal ledger is protected before it reaches the Worker.</span>
           </section>
         ) : null}
 
+        </div>
         {actionNotice ? <div className="notice-banner app-notice" role="status"><CircleHelp size={17} /><span>{actionNotice}</span><button type="button" className="icon-button" onClick={() => setActionNotice(null)} aria-label="Dismiss action notice"><X size={16} /></button></div> : null}
 
         <div className="page-content">
@@ -994,7 +990,7 @@ function WorkspaceApp() {
           {activeView === 'budget' ? <BudgetView api={ledgerApi} initialMonth={monthWindow.end.slice(0,7)} accounts={accounts.filter(account=>account.kind==='chequing'||account.kind==='savings').map(account=>({id:account.id,name:account.name,currency:account.currency}))} /> : null}
           {activeView === 'recurring' ? <RecurringView today={monthWindow.end} startDate={monthWindow.start} endDate={monthWindow.end} accounts={accounts} /> : null}
           {activeView === 'wealth' ? <WealthView api={ledgerApi} linkedAccounts={accounts} /> : null}
-          {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} manual={<ManualTransactions accounts={accounts} api={ledgerApi} onChanged={refreshWorkspace} />} /> : null}
+          {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} api={ledgerApi} onChanged={()=>refreshWorkspace(true)} manual={<ManualTransactions accounts={accounts} api={ledgerApi} onChanged={refreshWorkspace} />} /> : null}
           {activeView === 'imports' ? (
             <ImportsView
               accounts={accounts}
@@ -1279,7 +1275,6 @@ function Overview({
   const reviewTransactions = transactions.filter((transaction) => transaction.status === 'needs_review' || transaction.status === 'provisional').slice(0, 3);
   const reviewCount = report.reviewCount;
   const [chartRange, setChartRange] = useState<ChartRange>('daily');
-  const [chartRangeOpen, setChartRangeOpen] = useState(false);
 
   return (
     <>
@@ -1314,7 +1309,7 @@ function Overview({
 
       <section className="overview-grid">
         <div className="panel chart-panel">
-          <div className="section-heading"><div><p className="eyebrow">THE DAILY PULSE</p><h2>Spending rhythm</h2></div><div className="chart-range-control"><button type="button" className="quiet-button" onClick={() => setChartRangeOpen((open) => !open)} aria-expanded={chartRangeOpen} aria-controls="chart-range-menu">{chartRangeLabels[chartRange]} <ChevronDown size={15} /></button>{chartRangeOpen ? <div id="chart-range-menu" className="chart-range-menu" role="region" aria-label="Chart period options">{(Object.keys(chartRangeLabels) as ChartRange[]).map((range) => <button type="button" key={range} className={chartRange === range ? 'is-selected' : undefined} onClick={() => { setChartRange(range); setChartRangeOpen(false); }}>{chartRangeLabels[range]}</button>)}</div> : null}</div></div>
+          <div className="section-heading"><div><p className="eyebrow">THE DAILY PULSE</p><h2>Spending rhythm</h2></div><ChartRangePicker range={chartRange} onChange={setChartRange}/></div>
           <div className="chart-legend">{chartCurrenciesForReport(report, preferredCurrency).map((currency) => <span key={currency}><i className={`legend-dot ${currency === 'CAD' ? 'cad-dot' : currency === 'CNY' ? 'cny-dot' : ''}`} style={currency === 'CAD' || currency === 'CNY' ? undefined : { backgroundColor: 'var(--muted)' }} /> {currency}</span>)}<span className="chart-period">{chartPeriodLabel(chartRange, selectedWindow)}</span></div>
           <SpendingChart range={chartRange} report={report} includeProvisional={includeProvisional} selectedWindow={selectedWindow} preferredCurrency={preferredCurrency} />
         </div>
@@ -1389,7 +1384,8 @@ function ReviewRow({ label, detail, provisional = false }: { label: string; deta
   return <div className="review-row"><span className={`review-symbol ${provisional ? 'is-provisional' : ''}`}>{provisional ? <Bell size={13} /> : <CircleAlert size={13} />}</span><span><strong>{label}</strong><small>{detail}</small></span><MoreHorizontal size={16} className="muted-icon" /></div>;
 }
 
-function TransactionsView({ transactions, onExport, manual }: { transactions: Transaction[]; onExport: () => void; manual?: ReactNode }) {
+function TransactionsView({ transactions, onExport, manual, api, onChanged }: { transactions: Transaction[]; onExport: () => void; manual?: ReactNode; api: LedgerApi; onChanged():Promise<void> }) {
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction|null>(null);
   const [query, setQuery] = useState('');
   const [currency, setCurrency] = useState<CurrencyCode | 'all'>('all');
   const [category, setCategory] = useState<string | 'all'>('all');
@@ -1404,17 +1400,8 @@ function TransactionsView({ transactions, onExport, manual }: { transactions: Tr
     <PageIntro action={<button type="button" className="outline-button" onClick={onExport}><FileCheck2 size={16} /> Export ledger</button>}><p className="eyebrow">THE FULL LEDGER</p><h1>Transactions</h1><p className="intro-copy">Search, sort, and annotate every record without losing its source.</p></PageIntro>
     {manual}
     <section className="panel filter-panel"><div className="filter-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search merchant, category, or note" aria-label="Search transactions" />{query ? <button type="button" className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button> : null}</div><div className="filter-selects"><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value as CurrencyCode | 'all')}><option value="all">All currencies</option>{currencies.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label><span>State</span><select value={status} onChange={(event) => setStatus(event.target.value as Transaction['status'] | 'all')}><option value="all">All states</option><option value="confirmed">Confirmed</option><option value="provisional">Provisional</option><option value="needs_review">Needs review</option></select></label><button type="button" className="icon-button filter-button" onClick={() => setMoreFiltersOpen((open) => !open)} aria-label="More filters" aria-expanded={moreFiltersOpen} aria-controls="transaction-more-filters"><SlidersHorizontal size={17} /></button></div>{moreFiltersOpen ? <div id="transaction-more-filters" className="more-filters" role="region" aria-label="Additional transaction filters"><label><span>Source</span><select value={source} onChange={(event) => setSource(event.target.value as Transaction['source'] | 'all')} aria-label="Source"><option value="all">All sources</option><option value="plaid">Plaid</option><option value="statement">Statement</option><option value="alert">BOC alert</option><option value="manual">Manual</option><option value="lunchflow">Lunch Flow</option></select></label></div> : null}</section>
-    <section className="panel table-panel"><div className="table-toolbar"><span>{filtered.length} records</span><span className="table-toolbar-note"><BadgeCheck size={14} /> Confirmed and provisional states are kept distinct</span></div><TransactionTable transactions={filtered} /></section>
+    <section className="panel table-panel"><div className="table-toolbar"><span>{filtered.length} records</span><span className="table-toolbar-note"><BadgeCheck size={14} /> Confirmed and provisional states are kept distinct</span></div><TransactionTable transactions={filtered} onOpen={setSelectedTransaction} /></section>{selectedTransaction?<TransactionDetail transaction={selectedTransaction} api={api} onChanged={onChanged} onClose={()=>setSelectedTransaction(null)}/>:null}
   </>;
-}
-
-function TransactionTable({ transactions, compact = false }: { transactions: Transaction[]; compact?: boolean }) {
-  return <div className={`transaction-table-wrap ${compact ? 'is-compact' : ''}`}><table className="transaction-table"><thead><tr><th scope="col">Date</th><th scope="col">Merchant</th><th scope="col">Category</th><th scope="col">Source</th><th scope="col">State</th><th scope="col" className="amount-cell">Amount</th></tr></thead><tbody>{transactions.map((transaction) => <tr key={transaction.id}><td className="date-cell">{formatDate(transaction.date)}</td><td><strong className="merchant-name">{transaction.merchant}</strong>{transaction.note ? <small className="note-line">{transaction.note}</small> : null}</td><td><span className={`category-mark ${transaction.currency.toLowerCase()}`} />{transaction.category}</td><td><span className="source-name">{transactionSourceLabel(transaction.source)}</span></td><td><StateBadge status={transaction.status} /></td><td className={`amount-cell ${transaction.kind === 'refund' || transaction.kind === 'income' ? 'is-credit' : ''}`}>{transaction.kind === 'income' || transaction.kind === 'refund' ? '+' : transaction.kind === 'transfer' ? '↔ ' : '− '}{formatMoney(Math.abs(transaction.amountMinor), transaction.currency, { signDisplay: 'never' })}</td></tr>)}</tbody></table>{transactions.length === 0 ? <div className="empty-state"><Filter size={22} /><strong>No records match that filter.</strong><span>Try a wider search or clear one of the filters.</span></div> : null}</div>;
-}
-
-function StateBadge({ status }: { status: Transaction['status'] }) {
-  const label = status === 'needs_review' ? 'Needs review' : status === 'provisional' ? 'Provisional' : 'Confirmed';
-  return <span className={`state-badge ${status}`}><span className="state-dot" />{label}</span>;
 }
 
 async function sha256File(file: File) {
@@ -1489,7 +1476,7 @@ function PlaidAccountSelectionDialog({
 }) {
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(() => connection.accounts.map((account) => account.id));
 
-  return <section className="plaid-selection-dialog" role="dialog" aria-modal="true" aria-labelledby="plaid-account-selection-title">
+  return <section className="plaid-selection-dialog" aria-labelledby="plaid-account-selection-title">
     <div className="section-heading"><div><p className="eyebrow">PLAID ACCOUNT ACCESS</p><h2 id="plaid-account-selection-title">Choose which accounts to connect</h2></div><ShieldCheck size={20} className="section-icon" /></div>
     <p className="plaid-selection-copy"><strong>{connection.institutionName}</strong> returned these accounts. Only the ones you choose will be stored and synced.</p>
     <div className="plaid-account-list">
@@ -1562,18 +1549,19 @@ function AccountCard({ account, connectionBusy, onSync, onDisconnect, onNavigate
   const isPlaid = account.provider === 'plaid' || (account.provider === null && Boolean(account.plaidItemId));
   const providerLabel = isLunchFlow ? 'Lunch Flow' : isPlaid ? 'Plaid' : 'Ledger';
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const {container:optionsRef,dismiss:dismissOptions}=useDismissible(optionsOpen,()=>setOptionsOpen(false));
   const optionsId = useId();
   const optionsPanelId = `${optionsId}-panel`;
   const optionsTitleId = `${optionsId}-title`;
 
   return (
-    <div className={`panel account-card ${account.currency.toLowerCase()}`}>
+    <div className={`panel account-card ${account.currency.toLowerCase()}`} ref={optionsRef}>
       <div className="account-card-top"><div className="institution-mark">{isLunchFlow ? 'LF' : account.institution === 'RBC Royal Bank' ? 'RBC' : 'BOC'}</div><StateBadge status={isConnected ? 'confirmed' : 'provisional'} /></div>
       <p className="account-institution">{account.institution} · {providerLabel}</p>
       <h2>{account.name}</h2>
       <div className="account-currency"><span>{account.currency}</span><span>{account.kind}</span></div>
       <div className="account-card-foot"><span>{isConnected ? <><span className="live-dot" /> Last synced {syncTimestampLabel(account.lastSyncedAt)}</> : <><CircleAlert size={14} /> Import only · connection needed</>}</span><button type="button" className={`icon-button ${optionsOpen ? 'is-active' : ''}`} aria-label={`${optionsOpen ? 'Close' : 'Open'} ${account.name} options`} aria-expanded={optionsOpen} aria-controls={optionsPanelId} onClick={() => setOptionsOpen((open) => !open)}><MoreHorizontal size={17} /></button></div>
-      {optionsOpen ? <AccountOptions account={account} connectionBusy={connectionBusy} isConnected={isConnected} isLunchFlow={isLunchFlow} isPlaid={isPlaid} providerLabel={providerLabel} optionsPanelId={optionsPanelId} optionsTitleId={optionsTitleId} onClose={() => setOptionsOpen(false)} onSync={onSync} onDisconnect={onDisconnect} onNavigate={onNavigate} /> : null}
+      {optionsOpen ? <AccountOptions account={account} connectionBusy={connectionBusy} isConnected={isConnected} isLunchFlow={isLunchFlow} isPlaid={isPlaid} providerLabel={providerLabel} optionsPanelId={optionsPanelId} optionsTitleId={optionsTitleId} onClose={dismissOptions} onSync={onSync} onDisconnect={onDisconnect} onNavigate={onNavigate} /> : null}
     </div>
   );
 }
