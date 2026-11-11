@@ -8,6 +8,19 @@ function fixture(){
   return {ports,reads,writes,emit:()=>listener(),removed:()=>removed};
 }
 describe('native screen controller',()=>{
+  it('refreshes a missing snapshot on startup so existing accounts are available',async()=>{
+    const f=fixture();
+    f.ports.ledger.getSnapshot=async()=>null;
+    f.ports.ledger.refreshSnapshot=async()=>({...snapshot,accounts:[{id:'boc',displayName:'Bank of China',institution:'Bank of China',instrument:null,currencies:['CNY'],lastSuccessfulSyncAt:null}]});
+    const c=new FinanceController(f.ports);await c.start();
+    expect(c.snapshot.current().data?.accounts.map(account=>account.id)).toEqual(['boc']);c.dispose();
+  });
+  it('retains cached accounts when a startup refresh is offline',async()=>{
+    const f=fixture(),cached={...snapshot,accounts:[{id:'boc',displayName:'Bank of China',institution:null,instrument:null,currencies:['CNY'],lastSuccessfulSyncAt:null}]};
+    f.ports.ledger.getSnapshot=async()=>cached;f.ports.ledger.refreshSnapshot=async()=>{throw {code:'offline'};};
+    const c=new FinanceController(f.ports);await c.start();
+    expect(c.snapshot.current()).toMatchObject({phase:'offline',data:{accounts:[{id:'boc'}]}});c.dispose();
+  });
   it('loads native preferences, snapshot and full-window report without implicit FX',async()=>{
     const f=fixture(),c=new FinanceController(f.ports,()=>{},()=>new Date('2026-10-17T12:00:00Z'));
     await c.start();expect(c.report.current().data).toEqual(report);

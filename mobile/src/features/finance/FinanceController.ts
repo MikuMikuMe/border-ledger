@@ -47,6 +47,7 @@ export class FinanceController {
   async start() {
     this.subscriptions=[this.ports.ledger.onChanged(()=>{void this.reload(false);}),this.ports.recurring.onChanged(()=>{void this.loadRecurring();})];
     await Promise.all([this.recover(),this.reload(false)]);
+    if(!this.disposed)await this.reload();
   }
   async recover(){await this.mutation.recover((offset,limit)=>this.ports.session.readOperations(offset,limit));}
   async reload(refresh=true) {

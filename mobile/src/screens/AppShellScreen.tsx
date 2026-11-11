@@ -9,12 +9,12 @@ import {WealthScreen} from './WealthScreen';
 import {ShellNavigation, type Page} from './ShellNavigation';
 
 type Props = {dark: boolean; initialDestination: ShellDestination; onAbout(): void; onSignOut(): Promise<void>};
-function DestinationPanel({dark, selected, onOpen, isFocused}: {dark: boolean; selected: Page; onOpen(page: Page): void; isFocused: boolean}) {
+function DestinationPanel({dark, selected, onOpen, isFocused, manualRequest}: {dark: boolean; selected: Page; onOpen(page: Page): void; isFocused: boolean; manualRequest: number}) {
   const [recurringId, setRecurringId] = useState<string | null>(null);
   useEffect(() => setRecurringId(null), [selected]);
   if (selected === 'budget') return <BudgetScreen dark={dark}/>;
   if (selected === 'wealth') return <WealthScreen dark={dark} isFocused={isFocused}/>;
-  if (selected === 'overview' || selected === 'activity') return <FinanceScreen dark={dark} destination={selected}/>;
+  if (selected === 'overview' || selected === 'activity') return <FinanceScreen dark={dark} destination={selected} manualRequest={manualRequest}/>;
   if (selected === 'recurring') return <>
     <FinanceScreen dark={dark} destination="recurring" onOpenRecurring={setRecurringId}/>
     <DetailsScreen dark={dark} destination="recurring" recurringId={recurringId} onCloseRecurring={() => setRecurringId(null)}/>
@@ -25,5 +25,5 @@ function DestinationPanel({dark, selected, onOpen, isFocused}: {dark: boolean; s
 }
 export function AppShellScreen(props: Props) {
   const isFocused = useIsFocused();
-  return <ShellNavigation {...props} isFocused={isFocused} renderPage={(page, onOpen) => <DestinationPanel dark={props.dark} selected={page} onOpen={onOpen} isFocused={isFocused}/>}/>;
+  return <ShellNavigation {...props} isFocused={isFocused} renderPage={(page, onOpen, manualRequest) => <DestinationPanel dark={props.dark} selected={page} onOpen={onOpen} isFocused={isFocused} manualRequest={manualRequest}/>}/>;
 }
