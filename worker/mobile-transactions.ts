@@ -1,22 +1,16 @@
 import type { LedgerContext } from './tenant-context';
+import { decodeCursor, encodeCursor, type TransactionCursor } from './transaction-cursor';
 import { getCurrencyMeta } from '../src/domain/currencies';
 import type { D1Database } from './db-types';
 import { notSupersededAlertTransactionPredicate } from './ledger-reports';
 
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
-const MAX_CURSOR_LENGTH = 512;
 const MAX_QUERY_LENGTH = 120;
 const MAX_CATEGORY_LENGTH = 80;
-const MAX_ID_LENGTH = 128;
 
 const VALID_STATUSES = new Set(['confirmed', 'provisional', 'needs_review']);
 const VALID_SOURCES = new Set(['statement', 'plaid', 'alert', 'manual', 'lunchflow']);
-
-interface TransactionCursor {
-  date: string;
-  id: string;
-}
 
 interface TransactionRow {
   id: string;
@@ -35,28 +29,6 @@ interface TransactionRow {
 
 function invalid(message: string): never {
   throw new RangeError(message);
-}
-
-function encodeCursor(value: TransactionCursor) {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
-  let binary = '';
-  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function decodeCursor(value: string | null): TransactionCursor | null {
-  if (value === null) return null;
-  if (value.length === 0 || value.length > MAX_CURSOR_LENGTH || !/^[A-Za-z0-9_-]+$/.test(value)) invalid('The transaction cursor is not valid.');
-  try {
-    const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4));
-    const parsed = JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)))) as Partial<TransactionCursor>;
-    if (typeof parsed.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ||
-        typeof parsed.id !== 'string' || parsed.id.length === 0 || parsed.id.length > MAX_ID_LENGTH) invalid('The transaction cursor is not valid.');
-    return { date: parsed.date, id: parsed.id };
-  } catch (error) {
-    if (error instanceof RangeError) throw error;
-    invalid('The transaction cursor is not valid.');
-  }
 }
 
 function pageQuery(params: URLSearchParams) {
