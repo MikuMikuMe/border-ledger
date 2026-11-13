@@ -41,7 +41,7 @@ function BottomItem({page, active, dark, onSelect}: {page: Page; active: boolean
 }
 function BottomBar({selected, dark, onSelect}: {selected: Page; dark: boolean; onSelect(page: Page): void}) {
   const active = primary.includes(selected) ? selected : 'more';
-  return <View accessibilityRole="tablist" style={[styles.bar, themeStyles[Number(dark)].rule]}>
+  return <View accessibilityRole="tablist" style={[styles.bar, themeStyles[Number(dark)].rule, dark && styles.darkBar]}>
     {primary.map(page => <BottomItem key={page} page={page} active={active === page} dark={dark} onSelect={onSelect}/>)}
   </View>;
 }
@@ -59,8 +59,8 @@ function MorePage({dark, onOpen, onAbout, onSignOut, busy, status}: {dark: boole
     {ledgerLinks.map(page => <NavigationRow key={page} page={page} dark={dark} onOpen={onOpen}/>)}
     <Text accessibilityRole="header" style={[styles.section, themeStyles[Number(dark)].muted]}>App and account</Text>
     <NavigationRow page="settings" dark={dark} onOpen={onOpen}/>
-    <Pressable accessibilityRole="button" onPress={onAbout} style={styles.row}><Text style={[styles.rowTitle, themeStyles[Number(dark)].text]}>About Border Ledger</Text></Pressable>
-    <Pressable accessibilityRole="button" accessibilityState={{disabled: busy}} disabled={busy} onPress={onSignOut} style={styles.row}><Text style={[styles.signOut, themeStyles[Number(dark)].error]}>{busy ? 'Signing out…' : 'Sign out'}</Text></Pressable>
+    <Pressable accessibilityRole="button" onPress={onAbout} android_ripple={themeStyles[Number(dark)].ripple} style={styles.row}><Text style={[styles.rowTitle, themeStyles[Number(dark)].text]}>About Border Ledger</Text></Pressable>
+    <Pressable accessibilityRole="button" accessibilityState={{disabled: busy}} disabled={busy} onPress={onSignOut} android_ripple={themeStyles[Number(dark)].ripple} style={styles.row}><Text style={[styles.signOut, themeStyles[Number(dark)].error]}>{busy ? 'Signing out…' : 'Sign out'}</Text></Pressable>
     {status ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.signOut, themeStyles[Number(dark)].error]}>{status}</Text> : null}
   </>;
 }
@@ -87,8 +87,8 @@ function QuickAdd({dark, open, onToggle, onManual}: {dark: boolean; open: boolea
   const trigger=useRef<React.ComponentRef<typeof View>>(null);
   const {remember,suppress}=useAccessibilityReturnFocus(open);
   return <View style={styles.quickAdd}>
-    {open ? <Pressable accessibilityRole="button" accessibilityLabel="Manual transaction" onPress={()=>{suppress();onManual(trigger);}} style={[styles.addMenu, dark && styles.addMenuDark]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>Manual transaction</Text></Pressable> : null}
-    <Pressable ref={trigger} accessibilityRole="button" accessibilityLabel="Add transaction options" accessibilityState={{expanded: open}} onPress={()=>{if(!open)remember(trigger);onToggle();}} style={[styles.addButton, dark && styles.addButtonDark]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>+ Add</Text></Pressable>
+    {open ? <Pressable accessibilityRole="button" accessibilityLabel="Manual transaction" onPress={()=>{suppress();onManual(trigger);}} style={({pressed}) => [styles.addMenu, dark && styles.addMenuDark, pressed && styles.pressed]}><Text style={[styles.addLabel, dark && styles.addLabelDark]}>Manual transaction</Text></Pressable> : null}
+    <Pressable ref={trigger} accessibilityRole="button" accessibilityLabel="Add transaction options" accessibilityState={{expanded: open}} onPress={()=>{if(!open)remember(trigger);onToggle();}} style={({pressed}) => [styles.addButton, dark && styles.addButtonDark, pressed && styles.pressed]}><Text style={[styles.addLabel, styles.addButtonLabel, dark && styles.addButtonLabelDark]}>+ Add</Text></Pressable>
   </View>;
 }
 export function ShellNavigation({dark, initialDestination, isFocused = true, onAbout, onSignOut, renderPage}: Props) {
@@ -112,7 +112,7 @@ export function ShellNavigation({dark, initialDestination, isFocused = true, onA
   };
   return <ManualEntryFocusContext.Provider value={setManualOpen}><SafeAreaView style={[styles.safe, themeStyles[Number(dark)].safe]} edges={['top', 'bottom', 'left', 'right']}>
     <View style={styles.header}>
-      {canGoBack ? <Pressable accessibilityRole="button" accessibilityLabel={`Back to ${titles[path[path.length - 2]]}`} onPress={() => setPath(backPath(path))} style={styles.back}><Text style={[styles.backText, themeStyles[Number(dark)].text]}>Back</Text></Pressable> : null}
+      {canGoBack ? <Pressable accessibilityRole="button" accessibilityLabel={`Back to ${titles[path[path.length - 2]]}`} onPress={() => setPath(backPath(path))} android_ripple={themeStyles[Number(dark)].ripple} style={styles.back}><Text style={[styles.backText, themeStyles[Number(dark)].text]}>Back</Text></Pressable> : null}
       <Text accessibilityRole="header" style={[styles.title, themeStyles[Number(dark)].text]}>{titles[selected]}</Text>
     </View>
     <ScrollView ref={scroll} keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, selected === 'activity' && styles.activityContent]}>
@@ -135,25 +135,27 @@ const styles = StyleSheet.create({
   activityContent: {paddingBottom: 100},
   menuBackdrop: {position: 'absolute', top: 0, bottom: 0, left: 0, right: 0},
   quickAdd: {position: 'absolute', right: 22, bottom: 108, alignItems: 'flex-end', gap: 8},
-  addButton: {minHeight: 48, minWidth: 92, paddingHorizontal: 18, justifyContent: 'center', alignItems: 'center', borderRadius: 12, backgroundColor: '#D2E9DF'},
-  addButtonDark: {backgroundColor: '#244C3D'},
+  addButton: {minHeight: 48, minWidth: 92, paddingHorizontal: 18, justifyContent: 'center', alignItems: 'center', borderRadius: 12, backgroundColor: '#1B6B5B'},
+  addButtonDark: {backgroundColor: '#83C9B1'},
   addMenu: {minHeight: 48, paddingHorizontal: 16, justifyContent: 'center', borderRadius: 8, borderWidth: 1, borderColor: '#D2CCC0', backgroundColor: '#FBF9F4'},
   addMenuDark: {backgroundColor: '#1D2925', borderColor: '#43534B'},
   addLabel: {fontFamily: 'DMSans', fontSize: 16, fontWeight: '600', color: '#174B37'},
   addLabelDark: {color: '#EEF1E8'},
+  addButtonLabel: {color: '#FFFFFF'}, addButtonLabelDark: {color: '#102820'},
   section: {fontFamily: 'DMSans', fontSize: 14, fontWeight: '600', color: '#68706D', marginTop: 28, marginBottom: 8},
   row: {minHeight: 56, paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#D2CCC0'},
   rowTitle: {fontFamily: 'DMSans', fontSize: 18, color: '#18201F', fontWeight: '500'},
   description: {fontFamily: 'DMSans', fontSize: 14, lineHeight: 21, color: '#68706D', marginTop: 4},
-  bar: {flexDirection: 'row', padding: 8, gap: 4, borderTopWidth: 1, borderColor: '#D2CCC0'},
+  bar: {flexDirection: 'row', padding: 8, gap: 4, borderTopWidth: 1, borderColor: '#D2CCC0', backgroundColor: '#FBF9F4'},
   tab: {flex: 1, minHeight: 56, alignItems: 'center', justifyContent: 'center', borderRadius: 8, paddingVertical: 10},
   tabText: {fontFamily: 'DMSans', fontSize: 13, fontWeight: '500', color: '#4F5C56'},
   activeTab: {backgroundColor: '#DEE7DE'}, activeText: {color: '#174B37', fontWeight: '700'},
   signOut: {fontFamily: 'DMSans', fontSize: 16, color: '#A83F3F'}, pressed: {opacity: 0.65},
   darkText: {color: '#EEF1E8'}, darkMuted: {color: '#B1BDB5'}, darkRule: {borderColor: '#43534B'},
+  darkBar: {backgroundColor: '#17221D'},
   darkActive: {backgroundColor: '#244C3D'}, darkError: {color: '#FFB4AB'},
 });
 const themeStyles = [
-  {text: undefined, muted: undefined, rule: undefined, safe: undefined, error: undefined},
-  {text: styles.darkText, muted: styles.darkMuted, rule: styles.darkRule, safe: styles.darkSafe, error: styles.darkError},
+  {text: undefined, muted: undefined, rule: undefined, safe: undefined, error: undefined, ripple: {color: '#1B6B5B33'}},
+  {text: styles.darkText, muted: styles.darkMuted, rule: styles.darkRule, safe: styles.darkSafe, error: styles.darkError, ripple: {color: '#FFFFFF33'}},
 ];

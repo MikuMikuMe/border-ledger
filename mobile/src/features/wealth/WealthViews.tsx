@@ -191,11 +191,10 @@ function FxSummary({ dark, data }: { dark: boolean; data: WealthWireSnapshot }) 
 }
 
 export function WealthOverview({ dark, data, onAction }: { dark: boolean; data: WealthWireSnapshot; onAction: (action: string, body?: string) => void }) {
-  const colors = theme(dark);
   const totals = Object.entries(data.totalByCurrency);
   return <View style={styles.sectionGroup}>
     <Copy dark={dark} heading>Net worth</Copy><Status dark={dark} data={data}/>
-    <View accessibilityRole="summary" style={[styles.totalStrip, { borderColor: colors.rule, backgroundColor: colors.panel }]}>{totals.length ? totals.map(([currency, amount]) => <View key={currency} style={styles.total}><Text style={[styles.totalValue, { color: colors.ink }]}>{money(amount, currency)}</Text><Text style={[styles.totalLabel, { color: colors.muted }]}>{currency} total</Text></View>) : <Copy dark={dark} muted>No valued balances yet.</Copy>}</View>
+    <View accessibilityRole="summary" style={[styles.totalStrip, { borderColor: '#1D302B', backgroundColor: '#1D302B' }]}>{totals.length ? totals.map(([currency, amount]) => <View key={currency} style={styles.total}><Text style={[styles.totalValue, { color: '#F8F5EE' }]}>{money(amount, currency)}</Text><Text style={[styles.totalLabel, { color: '#B1BDB5' }]}>{currency} total</Text></View>) : <Copy dark muted>No valued balances yet.</Copy>}</View>
     <FxSummary dark={dark} data={data}/>
     <Copy dark={dark} heading>Net worth history</Copy><HistoryChart dark={dark} data={data}/><HistoryTable dark={dark} data={data}/>
     <View style={styles.actionRow}><Action dark={dark} label="Add a dated balance or price" onPress={() => onAction('valuation')}/><Action dark={dark} label="Refresh Wealth report" onPress={() => onAction('refresh')}/></View>

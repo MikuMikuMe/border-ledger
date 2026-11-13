@@ -20,6 +20,20 @@ const text=(tree:any)=>JSON.stringify(tree.toJSON());
 const ready=(data:unknown)=>({phase:'ready',message:null,data});
 const actions={onRetry:()=>{},onLens:()=>{},onFilter:()=>{},onOpen:()=>{},onLoadMore:()=>{},onClose:()=>{},onSave:()=>{},onDraft:()=>{}};
 describe('native financial view fixtures and accessibility',()=>{
+  it('distinguishes CNY spending bars with the ledger currency color',()=>{
+    const cnyReport={...report,dailyTotals:[{date:'2026-10-17',currency:'CNY',confirmedMinorUnits:'2000',provisionalMinorUnits:'0'}]};
+    const tree=render(OverviewView,{...actions,dark:false,state:ready(cnyReport),snapshot:null,lens:{window:'Month',source:null,target:null,include:false},currencies:['CAD','CNY']});
+    const bar=tree.root.findAll((node:any)=>node.type==='Pressable'&&node.props.accessibilityLabel?.includes(', CNY,'))[0];
+    expect(bar.findByType('View').props.style[1].backgroundColor).toBe('#B04E36');
+    act(()=>tree.unmount());
+  });
+  it('gives the report filters immediate Android touch feedback in both themes',()=>{
+    for(const dark of [false,true]){
+      const tree=render(OverviewView,{...actions,dark,state:ready(report),snapshot:null,lens:{window:'Month',source:null,target:null,include:false},currencies:['CAD','CNY']});
+      expect(tree.root.findByProps({accessibilityLabel:'Report filters'}).props.android_ripple?.color).toBeTruthy();
+      act(()=>tree.unmount());
+    }
+  });
   it('dismisses an unchanged Activity detail on backdrop press and confirms a dirty draft',()=>{
     const onClose=vi.fn();
     const props={...actions,onClose,dark:false,state:ready({items:[transaction],nextCursor:null,limit:50}),filters:{},selected:transaction,draft:{category:transaction.category??'',note:transaction.note??''},mutation:{blocked:false,status:'ready'}};

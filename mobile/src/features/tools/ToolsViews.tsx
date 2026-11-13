@@ -27,7 +27,7 @@ function ToolLabel({dark,children}:{dark:boolean;children:React.ReactNode}){
 }
 
 function Check({dark,label,checked,onPress,disabled=false}:{dark:boolean;label:string;checked:boolean;onPress():void;disabled?:boolean}){
- return <Pressable accessibilityRole="checkbox" accessibilityLabel={label} accessibilityState={{checked,disabled}} disabled={disabled} onPress={onPress} style={{minHeight:48,borderWidth:1,borderRadius:12,borderColor:dark?'#43534B':'#D2CCC0',padding:12,justifyContent:'center',opacity:disabled?0.6:1}}><Text style={{color:dark?'#EEF1E8':'#18201F',fontFamily:'DMSans',fontSize:15}}>{label} · {checked?'On':'Off'}</Text></Pressable>;
+ return <Pressable accessibilityRole="checkbox" accessibilityLabel={label} accessibilityState={{checked,disabled}} disabled={disabled} onPress={onPress} android_ripple={{color:dark?'#FFFFFF33':'#1B6B5B33'}} style={{minHeight:48,borderWidth:1,borderRadius:12,borderColor:dark?'#43534B':'#D2CCC0',padding:12,justifyContent:'center',opacity:disabled?0.6:1}}><Text style={{color:dark?'#EEF1E8':'#18201F',fontFamily:'DMSans',fontSize:15}}>{label} · {checked?'On':'Off'}</Text></Pressable>;
 }
 
 function Field({dark,label,value,onChange}:{dark:boolean;label:string;value:string;onChange(v:string):void}){
