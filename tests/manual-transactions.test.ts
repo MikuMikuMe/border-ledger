@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import { createManualTransaction, listManualMatches, decideManualMatch } from '../worker/manual-transactions';
+import { readOwnerLedgerSnapshot } from '../worker/owner-ledger-snapshot';
 import { readBudgetActivity } from '../worker/budget-activity';
 import { readMobileTransactionPage } from '../worker/mobile-transactions';
 
@@ -8,6 +9,37 @@ const owner = { userId: 'owner', ledgerId: 'personal' };
 const entry = { requestId: '6a34f000-4dc5-4fb8-a535-7bc60ce77ed6', accountId: 'acct', date: '2026-11-07', merchant: 'Coffee', amount: '12.34', currency: 'CAD', category: 'Food', kind: 'expense', note: null };
 
 describe('manual transaction creation', () => {
+  it.each([['CNY','12.34',-1234],['USD','12.34',-1234],['CAD','12.34',-1234],['JPY','1234',-1234]])('records %s on a CNY account without granting capture scopes', async (currency,amount,minor) => {
+    const fixture=createSqliteD1Fixture();
+    try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CNY','chequing','connected','personal')").run();
+      const input={...entry,currency,amount};
+      const saved=await createManualTransaction(fixture.db,owner,input);
+      expect(await createManualTransaction(fixture.db,owner,input)).toEqual(saved);
+      expect(await fixture.db.prepare('SELECT currency,amount_minor FROM transactions WHERE id=?').bind(saved.id).first()).toEqual({currency,amount_minor:minor});
+      expect((await fixture.db.prepare('SELECT * FROM device_source_scopes').all()).results).toHaveLength(0);
+      expect((await readOwnerLedgerSnapshot(fixture.db,owner)).accounts[0].currencies[0]).toBe('CNY');
+      expect((await readMobileTransactionPage(fixture.db,owner,new URLSearchParams())).items).toEqual([expect.objectContaining({id:saved.id,currency})]);
+      expect(await readBudgetActivity(fixture.db,owner,{from:'2026-11-01',to:'2026-11-30',currency})).toHaveLength(1);
+    } finally {fixture.close();}
+  });
+  it('matches bank entries in the selected currency without matching another currency', async () => {
+    const fixture=createSqliteD1Fixture();
+    try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CNY','chequing','connected','personal')").run();
+      const saved=await createManualTransaction(fixture.db,owner,{...entry,currency:'USD'});
+      for (const currency of ['USD','CNY']) await fixture.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES(?,'acct','2026-11-08','Coffee',-1234,?,'Food','expense','confirmed','plaid',?,'personal')").bind(`bank-${currency}`,currency,`bank-${currency}`).run();
+      expect(await listManualMatches(fixture.db,owner)).toEqual([expect.objectContaining({manualId:saved.id,bankId:'bank-USD',currency:'USD'})]);
+    } finally {fixture.close();}
+  });
+  it('rejects unknown currencies and JPY fractions', async () => {
+    const fixture=createSqliteD1Fixture();
+    try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CNY','chequing','connected','personal')").run();
+      await expect(createManualTransaction(fixture.db,owner,{...entry,currency:'ZZZ'})).rejects.toThrow();
+      await expect(createManualTransaction(fixture.db,owner,{...entry,currency:'JPY',amount:'1.01'})).rejects.toThrow();
+    } finally {fixture.close();}
+  });
   it('stores one confirmed transaction and provenance across retries', async () => {
     const fixture = createSqliteD1Fixture();
     try {
