@@ -35,9 +35,10 @@ export async function createManualTransaction(db: D1Database, authority: Financi
   const sourceId = await ledgerScopedIdentifier(context, 'manual-source', `manual-source-${requestId}`);
   const content = JSON.stringify([accountId, date, merchant, amountMinor, currency, category, kind, note]);
   const digest = await sha256(content);
-  const account = await db.prepare('SELECT 1 FROM accounts a JOIN account_currencies c ON c.account_id=a.id AND c.ledger_id=a.ledger_id WHERE a.id=? AND a.ledger_id=? AND c.currency=?').bind(accountId, context.ledgerId, currency).first();
+  const account = await db.prepare('SELECT 1 FROM accounts WHERE id=? AND ledger_id=?').bind(accountId, context.ledgerId).first();
   if (!account) throw new RangeError('Account or currency is not available.');
   await publishManual(db, context, [
+    db.prepare('INSERT OR IGNORE INTO account_currencies(ledger_id,account_id,currency) VALUES(?,?,?)').bind(context.ledgerId,accountId,currency),
     db.prepare(`INSERT OR IGNORE INTO transactions(id,ledger_id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,note,fx_lock_date)
       VALUES(?,?,?,?,?,?,?,?,?,'confirmed','manual',?,?,?)`).bind(id, context.ledgerId, accountId, date, merchant, amountMinor, currency, category, kind, digest, note, date),
     db.prepare(`INSERT OR IGNORE INTO transaction_source_records(id,ledger_id,source_kind,identity_key,transaction_id,account_id,manual_id,content_digest)

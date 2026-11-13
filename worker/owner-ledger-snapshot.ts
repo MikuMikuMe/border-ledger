@@ -137,7 +137,7 @@ export async function readOwnerLedgerSnapshot(db: D1Database, context: LedgerCon
       displayName: row.name,
       institution: row.institution,
       instrument: row.kind,
-      currencies: [],
+      currencies: [row.currency],
       lastSuccessfulSyncAt: row.last_synced_at,
     };
     const currency = row.account_currency ?? row.currency;

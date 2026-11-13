@@ -86,6 +86,34 @@ describe('native financial view fixtures and accessibility',()=>{
     act(()=>tree.root.findByProps({accessibilityLabel:'Dismiss Add transaction'}).props.onPress());
     expect(confirmDiscard).toHaveBeenCalled();expect(onClose).not.toHaveBeenCalled();
   });
+  it('offers quick currencies and searches additional supported currencies',()=>{
+    let draft={accountId:'account',date:'2026-11-07',merchant:'Coffee',amount:'12',currency:'CNY',kind:'expense',direction:'out',category:'Food',note:''};
+    const account={id:'account',displayName:'BOC',institution:'Bank',instrument:null,currencies:['CNY'],lastSuccessfulSyncAt:null};
+    const props=()=>({dark:false,accounts:[account],draft,onDraft:(value:typeof draft)=>{draft=value;},mutation:{blocked:false,status:'ready'},onSave:()=>{},onClose:()=>{}});
+    const tree=render(ManualEntryForm,props());
+    expect(tree.root.findByProps({accessibilityLabel:'USD'})).toBeTruthy();
+    act(()=>tree.root.findByProps({accessibilityLabel:'More currencies'}).props.onPress());
+    act(()=>tree.root.findByProps({accessibilityLabel:'Search currencies'}).props.onChangeText('euro'));
+    act(()=>tree.root.findByProps({accessibilityLabel:'EUR'}).props.onPress());
+    expect(draft.currency).toBe('EUR');
+    act(()=>tree.update(React.createElement(ManualEntryForm,props())));
+    expect(tree.root.findByProps({accessibilityLabel:'EUR'}).props.accessibilityState.selected).toBe(true);
+  });
+  it('keeps the selection on picker cancellation and defaults when changing accounts',()=>{
+    let draft={accountId:'boc',date:'2026-11-07',merchant:'Coffee',amount:'1.01',currency:'CNY',kind:'expense',direction:'out',category:'Food',note:''};
+    const accounts=[{id:'boc',displayName:'BOC',institution:'Bank',instrument:null,currencies:['CNY'],lastSuccessfulSyncAt:null},{id:'rbc',displayName:'RBC',institution:'Bank',instrument:null,currencies:['CAD'],lastSuccessfulSyncAt:null}];
+    const save=vi.fn(),props=()=>({dark:false,accounts,draft,onDraft:(value:typeof draft)=>{draft=value;},mutation:{blocked:false,status:'ready'},onSave:save,onClose:()=>{}});
+    const tree=render(ManualEntryForm,props());
+    act(()=>tree.root.findByProps({accessibilityLabel:'More currencies'}).props.onPress());
+    act(()=>tree.root.findByProps({accessibilityLabel:'Hide currencies'}).props.onPress());
+    expect(draft.currency).toBe('CNY');
+    act(()=>tree.root.findByProps({accessibilityLabel:'JPY'}).props.onPress());
+    act(()=>tree.update(React.createElement(ManualEntryForm,props())));
+    act(()=>tree.root.findByProps({accessibilityLabel:'Save transaction'}).props.onPress());
+    expect(save).not.toHaveBeenCalled();
+    act(()=>tree.root.findByProps({accessibilityLabel:'Bank RBC'}).props.onPress());
+    expect(draft.currency).toBe('CAD');
+  });
   it('prevents invalid currency precision from being submitted',()=>{
     const onSave=vi.fn();
     const draft={accountId:'account',date:'2026-11-07',merchant:'Coffee',amount:'1.001',currency:'CAD',kind:'expense',direction:'out',category:'Food',note:''};
