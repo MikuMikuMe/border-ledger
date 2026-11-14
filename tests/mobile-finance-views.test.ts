@@ -25,6 +25,7 @@ describe('native financial view fixtures and accessibility',()=>{
     const tree=render(OverviewView,{...actions,dark:false,state:ready(cnyReport),snapshot:null,lens:{window:'Month',source:null,target:null,include:false},currencies:['CAD','CNY']});
     const bar=tree.root.findAll((node:any)=>node.type==='Pressable'&&node.props.accessibilityLabel?.includes(', CNY,'))[0];
     expect(bar.findByType('View').props.style[1].backgroundColor).toBe('#B04E36');
+    expect(bar.props.android_ripple?.color).toBeTruthy();
     act(()=>tree.unmount());
   });
   it('gives the report filters immediate Android touch feedback in both themes',()=>{

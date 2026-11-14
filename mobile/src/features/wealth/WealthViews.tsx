@@ -7,8 +7,8 @@ import { parseMoneyMinor } from '../../../../src/domain/currencies';
 import type { CanonicalInstrument } from '../../../../src/domain/wealth-types';
 import { createSecureIdentifier } from './identity';
 
-const light = { canvas: '#F3EFE6', ink: '#18201F', muted: '#68706D', rule: '#D2CCC0', signal: '#1B6B5B', danger: '#A83F3F', panel: '#F8F5EE' };
-const darkTheme = { canvas: '#101715', ink: '#EEF1E8', muted: '#B1BDB5', rule: '#43534B', signal: '#83C9B1', danger: '#FFB4AB', panel: '#17221D' };
+const light = { canvas: '#F3EFE6', ink: '#18201F', muted: '#68706D', rule: '#D2CCC0', signal: '#1B6B5B', danger: '#A83F3F', panel: '#F8F5EE', ripple: '#1B6B5B33' };
+const darkTheme = { canvas: '#101715', ink: '#EEF1E8', muted: '#B1BDB5', rule: '#43534B', signal: '#83C9B1', danger: '#FFB4AB', panel: '#17221D', ripple: '#FFFFFF33' };
 const theme = (dark: boolean) => dark ? darkTheme : light;
 
 const money = (value: number | null | undefined, currency: string) => value === null || value === undefined || !Number.isFinite(value) ? 'Unavailable' : `${currency} ${(value / 100).toFixed(2)}`;
@@ -89,7 +89,7 @@ function DateChooser({dark,name,month,value,onMonth,onChoose,onClose,colors,redu
   const next=new Date(first);next.setUTCMonth(next.getUTCMonth()+1);next.setUTCDate(0);
   const title=new Intl.DateTimeFormat('en',{month:'long',year:'numeric',timeZone:'UTC'}).format(first);
   const shift=(delta:number)=>{const index=year*12+number-1+delta,y=Math.floor(index/12);if(y<1||y>9999)return;onMonth(`${String(y).padStart(4,'0')}-${String(index%12+1).padStart(2,'0')}`);};
-  return <Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={onClose}><View style={styles.mappingModalBackdrop}><Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${name} picker`} onPress={onClose} style={StyleSheet.absoluteFill}/><View accessibilityViewIsModal style={[styles.mappingModal,{backgroundColor:colors.panel,borderColor:colors.rule}]}><Copy dark={dark} heading>{`Choose ${name}`}</Copy><ScrollView><View style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8}}><Action dark={dark} label="Previous year" text="− year" onPress={()=>shift(-12)}/><Action dark={dark} label="Previous month" text="Previous" onPress={()=>shift(-1)}/><Copy dark={dark} heading>{title}</Copy><Action dark={dark} label="Next month" text="Next" onPress={()=>shift(1)}/><Action dark={dark} label="Next year" text="+ year" onPress={()=>shift(12)}/></View><View style={{flexDirection:'row',flexWrap:'wrap'}}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(day=><View key={day} style={{width:'14.285%',alignItems:'center'}}><Text accessible accessibilityLabel={day} style={{fontSize:14,color:colors.muted}}>{day[0]}</Text></View>)}{Array.from({length:first.getUTCDay()},(_,i)=><View key={`blank-${i}`} style={{width:'14.285%'}}/>)}{Array.from({length:next.getUTCDate()},(_,i)=>{const day=i+1,date=`${month}-${String(day).padStart(2,'0')}`;return <Pressable key={date} accessibilityRole="radio" accessibilityLabel={`${title.split(' ')[0]} ${day}, ${year}`} accessibilityState={{checked:date===value}} onPress={()=>onChoose(date)} style={{width:'14.285%',minHeight:48,alignItems:'center',justifyContent:'center',backgroundColor:date===value?(dark?'#244C3D':'#DEE7DE'):'transparent'}}><Text style={[styles.copy,{color:colors.ink}]}>{day}</Text></Pressable>;})}</View></ScrollView><Action dark={dark} label="Close date picker" onPress={onClose}/></View></View></Modal>;
+  return <Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={onClose}><View style={styles.mappingModalBackdrop}><Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${name} picker`} onPress={onClose} style={StyleSheet.absoluteFill}/><View accessibilityViewIsModal style={[styles.mappingModal,{backgroundColor:colors.panel,borderColor:colors.rule}]}><Copy dark={dark} heading>{`Choose ${name}`}</Copy><ScrollView><View style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8}}><Action dark={dark} label="Previous year" text="− year" onPress={()=>shift(-12)}/><Action dark={dark} label="Previous month" text="Previous" onPress={()=>shift(-1)}/><Copy dark={dark} heading>{title}</Copy><Action dark={dark} label="Next month" text="Next" onPress={()=>shift(1)}/><Action dark={dark} label="Next year" text="+ year" onPress={()=>shift(12)}/></View><View style={{flexDirection:'row',flexWrap:'wrap'}}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(day=><View key={day} style={{width:'14.285%',alignItems:'center'}}><Text accessible accessibilityLabel={day} style={{fontSize:14,color:colors.muted}}>{day[0]}</Text></View>)}{Array.from({length:first.getUTCDay()},(_,i)=><View key={`blank-${i}`} style={{width:'14.285%'}}/>)}{Array.from({length:next.getUTCDate()},(_,i)=>{const day=i+1,date=`${month}-${String(day).padStart(2,'0')}`;return <Pressable key={date} accessibilityRole="radio" accessibilityLabel={`${title.split(' ')[0]} ${day}, ${year}`} accessibilityState={{checked:date===value}} onPress={()=>onChoose(date)} android_ripple={{color:colors.ripple}} style={{width:'14.285%',minHeight:48,alignItems:'center',justifyContent:'center',backgroundColor:date===value?(dark?'#244C3D':'#DEE7DE'):'transparent'}}><Text style={[styles.copy,{color:colors.ink}]}>{day}</Text></Pressable>;})}</View></ScrollView><Action dark={dark} label="Close date picker" onPress={onClose}/></View></View></Modal>;
 }
 
 function Status({ dark, data }: { dark: boolean; data: WealthWireSnapshot }) {
@@ -768,7 +768,7 @@ function CsvHeaderPicker({ dark, canonical, current, sourceHeaders, onChoose, on
 
 function CsvMappingDisclosure({ dark, expanded, matchedCount, total, onToggle,onActivate }: { dark: boolean; expanded: boolean; matchedCount: number; total: number; onToggle: () => void; onActivate:(ref:FocusTarget)=>void }) {
   const colors = theme(dark),ref=useRef<React.ComponentRef<typeof View>>(null);
-  return <Pressable ref={ref} accessibilityRole="button" accessibilityLabel="Show CSV column mapping" accessibilityState={{ expanded }} onPress={()=>{if(!expanded)onActivate(ref);onToggle();}} style={styles.mappingDisclosure}>
+  return <Pressable ref={ref} accessibilityRole="button" accessibilityLabel="Show CSV column mapping" accessibilityState={{ expanded }} onPress={()=>{if(!expanded)onActivate(ref);onToggle();}} android_ripple={{color:colors.ripple}} style={styles.mappingDisclosure}>
     <View style={styles.mappingDisclosureText}><Copy dark={dark} heading>Column mapping</Copy><Text style={[styles.mappingSummary, { color: colors.muted }]}>{matchedCount} of {total} fields matched · optional</Text></View>
     <Text style={[styles.mappingDisclosureAction, { color: colors.signal }]}>{expanded ? 'Hide' : 'Show'}</Text>
   </Pressable>;
@@ -778,7 +778,7 @@ function CsvMappingRows({ dark, canonicalHeaders, mapping, onSelect }: { dark: b
   const colors = theme(dark);
   return <>{canonicalHeaders.map(canonical => {
     const current = mapping[canonical] ?? null;
-    return <Pressable key={canonical} accessibilityRole="button" accessibilityLabel={`Choose source column for ${canonical}`} onPress={() => onSelect(canonical)} style={[styles.mappingSelector, { borderColor: colors.rule, backgroundColor: colors.canvas }]}>
+    return <Pressable key={canonical} accessibilityRole="button" accessibilityLabel={`Choose source column for ${canonical}`} onPress={() => onSelect(canonical)} android_ripple={{color:colors.ripple}} style={[styles.mappingSelector, { borderColor: colors.rule, backgroundColor: colors.canvas }]}>
       <Text style={[styles.mappingField, { color: colors.muted }]}>{canonical}</Text>
       <Text style={[styles.mappingCurrent, { color: colors.ink }]}>{current ?? 'Not mapped'}</Text>
     </Pressable>;
@@ -859,7 +859,7 @@ function CsvEditor({ dark, accounts, csv, csvSourceOperationId, values, setters,
     <Copy dark={dark} muted>Select a CSV file or save the canonical template. Pasting rows is available below when a file picker is not convenient.</Copy>
     <View style={styles.actionRow}><Action dark={dark} label="Choose Wealth CSV file" disabled={!onCsvImport} onPress={() => onCsvImport?.()}/><Action dark={dark} label="Save Wealth CSV template" disabled={!onCsvTemplate} onPress={() => onCsvTemplate?.()}/></View>
     <CsvPreviewSummary dark={dark} csv={csv} onCommit={action === 'csv-commit' ? onSubmit : undefined} commitDisabled={submitDisabled}/>
-    <Pressable accessibilityRole="button" accessibilityLabel="Show paste CSV option" accessibilityState={{ expanded: pasteExpanded }} onPress={() => setPasteExpanded(value => !value)} style={styles.csvPasteDisclosure}>
+    <Pressable accessibilityRole="button" accessibilityLabel="Show paste CSV option" accessibilityState={{ expanded: pasteExpanded }} onPress={() => setPasteExpanded(value => !value)} android_ripple={{color:colors.ripple}} style={styles.csvPasteDisclosure}>
       <Text style={[styles.mappingDisclosureAction, { color: colors.signal }]}>{pasteExpanded ? 'Hide' : 'Show'} paste CSV</Text>
       <Text style={[styles.mappingSummary, { color: colors.muted }]}>Optional fallback</Text>
     </Pressable>

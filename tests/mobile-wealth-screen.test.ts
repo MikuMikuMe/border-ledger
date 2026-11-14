@@ -435,7 +435,9 @@ describe('Android Wealth views', () => {
     let tree: any;
     act(() => { tree = create(React.createElement(WealthInvestments, { dark: false, data, csv, csvSourceOperationId: 'source-1', onCsvRemap: onRemap, operation: 'csv-commit', onAction: vi.fn() })); });
     expect(tree.root.findAllByProps({ accessibilityRole: 'button' }).length).toBeLessThan(100);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Show CSV column mapping' }).props.android_ripple?.color).toBeTruthy();
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Show CSV column mapping' }).props.onPress(); });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Choose source column for date' }).props.android_ripple?.color).toBeTruthy();
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Choose source column for date' }).props.onPress(); });
     act(() => { tree.root.findByType('Modal').props.onRequestClose(); });
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Close source column picker' })).toHaveLength(0);
