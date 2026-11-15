@@ -1,3 +1,5 @@
+import {CategorySpending} from './CategorySpending';
+import {CategoryPicker,type CategoryCleanup} from './CategoryPicker';
 import {useAccessibilityReturnFocus} from './accessibilityFocus';
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {validDateRange} from '../../../../src/domain/reporting';
@@ -21,8 +23,9 @@ export function DetailModal({dark,title,onClose,children,dismissOutside=false,co
     </KeyboardAvoidingView>
   </Modal>;
 }
-export function Action({dark,label,text,value,onPress,onActivate,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;value?:string;onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
-  const p=palette(dark),ref=useRef<React.ComponentRef<typeof View>>(null);return <Pressable ref={ref} accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={()=>{onActivate?.(ref);onPress();}} disabled={disabled} android_ripple={{color:p.ripple}} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
+function actionState(disabled:boolean,selected?:boolean,expanded?:boolean){return {disabled,...(selected===undefined?{}:{selected,checked:selected}),...(expanded===undefined?{}:{expanded})};}
+export function Action({dark,label,text,value,onPress,onActivate,disabled=false,selected,radio=false,expanded}:Theme&{label:string;text?:string;value?:string;onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void;disabled?:boolean;selected?:boolean;radio?:boolean;expanded?:boolean}) {
+  const p=palette(dark),ref=useRef<React.ComponentRef<typeof View>>(null);return <Pressable ref={ref} accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={actionState(disabled,selected,expanded)} onPress={()=>{onActivate?.(ref);onPress();}} disabled={disabled} android_ripple={{color:p.ripple}} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
 }
 export function LedgerRow({dark,label,title,amount,details,accessibilityDetails=details,onPress,onActivate}:Theme&{label:string;title:string;amount?:string;details:string[];accessibilityDetails?:string[];onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void}) {
   const p=palette(dark);
@@ -122,7 +125,7 @@ function PeriodComparison({dark,current,previous,lens}:Theme&{current:Report;pre
   if(!values.length)return null;
   return <View style={[styles.comparison,{borderColor:p.border}]}><Text accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>Previous period</Text><Text style={[styles.reportNote,{color:p.muted}]}>{shortDate(previous.from)} – {shortDate(previous.to)}</Text>{values.map(value=>{const delta=BigInt(value.difference);return <Text key={value.currency} style={[styles.copy,{color:p.text}]}>{value.currency} · {formatMoney(value.previous,value.currency)} · {delta===0n?'No change':`${formatMoney((delta<0n?-delta:delta).toString(),value.currency)} ${delta>0n?'more':'less'}`}</Text>;})}</View>;
 }
-export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLens,onRetry}:Theme&{state:LoadState<Report>;previous?:LoadState<Report>;snapshot:Snapshot|null;lens:Lens;currencies:string[];onLens(value:Lens):void;onRetry():void}) {
+export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLens,onRetry,onOpenCategoryActivity,categoryRefresh}:Theme&{state:LoadState<Report>;previous?:LoadState<Report>;snapshot:Snapshot|null;lens:Lens;currencies:string[];onLens(value:Lens):void;onRetry():void;onOpenCategoryActivity?(item:Transaction):void;categoryRefresh?:number}) {
   const report=state.data,view=report?reportView(report,lens.include,lens.source):null;
   const [customOpen,setCustomOpen]=useState(false),[start,setStart]=useState(''),[end,setEnd]=useState('');
   const {remember:rememberCustom}=useAccessibilityReturnFocus(customOpen);
@@ -154,6 +157,7 @@ export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLen
       {previous&&['offline','error','locked'].includes(previous.phase)?<Text style={[styles.reportNote,{color:palette(dark).muted}]}>Previous period unavailable. Refresh the report to try again.</Text>:null}
       {report.reportingCurrency?<MoneyRows dark={dark} label="Source currency audit" values={view.sourceTotals.map(v=>({currency:v.currency,amountMinor:v.amount}))}/>:null}
       {report.fx.chineseBankBand?<Card dark={dark}><Copy dark={dark} heading>Chinese bank estimate band</Copy><Copy dark={dark}>{report.fx.chineseBankBand.eligible?`${formatMoney(report.fx.chineseBankBand.lowerMinorUnits,report.fx.chineseBankBand.currency)} – ${formatMoney(report.fx.chineseBankBand.upperMinorUnits,report.fx.chineseBankBand.currency)}`:'Not eligible for an estimate band.'}</Copy><Copy dark={dark}>Estimate only · {report.fx.chineseBankBand.percentageBasisPoints/100}% · actual bank settlement may differ.</Copy></Card>:null}
+      {report.from&&report.to&&report.timeZone?<CategorySpending dark={dark} from={report.from} to={report.to} timeZone={report.timeZone} includeProvisional={lens.include} currency={lens.source} reportingCurrency={lens.target} onOpen={onOpenCategoryActivity} refreshVersion={categoryRefresh}/>:null}
       {reportFilters}
       {state.phase==='ready'&&!state.message?<Status dark={dark} state={state} onRetry={onRetry} label="report"/>:null}
       <FilterDisclosure dark={dark} label="Report details" summary="Dates, coverage and exclusions"><Copy dark={dark}>Account coverage may differ between periods.</Copy><Copy dark={dark}>Server snapshot only; unsent capture records are not included.</Copy><Copy dark={dark}>As of {report.asOf??'unavailable'} · {report.timeBasis} · {report.timeZone??snapshot?.timeZone??'Timezone unavailable'}</Copy>{snapshot?<Copy dark={dark}>Snapshot {snapshot.snapshotAt} · {snapshot.accounts.length} account(s)</Copy>:null}<Copy dark={dark}>Excluded: {report.excludedCount}</Copy><Copy dark={dark} heading>Source coverage</Copy>{[...report.sourceCoverage].sort((a,b)=>a.source.localeCompare(b.source)).map(s=><Copy key={s.source} dark={dark}>{s.source}: {s.count}</Copy>)}
@@ -161,7 +165,7 @@ export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLen
     </>:state.phase==='ready'?<Copy dark={dark}>No report is available. Connect an account and refresh the owner snapshot.</Copy>:null}
   </View>;
 }
-export type ActivityProps=Theme&{state:LoadState<Transactions>;facetRows?:Transaction[];filters:Partial<ActivityQuery>;selected:Transaction|null;draft?:{category:string;note:string};mutation?:MutationState;onRetry():void;onFilter(value:Partial<ActivityQuery>):void;onOpen(id:string):void;onLoadMore():void;onClose():void;onDraft(value:{category:string;note:string}):void;onSave():void};
+export type ActivityProps=Theme&{state:LoadState<Transactions>;facetRows?:Transaction[];filters:Partial<ActivityQuery>;selected:Transaction|null;draft?:{category:string;note:string};mutation?:MutationState;onRetry():void;onFilter(value:Partial<ActivityQuery>):void;onOpen(id:string):void;onLoadMore():void;onClose():void;onDraft(value:{category:string;note:string}):void;onSave():void;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>};
 type ActivityFacetName='currency'|'category'|'status'|'source';
 const activityFacetNames:ActivityFacetName[]=['currency','category','status','source'];
 function activityFacetLabel(name:ActivityFacetName){return name==='status'?'State':name[0].toUpperCase()+name.slice(1);}
@@ -193,10 +197,12 @@ function ActivityResults({dark,state,rows,onLoadMore,onOpen,onActivate}:{dark:bo
 export function confirmDiscardChanges(onClose:()=>void){
   Alert.alert('Discard changes?','Your local category and note changes may be lost. Check the operation status before trying again.',[{text:'Keep editing',style:'cancel'},{text:'Discard',style:'destructive',onPress:onClose}]);
 }
-function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose}:{dark:boolean;selected:Transaction;draft:{category:string;note:string};mutation:MutationState;onDraft(value:{category:string;note:string}):void;onSave():void;onClose():void}){
-  const p=palette(dark);
+export function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose,onCategoryCleanup}:{dark:boolean;selected:Transaction;draft:{category:string;note:string};mutation:MutationState;onDraft(value:{category:string;note:string}):void;onSave():void;onClose():void;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>}){
+  const p=palette(dark),[categoryCleanupStatus,setCategoryCleanupStatus]=useState('ready' as 'ready'|'refreshing'|'failed');
+  const refreshCategoryCleanup=async(cleanup:CategoryCleanup)=>{setCategoryCleanupStatus('refreshing');try{const refreshed=await onCategoryCleanup?.(cleanup);setCategoryCleanupStatus(refreshed===false?'failed':'ready');return refreshed!==false;}catch{setCategoryCleanupStatus('failed');return false;}};
+  const blocked=mutation.blocked||categoryCleanupStatus!=='ready';
   const close=()=>{
-    if(mutation.status==='saving')return;
+    if(mutation.status==='saving'||categoryCleanupStatus==='refreshing')return;
     if(draft.category!==(selected.category??'')||draft.note!==(selected.note??'')){
       confirmDiscardChanges(onClose);return;
     }
@@ -206,20 +212,20 @@ function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose}:{d
     <Copy dark={dark}>{selected.merchant??'Merchant unavailable'} · {selected.currency} {formatMoney(selected.signedMinorUnits,selected.currency)}</Copy>
     <Copy dark={dark}>{selected.occurredAt} · {selected.status} · {selected.kind}</Copy>
     <Copy dark={dark}>Account: {selected.accountLabel??'unavailable'} · Source: {selected.sourceLabel??'unavailable'} · Revision {selected.revision}</Copy>
-    <Copy dark={dark}>Category</Copy><TextInput accessibilityLabel="Category" editable={!mutation.blocked} value={draft.category} maxLength={80} onChangeText={category=>onDraft({...draft,category})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
-    <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" editable={!mutation.blocked} value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
-    <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Changes affect only the category and note.</Copy>
-    <Action dark={dark} label="Save annotation" onPress={onSave} disabled={mutation.blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/>
+    <CategoryPicker dark={dark} disabled={blocked} value={draft.category} onChange={category=>onDraft({...draft,category})} onCleanup={refreshCategoryCleanup}/>
+    <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" editable={!blocked} value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
+    {categoryCleanupStatus==='failed'?<Copy dark={dark} error>Category updated, but the transaction could not be refreshed. Refresh Activity and reopen before saving.</Copy>:null}<MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Changes affect only the category and note.</Copy>
+    <Action dark={dark} label="Save annotation" onPress={onSave} disabled={blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/>
   </DetailModal>;
 }
-export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave}:ActivityProps) {
+export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave,onCategoryCleanup}:ActivityProps) {
   const rows=state.data?.items??[],visibleRows=filterActivity(rows,filters);
   const {remember:rememberOpener}=useAccessibilityReturnFocus(Boolean(selected));
   return <View style={styles.section}>
     <ActivityFilters dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter}/>
     <Status dark={dark} state={state} onRetry={onRetry} label="Activity"/>
     <ActivityResults dark={dark} state={state} rows={visibleRows} onLoadMore={onLoadMore} onOpen={onOpen} onActivate={rememberOpener}/>
-    {selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={mutation} onDraft={onDraft} onSave={onSave} onClose={onClose}/>:null}
+    {selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={mutation} onDraft={onDraft} onSave={onSave} onClose={onClose} onCategoryCleanup={onCategoryCleanup}/>:null}
   </View>;
 }
 export function MutationStatus({dark,mutation}:Theme&{mutation:MutationState}) {

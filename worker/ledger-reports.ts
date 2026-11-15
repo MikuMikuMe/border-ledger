@@ -20,6 +20,7 @@ export interface LedgerReportQuery {
   to?: string | null;
   currency?: string | null;
   reportingCurrency?: string | null;
+  category?: string | null;
   includeProvisional?: boolean;
   timeZone?: string;
 }
@@ -163,6 +164,13 @@ function isCalendarDate(value: string) {
   return Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function validReportCategory(value:string) { return Boolean(value.trim()) && value.length<=120 && !/[\u0000-\u001f\u007f]/.test(value); }
+function validateCategory(value:string|null) {
+  if(value===null)return null;
+  if(!validReportCategory(value))throw new RangeError('The report category is not valid.');
+  return value;
+}
+
 function validateQuery(input: LedgerReportQuery) {
   const from = input.from ?? null;
   const to = input.to ?? null;
@@ -171,9 +179,10 @@ function validateQuery(input: LedgerReportQuery) {
   if (currency !== null && getCurrencyMeta(currency) === null) throw new RangeError('The report currency is not valid.');
   const reportingCurrency = input.reportingCurrency ?? null;
   if (reportingCurrency !== null && getCurrencyMeta(reportingCurrency) === null) throw new RangeError('The reporting currency is not valid.');
+  const category=validateCategory(input.category??null);
   const timeZone = input.timeZone ?? 'America/Toronto';
   if (!VALID_TIMEZONES.has(timeZone)) throw new RangeError('The report timezone is not supported.');
-  return { from, to, currency, reportingCurrency, timeZone, includeProvisional: input.includeProvisional === true };
+  return { from, to, currency, reportingCurrency, category, timeZone, includeProvisional: input.includeProvisional === true };
 }
 
 function whereFor(context: LedgerContext, query: ReturnType<typeof validateQuery>) {
@@ -190,6 +199,10 @@ function whereFor(context: LedgerContext, query: ReturnType<typeof validateQuery
   if (query.currency) {
     clauses.push('t.currency = ?');
     bindings.push(query.currency);
+  }
+  if(query.category) {
+    clauses.push(`COALESCE((SELECT a.category FROM annotation_revisions a WHERE a.ledger_id=t.ledger_id AND a.transaction_id=t.id ORDER BY a.revision DESC LIMIT 1),t.category) = ?`);
+    bindings.push(query.category);
   }
   return { where: clauses.join(' AND '), bindings };
 }

@@ -52,9 +52,15 @@ describe('native screen controller',()=>{
   });
   it('submits the displayed revision exactly once and refreshes after a completed annotation',async()=>{
     const f=fixture(),c=new FinanceController(f.ports);await c.start();
-    await c.annotate('fixture_write',transaction,{category:' Food ',note:'Draft'});
+    await c.annotate('fixture_write',transaction,{category:'Food',note:'Draft'});
     expect(f.writes).toEqual([['fixture_write',{transactionId:'fixture_tx',expectedRevision:3,category:'Food',note:'Draft'}]]);
     expect(c.mutation.current().status).toBe('completed');c.dispose();
+  });
+  it('preserves a long selected category when saving an annotation',async()=>{
+    const f=fixture(),c=new FinanceController(f.ports);await c.start();
+    const category='Long category '.repeat(8);
+    await c.annotate('long_category',transaction,{category,note:'Note'});
+    expect(f.writes).toEqual([['long_category',expect.objectContaining({category})]]);c.dispose();
   });
   it('classifies with the selected revision and never changes posted-cost math locally',async()=>{
     const f=fixture(),c=new FinanceController(f.ports);await c.start();await c.loadRecurring();
@@ -112,3 +118,12 @@ describe('native screen controller',()=>{
     expect(c.activityFacetRows).toEqual([]);c.dispose();
   });
 });
+  it('refreshes a category-cleaned transaction by ID and keeps its higher revision',async()=>{
+    const f=fixture(),c=new FinanceController(f.ports);await c.start();
+    const updated={...transaction,category:'Dining',revision:4};
+    f.ports.ledger.readTransactions=async query=>({items:query.query===transaction.id?[updated]:[],nextCursor:null,limit:query.limit});
+    const refreshed=await c.refreshTransaction(transaction.id);
+    expect(refreshed).toMatchObject({id:transaction.id,category:'Dining',revision:4});
+    expect(c.activityFacetRows.find(row=>row.id===transaction.id)).toMatchObject({category:'Dining',revision:4});
+    c.dispose();
+  });

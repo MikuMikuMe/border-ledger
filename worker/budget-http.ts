@@ -46,6 +46,7 @@ export async function handleBudgetApi(request:Request,db:D1Database,context:Fina
   try { return await dispatchBudget(request,db,context,root); }
   catch(error) {
     if(error instanceof BudgetConflictError) return json({code:'budget_conflict',message:error.message},409);
+    if(/unique constraint failed: budget_(allocations|targets|tracking_plans|rollover_policies)\./i.test(String(error))) return json({code:'budget_conflict',message:'A category or budget changed. Refresh and try again.'},409);
     if(error instanceof RangeError) return json({code:'invalid_request',message:error.message},400);
     throw error;
   }

@@ -5,8 +5,8 @@ type Operation = {operationId: string; kind: string; status: string; updatedAt: 
 export type CaptureSyncRequest = {operationId: string};
 export type Transaction = {id: string; occurredAt: string; currency: string; signedMinorUnits: string; merchant: string | null; accountLabel: string | null; status: string; sourceLabel: string | null; category: string | null; note: string | null; kind: string; revision: number; accountId: string | null};
 export type Transactions = {items: Transaction[]; nextCursor: string | null; limit: number};
-export type ActivityQuery = {cursor: string | null; limit: number; query: string | null; currency: string | null; status: string | null; source: string | null; category: string | null};
-export type ReportQuery = {startDate: string; endDate: string; includeProvisional: boolean; currency: string | null; reportingCurrency: string | null; timeZone: string};
+export type ActivityQuery = {cursor: string | null; limit: number; query: string | null; currency: string | null; status: string | null; source: string | null; category: string | null; from?: string | null; to?: string | null};
+export type ReportQuery = {startDate: string; endDate: string; includeProvisional: boolean; currency: string | null; reportingCurrency: string | null; timeZone: string; category?: string | null};
 export type CurrencyTotal = {currency: string; confirmedMinorUnits: string; provisionalMinorUnits: string; confirmedCount: number; provisionalCount: number};
 export type DailyTotal = {date: string; currency: string; confirmedMinorUnits: string; provisionalMinorUnits: string};
 export type ConvertedTotal = {confirmedMinorUnits: string; provisionalMinorUnits: string; confirmedCount: number; provisionalCount: number};
@@ -23,6 +23,9 @@ export interface Spec extends TurboModule {
   getSnapshot(): Promise<Snapshot | null>;
   refreshSnapshot(): Promise<Snapshot | null>;
   readTransactions(query: ActivityQuery): Promise<Transactions>;
+  readCategories(): Promise<string>;
+  createCategory(name:string): Promise<string>;
+  categoryAction(action:string,body:string): Promise<string>;
   readManualMatches(offset:number): Promise<string>;
   startManualWrite(operationId:string, action:string, body:string): Promise<Operation>;
   resumeManualWrite(operationId:string): Promise<Operation>;

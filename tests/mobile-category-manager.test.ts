@@ -1,0 +1,21 @@
+import {createRequire} from 'node:module';
+import {describe,expect,it,vi} from 'vitest';
+const require=createRequire(new URL('../mobile/package.json',import.meta.url));const React=require('react');const {create,act}=require('react-test-renderer');
+vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ScrollView:'ScrollView',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',Alert:{alert:vi.fn()},AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
+const api=vi.hoisted(()=>({categoryAction:vi.fn(async(action:string)=>JSON.stringify(action==='preview'?{from:'Food',to:'Dining',transactions:2,budget:{allocations:1},conflicts:[],version:'a'.repeat(64)}:{ok:true}))}));
+vi.mock('../mobile/src/native/specs/NativeLedger',()=>({default:api}));
+const {CategoryManager}=await import('../mobile/src/features/finance/CategoryManager');const {CategoryServicesContext}=await import('../mobile/src/features/finance/categoryServices');
+vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
+describe('mobile category management',()=>{it('previews effects before confirming a rename',async()=>{
+ const onChanged=vi.fn();let tree:any;
+ await act(async()=>{tree=create(React.createElement(CategoryServicesContext.Provider,{value:api},React.createElement(CategoryManager,{dark:false,categories:[{name:'Food',archived:false}],onChanged})));});
+ act(()=>tree.root.findByProps({accessibilityLabel:'Manage Food'}).props.onPress());
+ act(()=>tree.root.findByProps({accessibilityLabel:'Rename or merge into'}).props.onChangeText('Dining'));
+ await act(async()=>tree.root.findByProps({accessibilityLabel:'Preview changes'}).props.onPress());
+ expect(JSON.stringify(tree.toJSON())).toContain('transactions');
+ expect(tree.root.findByProps({accessibilityLabel:'Confirm changes'})).toBeTruthy();
+ await act(async()=>tree.root.findByProps({accessibilityLabel:'Confirm changes'}).props.onPress());
+ expect(api.categoryAction).toHaveBeenCalledWith('cleanup',expect.stringContaining('Dining'));expect(onChanged).toHaveBeenCalledWith('Food','Dining');act(()=>tree.unmount());
+});
+ it('restores an archived category',async()=>{let tree:any;const onChanged=vi.fn();await act(async()=>{tree=create(React.createElement(CategoryServicesContext.Provider,{value:api},React.createElement(CategoryManager,{dark:false,categories:[{name:'Old',archived:true}],onChanged})));});await act(async()=>tree.root.findByProps({accessibilityLabel:'Restore Old'}).props.onPress());expect(api.categoryAction).toHaveBeenCalledWith('restore',JSON.stringify({name:'Old'}));expect(onChanged).toHaveBeenCalled();act(()=>tree.unmount());});
+});

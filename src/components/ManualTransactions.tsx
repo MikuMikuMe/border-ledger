@@ -1,3 +1,4 @@
+import {CategoryPicker} from './CategoryPicker';
 import { useEffect, useId, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from 'react';
 import type { LedgerApi } from '../domain/api';
 import { LedgerApiError, ledgerSession } from '../domain/api';
@@ -38,7 +39,12 @@ function AmountField({entry,update,error}:{entry:Entry;update(name:keyof Entry,v
   return <label>Amount<input required inputMode="decimal" aria-invalid={error || undefined} aria-describedby={error ? id : undefined} value={entry.amount} onChange={event=>update('amount',event.target.value)}/>{error?<span id={id} className="manual-field-error" role="alert">{amountErrorText}</span>:null}</label>;
 }
 
-function EntryForm({accounts,entry,setEntry,busy,uncertain,message,onSubmit,onCancel}:{accounts:Account[];entry:Entry;setEntry:Dispatch<SetStateAction<Entry>>;busy:boolean;uncertain:boolean;message:string;onSubmit(event:FormEvent):Promise<void>;onCancel():void}) {
+function CurrencyField({selected,value,onChange}:{selected:Account|undefined;value:string;onChange(value:string):void}) {
+  const currencies=selected?.currencies?.length?selected.currencies:[selected?.currency??''];
+  return <label>Currency<select value={value} onChange={event=>onChange(event.target.value)}>{currencies.map(code=><option key={code}>{code}</option>)}</select></label>;
+}
+
+function EntryForm({api,accounts,entry,setEntry,busy,uncertain,message,onSubmit,onCancel,onCategoryCleanup}:{api:LedgerApi;accounts:Account[];entry:Entry;setEntry:Dispatch<SetStateAction<Entry>>;busy:boolean;uncertain:boolean;message:string;onSubmit(event:FormEvent):Promise<void>;onCancel():void;onCategoryCleanup():void}) {
   const amountError=message===amountErrorText;
   const selected=accounts.find(account=>account.id===entry.accountId);
   const update=(name:keyof Entry,value:string)=>setEntry(current=>({...current,[name]:value}));
@@ -47,10 +53,10 @@ function EntryForm({accounts,entry,setEntry,busy,uncertain,message,onSubmit,onCa
       <label>Date<input type="date" required value={entry.date} onChange={event=>update('date',event.target.value)}/></label>
       <label>Description<input required maxLength={160} value={entry.merchant} onChange={event=>update('merchant',event.target.value)}/></label>
       <AmountField entry={entry} update={update} error={amountError}/>
-      <label>Currency<select value={entry.currency} onChange={event=>update('currency',event.target.value)}>{(selected?.currencies?.length?selected.currencies:[selected?.currency??'']).map(code=><option key={code}>{code}</option>)}</select></label>
+      <CurrencyField selected={selected} value={entry.currency} onChange={value=>update('currency',value)}/>
       <label>Type<select value={entry.kind} onChange={event=>update('kind',event.target.value)}>{['expense','income','transfer','refund','fee'].map(kind=><option key={kind} value={kind}>{kind}</option>)}</select></label>
       {entry.kind==='transfer'?<label>Direction<select value={entry.direction} onChange={event=>update('direction',event.target.value)}><option value="out">Out of account</option><option value="in">Into account</option></select></label>:null}
-      <label>Category<input required maxLength={80} value={entry.category} onChange={event=>update('category',event.target.value)}/></label>
+      <CategoryPicker api={api} value={entry.category} disabled={busy||uncertain} onChange={value=>update('category',value)} onCleanup={onCategoryCleanup}/>
       <label>Note (optional)<input maxLength={1000} value={entry.note} onChange={event=>update('note',event.target.value)}/></label>
     </fieldset><div className="manual-actions"><button type="submit" className="primary-button" disabled={busy}>{busy?'Saving…':uncertain?'Retry same entry':'Save transaction'}</button>{!uncertain?<button type="button" className="quiet-button" disabled={busy} onClick={onCancel}>Cancel</button>:null}</div></form>;
 }
@@ -68,6 +74,9 @@ function storePendingEntry(pendingKey:string|null,entry:Entry) {
 }
 function clearPendingEntry(pendingKey:string|null) {
   if(pendingKey)sessionStorage.removeItem(pendingKey);
+}
+function refreshAfterCategoryCleanup(onChanged:()=>Promise<void>,setMessage:Dispatch<SetStateAction<string>>) {
+  void onChanged().catch(()=>setMessage('Category updated, but Activity could not be refreshed. Refresh before editing an affected transaction.'));
 }
 async function submitEntry(event:FormEvent,{entry,pendingKey,api,onChanged,loadMatches,setBusy,setMessage,setOpen,setUncertain}:EntryActions) {
     event.preventDefault();
@@ -113,11 +122,12 @@ export function ManualTransactions({accounts,api,onChanged}:{accounts:Account[];
   const actions={entry,pendingKey,api,onChanged,loadMatches,setBusy,setMessage,setOpen,setUncertain};
   const submit=(event:FormEvent)=>submitEntry(event,actions);
   const decide=(match:Match,decision:'confirmed'|'dismissed')=>decideMatch(match,decision,actions);
+  const cleanup=()=>refreshAfterCategoryCleanup(onChanged,setMessage);
   return <section className="panel manual-transactions" aria-label="Manual transactions">
     <div className="section-heading"><div><h2>Manual transactions</h2><p>Add one transaction or review possible duplicates.</p></div>{!open?<button ref={addButton} type="button" className="outline-button" disabled={!accounts.length} onClick={start}>Add transaction</button>:null}</div>
     {!accounts.length?<p>Add an account before recording a transaction.</p>:null}
     {message && message!==amountErrorText?<p role="status">{message}</p>:null}
-    {open?<EntryForm accounts={accounts} entry={entry} setEntry={setEntry} busy={busy} uncertain={uncertain} message={message} onSubmit={submit} onCancel={()=>setOpen(false)}/>:null}
+    {open?<EntryForm api={api} accounts={accounts} entry={entry} setEntry={setEntry} busy={busy} uncertain={uncertain} message={message} onSubmit={submit} onCancel={()=>setOpen(false)} onCategoryCleanup={cleanup}/>:null}
     <MatchList accounts={accounts} matches={matches} busy={busy} onDecide={(match,decision)=>{void decide(match,decision);}}/>
   </section>;
 }

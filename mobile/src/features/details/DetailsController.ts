@@ -40,7 +40,7 @@ function merge<T>(old:T[],rows:T[],id:(v:T)=>string):T[]{const map=new Map(old.m
 function shouldLoadMore<T extends {nextCursor:string|null}>(more:boolean,phase:DetailsPhase,data:T|null){return !more||phase!=='loading'&&!!data?.nextCursor;}
 function isReady(phase:DetailsPhase){return phase==='ready';}
 function canAnnotate(phase:DetailsPhase,alert:Alert,draft:AnnotationDraft){return isReady(phase)&&!!alert.annotation&&!alert.annotationDisabledReason&&!!draft.category.trim();}
-function annotationValue(alert:Alert,draft:AnnotationDraft){return {...alert.annotation!,category:draft.category.trim().slice(0,80),note:draft.note.trim()?draft.note.slice(0,1000):null};}
+function annotationValue(alert:Alert,draft:AnnotationDraft){return {...alert.annotation!,category:draft.category===alert.annotation!.category?draft.category:draft.category.trim(),note:draft.note.trim()?draft.note.slice(0,1000):null};}
 function isClassification(value:string){return ['unclassified','subscription','bill','other','excluded'].includes(value);}
 function canConnect(state:DetailsPhase,link:LinkSnapshot,reconnect:string|null,data:AccountsData|null){
   const busy=['pending','loading','linking','reconciliation_required'].includes(link.state);

@@ -85,13 +85,17 @@ export class FinanceController {
   async filterRecurring(filters:{currency?:string|null;classification?:string|null}){this.recurringFilters=filters;await this.loadRecurring(false,true);}
   async annotate(id:string,transaction:Transaction,draft:{category:string;note:string}) {
     if(!draft.category.trim()||this.mutation.current().status==='revision_conflict')return;
-    await this.mutation.submit(id,()=>this.ports.review.startAnnotate(id,{transactionId:transaction.id,expectedRevision:transaction.revision,category:draft.category.trim().slice(0,80),note:draft.note.trim()?draft.note.slice(0,1000):null}),key=>this.ports.session.queryOperation(key));
+    await this.mutation.submit(id,()=>this.ports.review.startAnnotate(id,{transactionId:transaction.id,expectedRevision:transaction.revision,category:draft.category,note:draft.note.trim()?draft.note.slice(0,1000):null}),key=>this.ports.session.queryOperation(key));
     if(!this.disposed&&this.mutation.current().status==='completed')await this.reload(false);
   }
   async classify(id:string,stream:Stream,classification:string) {
     if(this.mutation.current().status==='revision_conflict')return;
     await this.mutation.submit(id,()=>this.ports.recurring.startClassify(id,stream.id,stream.revision,classification),key=>this.ports.session.queryOperation(key));
     if(!this.disposed&&this.mutation.current().status==='completed')await this.loadRecurring();
+  }
+  async refreshTransaction(id:string) {
+    const page=await this.ports.ledger.readTransactions({cursor:null,limit:1,query:id,currency:null,status:null,source:null,category:null});
+    return rememberRows(this.transactions,page.items).find(transaction=>transaction.id===id)??null;
   }
   private async readActivityPage(query:ActivityQuery,previous:Transactions|null):Promise<Transactions>{
     const page=await this.ports.ledger.readTransactions(query),items=rememberRows(this.transactions,page.items);

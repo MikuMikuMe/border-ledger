@@ -72,7 +72,8 @@ export function validateInput(value: unknown) {
   const accountId = text(body.accountId, 'account', 128);
   const date = validDate(body.date);
   const merchant = text(body.merchant, 'description', 160);
-  const category = text(body.category, 'category', 80);
+  text(body.category, 'category', 120);
+  const category = requireString(body.category, 'category');
   const note = optionalNote(body.note);
   return { requestId, accountId, date, merchant, category, ...moneyInput(body), note };
 }

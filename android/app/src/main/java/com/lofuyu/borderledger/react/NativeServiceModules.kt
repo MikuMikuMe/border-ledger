@@ -242,9 +242,17 @@ class LedgerModule(context: ReactApplicationContext, private val r: NativeServic
             status = q.text("status"),
             source = q.text("source"),
             category = q.text("category"),
+            from = q.text("from"),
+            to = q.text("to"),
         )
         activityPayload(r.container.ledgerRepository.readOwnerTransactions(query))
     }
+
+    override fun readCategories(p: Promise) = s.call(p) { r.container.manualTransactions.categories() }
+
+    override fun createCategory(name: String, p: Promise) = s.call(p) { r.container.manualTransactions.createCategory(name) }
+
+    override fun categoryAction(action: String, body: String, p: Promise) = s.call(p) { r.container.manualTransactions.categoryAction(action, body) }
 
     override fun readManualMatches(offset: Double, p: Promise) = s.call(p) {
         require(offset.isFinite() && offset == offset.toInt().toDouble())
@@ -290,6 +298,7 @@ class LedgerModule(context: ReactApplicationContext, private val r: NativeServic
             currency = q.text("currency"),
             reportingCurrency = q.text("reportingCurrency"),
             timeZone = requireNotNull(q.text("timeZone")),
+            category = q.text("category"),
         )
         reportPayload(r.container.ledgerRepository.refreshOwnerReport(query))
     }

@@ -1,3 +1,5 @@
+import {readMobileTransactionPage} from './mobile-transactions';
+import {handleCategoryApi} from './category-http';
 import { annotateMobileTransaction, MobileReviewError } from './mobile-review';
 import type {AiEgressBinding} from './ai-egress';
 import { createManualTransaction, listManualMatches, decideManualMatch, manualMatchOffset, ManualTransactionConflict } from './manual-transactions';
@@ -973,6 +975,7 @@ type AuthorizedRouteHandler = (request: Request, env: Env, url: URL, context: Le
 
 const accountRouteHandlers: ReadonlyMap<string, AuthorizedRouteHandler> = new Map([
   ['GET /api/accounts', handleAccountsListRoute],
+  ['GET /api/category-activity', async (_request,env,url,context)=>json(await readMobileTransactionPage(env.DB,context,url.searchParams))],
   ['GET /api/preferences', (request, env, _url, context) => handlePreferencesRequest(request, env, context)],
   ['PATCH /api/preferences', (request, env, _url, context) => handlePreferencesRequest(request, env, context)],
   ['GET /api/transactions', handleTransactionsRoute],
@@ -1002,6 +1005,7 @@ async function reportResponse(env: Env, context: LedgerContext, url: URL) {
     to: url.searchParams.get('to'),
     currency: requestedCurrency && requestedCurrency !== 'all' ? requestedCurrency : null,
     reportingCurrency,
+    category: url.searchParams.get('category'),
     includeProvisional: url.searchParams.get('includeProvisional') === 'true',
     timeZone: url.searchParams.get('timeZone') ?? undefined,
   });
@@ -1059,6 +1063,7 @@ async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, 
       () => handleAccountRoutes(request, env, url, context),
       () => handleReportRoutes(request, env, url, context),
       () => handleBudgetApi(request, env.DB, context, '/api/budget'),
+      () => handleCategoryApi(request, env.DB, context, '/api/categories'),
       () => handleAiApi(request, {db:env.DB,context,root:'/api/analysis',env:{secret:env.AI_CREDENTIAL_ENCRYPTION_KEY??'',origin:env.LEDGER_APP_ORIGIN??'',allowedHosts:env.AI_ALLOWED_ENDPOINT_HOSTS,egress:env.AI_EGRESS,egressSecret:env.AI_EGRESS_AUTH_KEY}}),
       () => handlePlanApi(request, env.DB, context, '/api/recurring-plans'),
       () => handleRecurringRoutes(request, env, url, context),

@@ -10,6 +10,13 @@ import org.junit.Test
 
 class ReviewRepositoryTest {
     @Test
+    fun annotationAcceptsFullLegacyCategoryWithoutTruncation() {
+        val category = "X".repeat(120)
+        assertEquals(category, ReviewAnnotationDto("event-1", 0, category, null).category)
+        assertTrue(runCatching { ReviewAnnotationDto("event-1", 0, "X".repeat(121), null) }.isFailure)
+    }
+
+    @Test
     fun reviewMoneyAcceptsRegisteredCurrenciesAndRejectsUnknownCodes() {
         assertEquals("EUR", ReviewMoney("EUR", 1234).currency)
         assertTrue(runCatching { ReviewMoney("XYZ", 1) }.isFailure)

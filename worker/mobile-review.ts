@@ -17,7 +17,7 @@ const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
 const MAX_CURSOR_LENGTH = 512;
 const MAX_ID_LENGTH = 128;
-const MAX_CATEGORY_LENGTH = 80;
+const MAX_CATEGORY_LENGTH = 120;
 const MAX_NOTE_LENGTH = 1000;
 const MAX_REASON_CODES = 8;
 const MAX_PROVENANCE_PER_ALERT = 8;
@@ -753,6 +753,16 @@ function isAnnotationConflict(error: unknown) {
 
 async function annotationSubject(context:FinancialContext) { return 'subjectHash' in context ? context.subjectHash : hashSecret(context.userId); }
 
+async function handleAnnotationError(error:unknown,db:D1Database,context:FinancialContext,{transactionId,revision}:{transactionId:string;revision:number}):Promise<never> {
+  if (String(error).includes('category was renamed; refresh categories')) throw new MobileReviewError('revision_conflict', 'The category was renamed. Refresh and choose a category again.', 409);
+  if (isAnnotationConflict(error)) {
+    const latest = await readLatestPersonalAnnotation(db, context, transactionId);
+    await assertFinancialAuthority(db, context, 'ledger:review');
+    conflict(latest?.revision ?? revision);
+  }
+  throw error;
+}
+
 export async function annotateMobileTransaction(db: D1Database, suppliedContext: FinancialContext, transactionId: string, body: unknown) {
   const context = immutableFinancialContext(suppliedContext);
   await assertFinancialAuthority(db, context, 'ledger:review');
@@ -777,12 +787,7 @@ export async function annotateMobileTransaction(db: D1Database, suppliedContext:
       note: input.note,
     });
   } catch (error) {
-    if (isAnnotationConflict(error)) {
-      const latest = await readLatestPersonalAnnotation(db, context, transactionId);
-      await assertFinancialAuthority(db, context, 'ledger:review');
-      conflict(latest?.revision ?? revision);
-    }
-    throw error;
+    await handleAnnotationError(error,db,context,{transactionId,revision});
   }
   const acknowledged = await db.prepare(`SELECT id, ledger_id, transaction_id, revision, created_at
     FROM annotation_revisions
