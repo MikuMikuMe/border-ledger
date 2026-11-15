@@ -25,7 +25,7 @@ object ReviewLimits {
     const val MAX_PROVENANCE = 8
     const val MAX_CANDIDATES = 5
     const val MAX_LINKS = 8
-    const val MAX_CATEGORY_LENGTH = 80
+    const val MAX_CATEGORY_LENGTH = 120
     const val MAX_NOTE_LENGTH = 1_000
     const val MAX_MONEY_AMOUNT_MINOR = 9_007_199_254_740_991L
 }

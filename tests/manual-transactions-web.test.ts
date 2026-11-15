@@ -12,15 +12,16 @@ describe('manual transaction form',()=>{
     const writes:string[]=[];
     const api:LedgerApi=async <T>(path:string,init?:RequestInit)=>{
       if(path.includes('/manual-matches'))return {matches:[]} as T;
+      if(path==='/api/categories')return {categories:[{name:'Food',archived:false}]} as T;
       writes.push(String(init?.body));if(writes.length===1)throw new Error('connection lost');return {id:'saved'} as T;
     };
     const container=document.createElement('div');document.body.append(container);const root=createRoot(container),changed=vi.fn(async()=>{});
     try {
       await act(async()=>root.render(createElement(ManualTransactions,{accounts:[{id:'acct',name:'Chequing',institution:'Bank',currency:'CAD'}],api,onChanged:changed})));
       const button=(label:string)=>[...container.querySelectorAll('button')].find(node=>node.textContent===label)!;
-      act(()=>button('Add transaction').click());
+      await act(async()=>button('Add transaction').click());
       const set=(label:string,value:string)=>{const input=[...container.querySelectorAll('label')].find(node=>node.textContent?.startsWith(label))!.querySelector('input')!;const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!;setter.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};
-      act(()=>{set('Description','Coffee');set('Amount','12.34');set('Category','Food');});
+      act(()=>{set('Description','Coffee');set('Amount','12.34');const category=container.querySelector('select[aria-label=Category]') as HTMLSelectElement;category.value='Food';category.dispatchEvent(new Event('change',{bubbles:true}));});
       await act(async()=>container.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
       expect(container.textContent).toContain('Save status is unknown');
       expect(container.querySelector('fieldset')?.disabled).toBe(true);
@@ -32,15 +33,16 @@ describe('manual transaction form',()=>{
     let writes=0;
     const api:LedgerApi=async <T>(path:string)=>{
       if(path.includes('/manual-matches'))return {matches:[]} as T;
+      if(path==='/api/categories')return {categories:[{name:'Food',archived:false}]} as T;
       writes++;return {id:'saved'} as T;
     };
     const container=document.createElement('div');document.body.append(container);const root=createRoot(container);
     try {
       await act(async()=>root.render(createElement(ManualTransactions,{accounts:[{id:'acct',name:'Chequing',institution:'Bank',currency:'CAD'}],api,onChanged:async()=>{throw new Error('refresh failed');}})));
       const button=[...container.querySelectorAll('button')].find(node=>node.textContent==='Add transaction')!;
-      act(()=>button.click());
+      await act(async()=>button.click());
       const set=(label:string,value:string)=>{const input=[...container.querySelectorAll('label')].find(node=>node.textContent?.startsWith(label))!.querySelector('input')!;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};
-      act(()=>{set('Description','Coffee');set('Amount','12.34');set('Category','Food');});
+      act(()=>{set('Description','Coffee');set('Amount','12.34');const category=container.querySelector('select[aria-label=Category]') as HTMLSelectElement;category.value='Food';category.dispatchEvent(new Event('change',{bubbles:true}));});
       await act(async()=>container.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
       expect(writes).toBe(1);
       expect(container.textContent).toContain('Transaction saved, but refresh failed');

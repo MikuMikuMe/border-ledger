@@ -1,3 +1,4 @@
+import {handleCategoryApi} from './category-http';
 import type {AiEgressBinding} from './ai-egress';
 import { createManualTransaction, listManualMatches, decideManualMatch, manualMatchOffset, ManualTransactionConflict } from './manual-transactions';
 import { handleAiApi } from './ai-http';
@@ -500,6 +501,15 @@ function isAccessApprovalPath(pathname: string) {
   return /^\/api\/mobile-auth\/requests\/[^/]+\/approval$/.test(pathname) || /^\/api\/device-pairings\/[^/]+\/approval$/.test(pathname);
 }
 
+async function handleMobileCategories(request:Request,env:MobileRouteEnv,config:MobileAuthConfig,url:URL) {
+  const root='/api/mobile/v1/categories';
+  if(url.pathname!==root&&!url.pathname.startsWith(`${root}/`))return null;
+  const scope=request.method==='GET'?'ledger:read':'ledger:review';
+  const owner=await authenticateOwner(bearer(request),env.DB,config,scope);
+  authorizeMobileRoute(owner,url.pathname,scope);
+  return handleCategoryApi(request,env.DB,owner,root);
+}
+
 async function handleMobileBudgetRequest(request:Request,env:MobileRouteEnv,config:MobileAuthConfig,url:URL) {
   const root='/api/mobile/v1/budget';
   if(url.pathname!==root && !url.pathname.startsWith(`${root}/`)) return null;
@@ -555,7 +565,7 @@ async function handleMobileFeatureRoutes(request: Request, env: MobileRouteEnv, 
   if (wealthResponse) return wealthResponse;
   const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
   if (lunchFlowResponse) return lunchFlowResponse;
-  const connectionResponse = await handleMobileManualTransactions(request, env, config, url) ?? await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
+  const connectionResponse = await handleMobileManualTransactions(request, env, config, url) ?? await handleMobileCategories(request, env, config, url) ?? await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
   return connectionResponse;
 }
 
@@ -845,6 +855,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
         includeProvisional: url.searchParams.get('includeProvisional') === 'true',
         currency: url.searchParams.get('currency'),
         reportingCurrency: url.searchParams.get('reportingCurrency'),
+        category: url.searchParams.get('category'),
         timeZone: url.searchParams.get('timeZone') ?? undefined,
       }, { now: env.now });
       return json({

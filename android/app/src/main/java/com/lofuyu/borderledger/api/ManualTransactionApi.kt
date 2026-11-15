@@ -10,8 +10,20 @@ import org.json.JSONObject
 
 class ManualTransactionApi(origin: String, environment: String, credentials: OwnerCredentialProvider, private val transport: RecurringHttpTransport = BudgetHttpTransport()) {
     private val root = "${origin.trimEnd('/')}/api/mobile/v1/transactions"
+    private val categoriesRoot = "${origin.trimEnd('/')}/api/mobile/v1/categories"
     private val auth = OwnerAuthInterceptor(credentials, ApiEnvironment(origin, environment))
 
+    suspend fun categories(): String = request("GET", categoriesRoot, null)
+    suspend fun createCategory(name: String): String {
+        require(name.isNotBlank() && name.length <= 80)
+        return request("POST", categoriesRoot, JSONObject().put("name", name).toString())
+    }
+    suspend fun categoryAction(action: String, body: String): String {
+        require(action in setOf("archive", "restore", "preview", "cleanup"))
+        require(body.toByteArray(Charsets.UTF_8).size <= 4096)
+        JSONObject(body)
+        return request("POST", "$categoriesRoot/$action", body)
+    }
     suspend fun matches(offset: Int): String {
         require(offset in 0..1_000_000)
         return request("GET", "$root/manual-matches?offset=$offset", null)

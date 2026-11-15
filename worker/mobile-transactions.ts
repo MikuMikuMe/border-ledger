@@ -7,7 +7,7 @@ import { notSupersededAlertTransactionPredicate } from './ledger-reports';
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
 const MAX_QUERY_LENGTH = 120;
-const MAX_CATEGORY_LENGTH = 80;
+const MAX_CATEGORY_LENGTH = 120;
 
 const VALID_STATUSES = new Set(['confirmed', 'provisional', 'needs_review']);
 const VALID_SOURCES = new Set(['statement', 'plaid', 'alert', 'manual', 'lunchflow']);
@@ -59,10 +59,21 @@ function validatedTransactionFilter(params: URLSearchParams, name: 'currency' | 
   return value;
 }
 
+function dateFilter(params:URLSearchParams,name:'from'|'to') {
+ const value=params.get(name);
+ if(value===null)return null;
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(value))invalid(`The ${name} date is not valid.`);
+ const date=new Date(`${value}T00:00:00.000Z`);
+ if(!Number.isFinite(date.valueOf())||date.toISOString().slice(0,10)!==value)invalid(`The ${name} date is not valid.`);
+ return value;
+}
 function readTransactionFilters(params: URLSearchParams) {
   const query = boundedFilter(params, 'query', MAX_QUERY_LENGTH)?.trim() || null;
+  const from=dateFilter(params,'from'),to=dateFilter(params,'to');
+  const validRange=!from||!to||from<=to;
+  if(!validRange)invalid('The transaction date range is not valid.');
   return {
-    query,
+    query,from,to,
     currency: validatedTransactionFilter(params, 'currency'),
     status: validatedTransactionFilter(params, 'status'),
     source: validatedTransactionFilter(params, 'source'),
@@ -70,34 +81,33 @@ function readTransactionFilters(params: URLSearchParams) {
   };
 }
 
-function buildTransactionWhere(context:LedgerContext,cursor:TransactionCursor|null,{query,currency,status,source,category}:ReturnType<typeof readTransactionFilters>){
+function addExactFilters(clauses:string[],bindings:unknown[],{currency,status,source,category}:Pick<ReturnType<typeof readTransactionFilters>,'currency'|'status'|'source'|'category'>) {
+  const exactFilters: Array<[string,string|null]> = [
+    ['t.currency',currency], ['t.status',status], ['t.source',source],
+    ['COALESCE(annotation.category, t.category)',category],
+  ];
+  for (const [column,value] of exactFilters) {
+    if (value === null) continue;
+    clauses.push(`${column} = ?`);
+    bindings.push(value);
+  }
+}
+
+function buildTransactionWhere(context:LedgerContext,cursor:TransactionCursor|null,{query,currency,status,source,category,from,to}:ReturnType<typeof readTransactionFilters>){
   const clauses = ['t.ledger_id = ?', notSupersededAlertTransactionPredicate('t')];
   const bindings: unknown[] = [context.ledgerId];
   if (cursor) {
     clauses.push('(t.date < ? OR (t.date = ? AND t.id < ?))');
     bindings.push(cursor.date, cursor.date, cursor.id);
   }
+  if(from){clauses.push('t.date >= ?');bindings.push(from);}
+  if(to){clauses.push('t.date <= ?');bindings.push(to);}
   if (query) {
     const needle = `%${query}%`;
     clauses.push('(t.id LIKE ? OR t.merchant LIKE ? OR a.name LIKE ? OR COALESCE(annotation.category, t.category) LIKE ? OR COALESCE(CASE WHEN annotation.revision IS NULL THEN t.note ELSE annotation.note END, \'\') LIKE ?)');
     bindings.push(needle, needle, needle, needle, needle);
   }
-  if (currency !== null) {
-    clauses.push('t.currency = ?');
-    bindings.push(currency);
-  }
-  if (status !== null) {
-    clauses.push('t.status = ?');
-    bindings.push(status);
-  }
-  if (source !== null) {
-    clauses.push('t.source = ?');
-    bindings.push(source);
-  }
-  if (category !== null) {
-    clauses.push('COALESCE(annotation.category, t.category) = ?');
-    bindings.push(category);
-  }
+  addExactFilters(clauses,bindings,{currency,status,source,category});
   return {clauses,bindings};
 }
 

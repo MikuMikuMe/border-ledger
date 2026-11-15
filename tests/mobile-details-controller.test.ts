@@ -85,6 +85,12 @@ describe('second-stage native financial controller',()=>{
     await c.annotate({operationId:'note',alert,draft:{category:' Food ',note:'Keep draft'}});await c.annotate({operationId:'again',alert,draft:{category:'Food',note:'Keep draft'}});
     expect(f.writes).toEqual([['note',{transactionId:'target_tx',expectedRevision:3,category:'Food',note:'Keep draft'}]]);expect(c.mutation.current().status).toBe('revision_conflict');c.dispose();
   });
+  it('preserves an unchanged legacy category when editing a review note',async()=>{
+    const f=fixture(),c=new DetailsController(f.ports);await c.start();
+    const category=' '+ 'X'.repeat(100)+' ',legacy={...alert,annotation:{...alert.annotation!,category}};
+    await c.annotate({operationId:'legacy',alert:legacy,draft:{category,note:'Updated'}});
+    expect(f.writes).toEqual([['annotate','legacy',expect.objectContaining({category,note:'Updated'})]]);c.dispose();
+  });
   it('keeps highest alert revisions on refresh while honoring new membership/order',async()=>{
     const f=fixture(),c=new DetailsController(f.ports);await c.start();
     f.ports.review.readAlerts=async()=>({items:[{...alert,revision:2},{...alert,eventId:'second',revision:1}],nextCursor:null,limit:50});await c.loadReview();

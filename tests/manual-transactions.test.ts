@@ -23,6 +23,14 @@ describe('manual transaction creation', () => {
       expect(await readBudgetActivity(fixture.db,owner,{from:'2026-11-01',to:'2026-11-30',currency})).toHaveLength(1);
     } finally {fixture.close();}
   });
+  it('preserves a selected legacy category when recording a transaction', async () => {
+    const fixture=createSqliteD1Fixture();try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
+      const category=' '+ 'X'.repeat(100)+' ';
+      const saved=await createManualTransaction(fixture.db,owner,{...entry,category});
+      expect(await fixture.db.prepare('SELECT category FROM transactions WHERE id=?').bind(saved.id).first()).toEqual({category});
+    } finally {fixture.close();}
+  });
   it('matches bank entries in the selected currency without matching another currency', async () => {
     const fixture=createSqliteD1Fixture();
     try {

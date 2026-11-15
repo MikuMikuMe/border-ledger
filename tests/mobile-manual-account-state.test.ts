@@ -5,8 +5,10 @@ const React=require('react');
 const {create,act}=require('react-test-renderer');
 vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
 const native=vi.hoisted(()=>({write:vi.fn(async()=>({status:'completed'})),matches:[] as unknown[],operations:[] as unknown[]}));
-vi.mock('../mobile/src/native/specs/NativeLedger',()=>({default:{readManualMatches:async()=>JSON.stringify({matches:native.matches}),startManualWrite:native.write,onChanged:()=>({remove(){}})}}));
+vi.mock('../mobile/src/native/specs/NativeLedger',()=>({default:{readCategories:async()=>JSON.stringify({categories:[{name:"Food",archived:false}]}),readManualMatches:async()=>JSON.stringify({matches:native.matches}),startManualWrite:native.write,onChanged:()=>({remove(){}})}}));
 vi.mock('../mobile/src/native/specs/NativeSession',()=>({default:{readOperations:async()=>native.operations}}));
+const {CategoryServicesContext}=await import('../mobile/src/features/finance/categoryServices');
+const categoryServices={readCategories:async()=>JSON.stringify({categories:[{name:'Food',archived:false}]})};
 const {ManualTransactions}=await import('../mobile/src/features/finance/ManualTransactions');
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
 const account={id:'boc',displayName:'Bank of China',institution:null,instrument:null,currencies:['CNY'],lastSuccessfulSyncAt:null};
@@ -14,8 +16,8 @@ const snapshot=(accounts:any[])=>({accounts,transactions:[]});
 const makeController=(state:any)=>({snapshot:{current:()=>state},mutation:{current:()=>({blocked:false,status:'completed'}),submit:async(_:string,write:()=>Promise<unknown>)=>{await write();}},reload:vi.fn(),recover:vi.fn()});
 async function render(state:any){
   const controller=makeController(state);let tree:any;
-  await act(async()=>{tree=create(React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:0}));});
-  await act(async()=>{tree.update(React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:1}));});
+  await act(async()=>{tree=create(React.createElement(CategoryServicesContext.Provider,{value:categoryServices},React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:0})));});
+  await act(async()=>{tree.update(React.createElement(CategoryServicesContext.Provider,{value:categoryServices},React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:1})));});
   return {tree,controller};
 }
 describe('manual transaction account states',()=>{
@@ -27,9 +29,11 @@ describe('manual transaction account states',()=>{
   });
   it('saves a manually entered transaction and reports success',async()=>{
     native.write.mockClear();const {tree}=await render({phase:'ready',data:snapshot([account]),message:null});
-    for(const [label,value] of [['Description','Coffee'],['Amount','12.34'],['Category','Food']]){
+    for(const [label,value] of [['Description','Coffee'],['Amount','12.34']]){
       act(()=>tree.root.findByProps({accessibilityLabel:label}).props.onChangeText(value));
     }
+    act(()=>tree.root.findByProps({accessibilityLabel:'Choose category'}).props.onPress());
+    act(()=>tree.root.findByProps({accessibilityLabel:'Food'}).props.onPress());
     await act(async()=>{tree.root.findByProps({accessibilityLabel:'Save transaction'}).props.onPress();await new Promise(resolve=>setTimeout(resolve,0));});
     expect(native.write).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(tree.toJSON())).toContain('Transaction saved.');act(()=>tree.unmount());
@@ -38,7 +42,7 @@ describe('manual transaction account states',()=>{
     const state:any={phase:'loading',data:null,message:null};
     const {tree,controller}=await render(state);
     state.phase='ready';state.data=snapshot([account]);
-    await act(async()=>{tree.update(React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:1}));});
+    await act(async()=>{tree.update(React.createElement(CategoryServicesContext.Provider,{value:categoryServices},React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:1})));});
     expect(tree.root.findByProps({accessibilityLabel:'Description'})).toBeTruthy();act(()=>tree.unmount());
   });
   it.each(['loading','offline','error'])('does not call %s state an empty account list',async phase=>{

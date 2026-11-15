@@ -1,3 +1,4 @@
+import {CategorySpending} from './components/CategorySpending';
 import {useDismissible} from './components/useDismissible';
 import { TransactionDetail } from './components/TransactionDetail';
 import {ChartRangePicker,chartRangeLabels,type ChartRange} from './components/ChartRangePicker';
@@ -971,7 +972,7 @@ function WorkspaceApp() {
           ) : reportStatus === 'error' || !reports ? (
             <><CustomWindowPicker windows={reportingWindows} selectedWindow={selectedWindow} onPreset={setSelectedWindowKey} onApply={(start, end) => { setCustomWindow({key: 'custom', label: 'Custom', start, end}); setSelectedWindowKey('custom'); }} /><WorkspaceStatePanel status="error" error={reportError} onRetry={refreshWorkspace} /></>
           ) : (
-            <Overview
+            <><Overview
               selectedWindow={selectedWindow}
               reportingWindows={reportingWindows}
               reportingTimezone={reportingTimezone}
@@ -985,7 +986,7 @@ function WorkspaceApp() {
               setIncludeProvisional={setIncludeProvisional}
               transactions={transactions}
               onNavigate={setActiveView}
-            />
+            /><CategorySpending api={ledgerApi} from={selectedWindow.start} to={selectedWindow.end} timeZone={reportingTimezone} includeProvisional={includeProvisional} reportingCurrency={preferredCurrency} onChanged={()=>refreshWorkspace(true)}/></>
           ) : null}
           {activeView === 'budget' ? <BudgetView api={ledgerApi} initialMonth={monthWindow.end.slice(0,7)} accounts={accounts.filter(account=>account.kind==='chequing'||account.kind==='savings').map(account=>({id:account.id,name:account.name,currency:account.currency}))} /> : null}
           {activeView === 'recurring' ? <RecurringView today={monthWindow.end} startDate={monthWindow.start} endDate={monthWindow.end} accounts={accounts} /> : null}

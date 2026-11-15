@@ -12,12 +12,13 @@ class OwnerLedgerApiTest {
             endDate = "2026-10-14",
             currency = "USD",
             reportingCurrency = "CAD",
+            category = "Food & Dining",
         )
 
         val path = ownerReportRequestUrl("https://pf.example", query)
 
         assertEquals(
-            "https://pf.example/api/mobile/v1/reports/summary?startDate=2026-10-01&endDate=2026-10-14&includeProvisional=false&timeZone=America%2FToronto&currency=USD&reportingCurrency=CAD",
+            "https://pf.example/api/mobile/v1/reports/summary?startDate=2026-10-01&endDate=2026-10-14&includeProvisional=false&timeZone=America%2FToronto&currency=USD&reportingCurrency=CAD&category=Food+%26+Dining",
             path,
         )
     }

@@ -54,7 +54,7 @@ describe('native financial view fixtures and accessibility',()=>{
     act(()=>confirmDiscard.mock.calls[0][2][1].onPress());expect(onClose).toHaveBeenCalledTimes(1);
     act(()=>tree.update(React.createElement(ActivityView,{...props,mutation:{blocked:true,status:'saving'}})));
     act(()=>tree.root.findAllByType('Modal')[0].props.onRequestClose());expect(confirmDiscard).toHaveBeenCalledTimes(1);
-    expect(tree.root.findByProps({accessibilityLabel:'Category'}).props.editable).toBe(false);
+    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Choose category')[0].props.disabled).toBe(true);
     expect(tree.root.findByProps({accessibilityLabel:'Note'}).props.editable).toBe(false);
   });
   it('does not claim an uncertain Activity save was unsuccessful',()=>{
@@ -293,7 +293,7 @@ describe('native financial view fixtures and accessibility',()=>{
     const tree=render(ActivityView,{...actions,onOpen:(id:string)=>{opened=id;},onSave:()=>{saved=true;},dark:false,state:ready({items:[transaction],nextCursor:'fixture_cursor',limit:50}),filters:{},selected:transaction,draft:{category:'Food',note:'Keep me'},mutation:{blocked:false,status:'revision_conflict'}});
     act(()=>tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel?.startsWith('Open activity'))[0].props.onPress());
     expect(opened).toBe('fixture_tx');
-    expect(tree.root.findAll((n:any)=>n.type==='TextInput'&&n.props.accessibilityLabel==='Category')[0].props.value).toBe('Food');
+    expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Choose category')).toHaveLength(1);expect(text(tree)).toContain('Food');
     expect(text(tree)).toContain('Keep me');expect(text(tree)).toContain('changed elsewhere');
     expect(text(tree)).toContain('Changes affect only the category and note.');
     expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Save annotation')[0].props.disabled).toBe(true);

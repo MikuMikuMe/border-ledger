@@ -561,3 +561,21 @@ h2 { margin-bottom: 0; font: 600 18px/1.15 'IBM Plex Sans', sans-serif; letter-s
 .transaction-detail-header button, .transaction-detail-form button { min-height: 44px; font-size: 14px; }
 
 .transaction-row-open { cursor: pointer; }
+
+.category-picker, .category-manager { display: grid; gap: 8px; min-width: 0; }
+.category-picker label, .category-manager label, .category-spending label { display: grid; gap: 6px; font-weight: 600; }
+.category-picker input, .category-picker select, .category-manager input, .category-manager select, .category-spending select { width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; }
+.category-picker details { border-top: 1px solid var(--rule); margin-top: 4px; }
+.category-picker summary { cursor: pointer; min-height: 44px; padding: 12px 0; color: var(--cad); }
+.category-manager { padding: 4px 0 12px; }
+.category-picker button, .category-manager button { justify-self: start; min-height: 44px; }
+.category-spending { display: grid; gap: 12px; padding: 24px; margin-top: 16px; }
+.category-spending h2, .category-spending p { margin: 0; }
+.category-spending > button, .category-spending > div button { justify-self: start; }
+.category-spending ul { padding-left: 20px; margin: 0; }
+.category-spending li + li { margin-top: 8px; }
+.category-spending select { margin-top: 6px; }
+@media (max-width: 600px) { .category-spending { padding: 18px; } }
+
+.category-picker-extra[open] { display: grid; gap: 8px; padding-bottom: 12px; }
+.category-picker p { margin: 0; }

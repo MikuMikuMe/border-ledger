@@ -24,12 +24,14 @@ data class OwnerReportQuery(
     val currency: String? = null,
     val reportingCurrency: String? = null,
     val timeZone: String = "America/Toronto",
+    val category: String? = null,
 ) {
     init {
         require(startDate.matches(OWNER_DATE_PATTERN) && endDate.matches(OWNER_DATE_PATTERN)) { "Report dates must use YYYY-MM-DD." }
         require(startDate <= endDate) { "Report start date must not be after the end date." }
         require(currency == null || CurrencyRegistry().metadata(currency) != null) { "Report currency is not registered." }
         require(reportingCurrency == null || CurrencyRegistry().metadata(reportingCurrency) != null) { "Reporting currency is not registered." }
+        require(category == null || category.length in 1..120) { "Report category is not valid." }
         require(timeZone in OWNER_TIME_ZONES) { "Report timezone is not supported." }
     }
 }
@@ -43,7 +45,15 @@ internal fun ownerReportRequestUrl(origin: String, query: OwnerReportQuery): Str
     )
     query.currency?.let { params["currency"] = it }
     query.reportingCurrency?.let { params["reportingCurrency"] = it }
+    query.category?.let { params["category"] = it }
     return "$origin/api/mobile/v1/reports/summary${params.entries.joinToString(prefix = "?", separator = "&") { "${URLEncoder.encode(it.key, Charsets.UTF_8.name())}=${URLEncoder.encode(it.value, Charsets.UTF_8.name())}" }}"
+}
+
+private fun OwnerTransactionQuery.validateCategoryAndDates() {
+    require(category == null || category.length in 1..120) { "Transaction category is not valid." }
+    require(from == null || from.matches(OWNER_DATE_PATTERN)) { "Invalid start date." }
+    require(to == null || to.matches(OWNER_DATE_PATTERN)) { "Invalid end date." }
+    require(from == null || to == null || from <= to) { "Invalid date range." }
 }
 
 data class OwnerTransactionQuery(
@@ -54,6 +64,8 @@ data class OwnerTransactionQuery(
     val status: String? = null,
     val source: String? = null,
     val category: String? = null,
+    val from: String? = null,
+    val to: String? = null,
 ) {
     init {
         require(limit in 1..100) { "Transaction page size must be between 1 and 100." }
@@ -62,7 +74,7 @@ data class OwnerTransactionQuery(
         require(currency == null || CurrencyRegistry().metadata(currency) != null) { "Transaction currency is not registered." }
         require(status == null || status in OWNER_TRANSACTION_STATUSES) { "Transaction status is not supported." }
         require(source == null || source in OWNER_TRANSACTION_SOURCES) { "Transaction source is not supported." }
-        require(category == null || category.length in 1..80) { "Transaction category is not valid." }
+        validateCategoryAndDates()
     }
 }
 
@@ -100,6 +112,8 @@ class HttpWorkerOwnerLedgerApi(
         query.status?.let { params["status"] = it }
         query.source?.let { params["source"] = it }
         query.category?.let { params["category"] = it }
+        query.from?.let { params["from"] = it }
+        query.to?.let { params["to"] = it }
         return read("$origin/api/mobile/v1/transactions${queryString(params)}", MAX_TRANSACTION_PAGE_BYTES)
     }
 

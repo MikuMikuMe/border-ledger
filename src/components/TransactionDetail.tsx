@@ -1,3 +1,4 @@
+import {CategoryPicker} from './CategoryPicker';
 import {useEffect,useRef,useState,type FormEvent,type MouseEvent} from 'react';
 import type {LedgerApi} from '../domain/api';
 import {LedgerApiError} from '../domain/api';
@@ -23,7 +24,7 @@ function useAnnotationEditor({transaction,api,onChanged,onClose}:Props){
     if(transaction.annotationRevision===undefined)return;
     setBusy(true);setMessage('');let saved=false;
     try{
-      await api(`/api/transactions/${encodeURIComponent(transaction.id)}/annotation`,{method:'PATCH',body:JSON.stringify({expectedRevision:transaction.annotationRevision,category:category.trim(),note:note.trim()?note:null})});
+      await api(`/api/transactions/${encodeURIComponent(transaction.id)}/annotation`,{method:'PATCH',body:JSON.stringify({expectedRevision:transaction.annotationRevision,category,note:note.trim()?note:null})});
       saved=true;setSavedState(true);await onChanged();onClose();
     }catch(error){const result=saveFailure(error,saved);setLocked(result.locked);setMessage(result.message);}
     finally{setBusy(false);}
@@ -44,7 +45,7 @@ function clickedOutside(event:MouseEvent<HTMLDialogElement>){
     <p><strong>{transaction.merchant}</strong> · {formatMoney(transaction.amountMinor,transaction.currency)} {transaction.currency}</p>
     <p>{transaction.date} · {transaction.status} · {transaction.kind} · {transaction.source}</p>
     <form onSubmit={event=>{void editor.save(event);}} className="transaction-detail-form">
-      <label>Category<input aria-label="Category" required maxLength={80} readOnly={readOnly} value={editor.category} onChange={event=>editor.setCategory(event.target.value)}/></label>
+      <CategoryPicker api={props.api} value={editor.category} disabled={readOnly} onChange={editor.setCategory}/>
       <label>Note<textarea aria-label="Note" maxLength={1000} readOnly={readOnly} value={editor.note} onChange={event=>editor.setNote(event.target.value)}/></label>
       {editor.message?<p role="alert">{editor.message}</p>:null}
       {transaction.annotationRevision===undefined?<p role="alert">Editing is unavailable. Refresh Activity and try again.</p>:null}

@@ -85,7 +85,7 @@ export class FinanceController {
   async filterRecurring(filters:{currency?:string|null;classification?:string|null}){this.recurringFilters=filters;await this.loadRecurring(false,true);}
   async annotate(id:string,transaction:Transaction,draft:{category:string;note:string}) {
     if(!draft.category.trim()||this.mutation.current().status==='revision_conflict')return;
-    await this.mutation.submit(id,()=>this.ports.review.startAnnotate(id,{transactionId:transaction.id,expectedRevision:transaction.revision,category:draft.category.trim().slice(0,80),note:draft.note.trim()?draft.note.slice(0,1000):null}),key=>this.ports.session.queryOperation(key));
+    await this.mutation.submit(id,()=>this.ports.review.startAnnotate(id,{transactionId:transaction.id,expectedRevision:transaction.revision,category:draft.category,note:draft.note.trim()?draft.note.slice(0,1000):null}),key=>this.ports.session.queryOperation(key));
     if(!this.disposed&&this.mutation.current().status==='completed')await this.reload(false);
   }
   async classify(id:string,stream:Stream,classification:string) {

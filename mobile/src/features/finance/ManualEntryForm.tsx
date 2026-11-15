@@ -3,6 +3,7 @@ import {Alert,TextInput,View} from 'react-native';
 import {parseMoneyMinor} from '../../../../src/domain/currencies';
 import {Action,Copy,DetailModal,MutationStatus} from './FinanceViews';
 import {CurrencyPicker} from './CurrencyPicker';
+import {CategoryPicker} from './CategoryPicker';
 import type {MutationState,Snapshot} from './contracts';
 
 export type ManualDraft={accountId:string;date:string;merchant:string;amount:string;currency:string;kind:string;direction:string;category:string;note:string};
@@ -44,7 +45,7 @@ export function ManualEntryForm({dark,accounts,draft,onDraft,mutation,onSave,onC
     <CurrencyPicker dark={dark} accountCurrency={selected?.currencies[0]} value={draft.currency} disabled={mutation.blocked} onChange={code=>update('currency',code)}/>
     <Copy dark={dark}>Type</Copy><View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{['expense','income','transfer','refund','fee'].map(kind=><Action key={kind} dark={dark} label={kind} disabled={mutation.blocked} radio selected={draft.kind===kind} onPress={()=>update('kind',kind)}/>)}</View>
     {draft.kind==='transfer'?<><Copy dark={dark}>Direction</Copy><Action dark={dark} label="Out of account" disabled={mutation.blocked} radio selected={draft.direction==='out'} onPress={()=>update('direction','out')}/><Action dark={dark} label="Into account" disabled={mutation.blocked} radio selected={draft.direction==='in'} onPress={()=>update('direction','in')}/></>:null}
-    <Field dark={dark} disabled={mutation.blocked} label="Category" value={draft.category} onChange={value=>update('category',value)}/><Field dark={dark} disabled={mutation.blocked} label="Note (optional)" value={draft.note} onChange={value=>update('note',value)}/>
+    <CategoryPicker dark={dark} disabled={mutation.blocked} value={draft.category} onChange={value=>update('category',value)}/><Field dark={dark} disabled={mutation.blocked} label="Note (optional)" value={draft.note} onChange={value=>update('note',value)}/>
     <MutationStatus dark={dark} mutation={mutation}/><Action dark={dark} label="Save transaction" disabled={mutation.blocked||!draft.accountId||!draft.date||!draft.merchant.trim()||!draft.amount||!draft.category.trim()} onPress={submit}/>
     <Action dark={dark} label={mutation.blocked?'Close':'Cancel'} onPress={close}/>
   </DetailModal>;

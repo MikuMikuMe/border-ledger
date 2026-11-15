@@ -1,3 +1,5 @@
+import {CategoryServicesContext} from '../features/finance/categoryServices';
+import {categoryFixture} from './categoryFixture';
 /** Loaded only from __DEV__. No native service imports or financial writes. */
 import React,{useEffect,useState} from 'react';
 import {ScrollView,StatusBar,Text,View} from 'react-native';
@@ -55,8 +57,8 @@ export function FinanceFixtureHost({children}:{children:React.ReactNode}) {
   if(!fixture)return children;
   const {dark,state,screen}=fixture;
   const colors=financeFixtureColors[dark?'dark':'light'];
-  return <SafeAreaView style={{flex:1,backgroundColor:colors.background}}><StatusBar barStyle={colors.status}/><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{padding:22,paddingBottom:40}}><Text accessibilityRole="header" style={{color:colors.text,fontSize:24}}>Synthetic fixture · {screen} · {state}</Text>
+  return <CategoryServicesContext.Provider value={categoryFixture}><SafeAreaView style={{flex:1,backgroundColor:colors.background}}><StatusBar barStyle={colors.status}/><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{padding:22,paddingBottom:40}}><Text accessibilityRole="header" style={{color:colors.text,fontSize:24}}>Synthetic fixture · {screen} · {state}</Text>
     {renderFixtureScreen({fixture,lens,onLens:setLens,filters,onFilter:setFilters,selected,onSelect:setSelected,selectedStream,onSelectStream:setSelectedStream,draft,onDraft:setDraft})}
     <View style={{marginTop:20}}><Action dark={dark} label="Exit synthetic fixture" onPress={()=>setFixture(null)}/></View>
-  </ScrollView></SafeAreaView>;
+  </ScrollView></SafeAreaView></CategoryServicesContext.Provider>;
 }
