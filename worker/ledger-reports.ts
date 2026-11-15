@@ -164,9 +164,10 @@ function isCalendarDate(value: string) {
   return Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function validReportCategory(value:string) { return Boolean(value.trim()) && value.length<=120 && !/[\u0000-\u001f\u007f]/.test(value); }
 function validateCategory(value:string|null) {
   if(value===null)return null;
-  if(!value.trim()||value.length>120||/[\u0000-\u001f\u007f]/.test(value))throw new RangeError('The report category is not valid.');
+  if(!validReportCategory(value))throw new RangeError('The report category is not valid.');
   return value;
 }
 

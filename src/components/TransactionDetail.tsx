@@ -29,7 +29,8 @@ function useAnnotationEditor({transaction,api,onChanged,onClose}:Props){
     }catch(error){const result=saveFailure(error,saved);setLocked(result.locked);setMessage(result.message);}
     finally{setBusy(false);}
   };
-  return {category,setCategory,note,setNote,busy,locked,message,close,save};
+  const cleanup=()=>{setLocked(true);setMessage("Category updated. Close and reopen this transaction after refresh.");void onChanged().catch(()=>setMessage("Category updated, but refresh failed. Refresh Activity before continuing."));};
+  return {category,setCategory,note,setNote,busy,locked,message,close,save,cleanup};
 }
 function clickedOutside(event:MouseEvent<HTMLDialogElement>){
   if(event.target!==event.currentTarget)return false;
@@ -45,7 +46,7 @@ function clickedOutside(event:MouseEvent<HTMLDialogElement>){
     <p><strong>{transaction.merchant}</strong> · {formatMoney(transaction.amountMinor,transaction.currency)} {transaction.currency}</p>
     <p>{transaction.date} · {transaction.status} · {transaction.kind} · {transaction.source}</p>
     <form onSubmit={event=>{void editor.save(event);}} className="transaction-detail-form">
-      <CategoryPicker api={props.api} value={editor.category} disabled={readOnly} onChange={editor.setCategory}/>
+      <CategoryPicker api={props.api} value={editor.category} disabled={readOnly} onChange={editor.setCategory} onCleanup={editor.cleanup}/>
       <label>Note<textarea aria-label="Note" maxLength={1000} readOnly={readOnly} value={editor.note} onChange={event=>editor.setNote(event.target.value)}/></label>
       {editor.message?<p role="alert">{editor.message}</p>:null}
       {transaction.annotationRevision===undefined?<p role="alert">Editing is unavailable. Refresh Activity and try again.</p>:null}

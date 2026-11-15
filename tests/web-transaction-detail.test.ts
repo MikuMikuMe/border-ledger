@@ -38,6 +38,16 @@ describe('web transaction detail',()=>{
   await act(async()=>el.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
   expect(JSON.parse(String(writes[0].body)).category).toBe(category);act(()=>root.unmount());
  });
+ it('refreshes and locks the editor after a category cleanup',async()=>{
+  const api=vi.fn(async(path:string)=>path==='/api/categories'?categories:path.endsWith('/preview')?{from:'Food',to:'Dining',transactions:1,budget:{},conflicts:[],version:'a'.repeat(64)}:{ok:true});
+  const onChanged=vi.fn(async()=>{}),el=document.createElement('div');document.body.append(el);const root=createRoot(el);
+  await act(async()=>root.render(createElement(TransactionDetail,{transaction,api:api as never,onChanged,onClose:()=>{}})));
+  const source=el.querySelector('.category-manager select') as HTMLSelectElement;act(()=>{source.value='Food';source.dispatchEvent(new Event('change',{bubbles:true}));});
+  const input=el.querySelector('.category-manager input') as HTMLInputElement;act(()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'Dining');input.dispatchEvent(new Event('input',{bubbles:true}));});
+  await act(async()=>{[...el.querySelectorAll('button')].find(x=>x.textContent==='Preview changes')!.click();});
+  await act(async()=>{[...el.querySelectorAll('button')].find(x=>x.textContent==='Confirm changes')!.click();});
+  expect(onChanged).toHaveBeenCalledOnce();expect((el.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);act(()=>root.unmount());el.remove();
+ });
  it('confirms before discarding a changed draft on backdrop or Escape',async()=>{
   const onClose=vi.fn(),confirm=vi.spyOn(window,'confirm').mockReturnValue(false),api=async <T>(path:string)=>(path==='/api/categories'?categories:{} as T) as T;
   const el=document.createElement('div');document.body.append(el);const root=createRoot(el);

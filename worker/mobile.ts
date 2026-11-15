@@ -855,8 +855,7 @@ export async function handleMobileRequest(request: Request, env: MobileRouteEnv,
         includeProvisional: url.searchParams.get('includeProvisional') === 'true',
         currency: url.searchParams.get('currency'),
         reportingCurrency: url.searchParams.get('reportingCurrency'),
-        category: url.searchParams.get('category'),
-        timeZone: url.searchParams.get('timeZone') ?? undefined,
+        category: url.searchParams.get('category'), timeZone: url.searchParams.get('timeZone') ?? undefined,
       }, { now: env.now });
       return json({
         startDate: report.from,
