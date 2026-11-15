@@ -22,6 +22,14 @@ function mount(initialDestination = 'overview', onSignOut = async () => {}) {
 }
 const current = () => tree.root.findByType('Page').props.page;
 describe('Android shell navigation', () => {
+  it('shows immediate pressed feedback on both quick-add controls', () => {
+    mount('activity');
+    const add = tree.root.findByProps({accessibilityLabel: 'Add transaction options'});
+    expect(add.props.style({pressed: true})).not.toEqual(add.props.style({pressed: false}));
+    press('+ Add');
+    const manual = tree.root.findByProps({accessibilityLabel: 'Manual transaction'});
+    expect(manual.props.style({pressed: true})).not.toEqual(manual.props.style({pressed: false}));
+  });
   it('opens the Activity add menu and dismisses it with Back', () => {
     mount('activity');
     press('+ Add');

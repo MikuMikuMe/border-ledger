@@ -6,7 +6,7 @@ import {AccessibilityInfo,ActivityIndicator,Alert,findNodeHandle,KeyboardAvoidin
 import type {ActivityQuery,Report,Snapshot,Transaction,Transactions,Stream,Lens,RecurringData,MutationState} from './contracts';
 import {comparableTotals,fillReportDays,filterActivity,formatMoney,recurringMessage,reportingCurrencies,reportView,type LoadState,type Window} from './model';
 
-const palette=(dark:boolean)=>dark?{text:'#EEF1E8',muted:'#A5B2AA',surface:'#1D2925',border:'#43534B',accent:'#83C9B1',error:'#FFB4AB'}:{text:'#18201F',muted:'#4F5C56',surface:'#FBF9F4',border:'#D2CCC0',accent:'#1B6B5B',error:'#A83F3F'};
+const palette=(dark:boolean)=>dark?{text:'#EEF1E8',muted:'#A5B2AA',surface:'#1D2925',border:'#43534B',accent:'#83C9B1',error:'#FFB4AB',ripple:'#FFFFFF33'}:{text:'#18201F',muted:'#4F5C56',surface:'#FBF9F4',border:'#D2CCC0',accent:'#1B6B5B',error:'#A83F3F',ripple:'#1B6B5B33'};
 type Theme={dark:boolean};
 export function Copy({dark,children,heading=false,error=false}:Theme&{children:React.ReactNode;heading?:boolean;error?:boolean}) {
   const p=palette(dark);return <Text accessibilityRole={heading?'header':undefined} style={[styles.copy,{color:error?p.error:p.text},heading&&styles.heading]}>{children}</Text>;
@@ -17,12 +17,12 @@ export function DetailModal({dark,title,onClose,children,dismissOutside=false,co
   return <Modal transparent visible animationType={reducedMotion?'none':'fade'} onRequestClose={onClose} onShow={()=>{const node=findNodeHandle(heading.current);if(node)AccessibilityInfo.setAccessibilityFocus(node);}}>
     <KeyboardAvoidingView behavior="padding" style={{flex:1,justifyContent:'center',padding:18,backgroundColor:'#00000080'}}>
       {dismissOutside?<Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${title}`} onPress={onClose} style={StyleSheet.absoluteFill}/>:null}
-      <View accessibilityViewIsModal style={[styles.card,{maxHeight:'90%',backgroundColor:palette(dark).surface,borderColor:palette(dark).border}]}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.section}><View style={{flexDirection:"row",alignItems:"center",gap:8}}><Text ref={heading} accessible accessibilityRole="header" style={[styles.heading,{color:palette(dark).text,flex:1}]}>{title}</Text>{compactClose?<Pressable accessibilityRole="button" accessibilityLabel={closeLabel??`Close ${title}`} onPress={onClose} style={{minHeight:48,minWidth:48,alignItems:"center",justifyContent:"center"}}><Text style={{fontSize:14,color:palette(dark).accent}}>Close</Text></Pressable>:null}</View>{children}</ScrollView></View>
+      <View accessibilityViewIsModal style={[styles.card,{maxHeight:'90%',backgroundColor:palette(dark).surface,borderColor:palette(dark).border}]}><ScrollView keyboardShouldPersistTaps="handled" style={{flexShrink:1}} contentContainerStyle={[styles.section,{marginTop:0,paddingTop:16,paddingBottom:8}]}><View style={{flexDirection:"row",alignItems:"center",gap:8,paddingRight:8}}><Text ref={heading} accessible accessibilityRole="header" style={[styles.heading,{color:palette(dark).text,flex:1}]}>{title}</Text>{compactClose?<Pressable accessibilityRole="button" accessibilityLabel={closeLabel??`Close ${title}`} onPress={onClose} android_ripple={{color:dark?'#FFFFFF33':'#1B6B5B33'}} style={{minHeight:48,minWidth:48,alignItems:"center",justifyContent:"center"}}><Text style={{fontSize:14,color:palette(dark).accent}}>Close</Text></Pressable>:null}</View>{children}</ScrollView></View>
     </KeyboardAvoidingView>
   </Modal>;
 }
 export function Action({dark,label,text,value,onPress,onActivate,disabled=false,selected,radio=false}:Theme&{label:string;text?:string;value?:string;onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void;disabled?:boolean;selected?:boolean;radio?:boolean}) {
-  const p=palette(dark),ref=useRef<React.ComponentRef<typeof View>>(null);return <Pressable ref={ref} accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={()=>{onActivate?.(ref);onPress();}} disabled={disabled} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
+  const p=palette(dark),ref=useRef<React.ComponentRef<typeof View>>(null);return <Pressable ref={ref} accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={{disabled,...(selected===undefined?{}:{selected,checked:selected})}} onPress={()=>{onActivate?.(ref);onPress();}} disabled={disabled} android_ripple={{color:p.ripple}} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
 }
 export function LedgerRow({dark,label,title,amount,details,accessibilityDetails=details,onPress,onActivate}:Theme&{label:string;title:string;amount?:string;details:string[];accessibilityDetails?:string[];onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void}) {
   const p=palette(dark);
@@ -41,17 +41,17 @@ function FilterDisclosure({dark,label,summary,children,modal=false}:Theme&{label
   const heading=useRef<React.ElementRef<typeof Text>>(null),trigger=useRef<React.ComponentRef<typeof View>>(null),reducedMotion=useContext(ReducedMotionContext);
   const {remember:rememberOpener}=useAccessibilityReturnFocus(modal&&expanded);
   return <View>
-    <Pressable ref={trigger} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{expanded}} onPress={()=>{if(!expanded)rememberOpener(trigger);setExpanded(!expanded);}} style={{minHeight:48,paddingVertical:12}}>
+    <Pressable ref={trigger} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{expanded}} onPress={()=>{if(!expanded)rememberOpener(trigger);setExpanded(!expanded);}} android_ripple={{color:dark?'#FFFFFF33':'#1B6B5B33'}} style={{minHeight:48,paddingVertical:12}}>
       <Text style={[styles.disclosureLabel,{color:p.accent}]}>{modal?label:`${expanded?'Hide':'Show'} ${label.toLowerCase()}`}</Text>
       <Text style={[styles.reportNote,{color:p.muted}]}>{summary}</Text>
     </Pressable>
     {expanded?(modal?<Modal transparent visible animationType={reducedMotion?'none':'slide'} onRequestClose={()=>setExpanded(false)} onShow={()=>{const node=findNodeHandle(heading.current);if(node)AccessibilityInfo.setAccessibilityFocus(node);}}>
-      <KeyboardAvoidingView behavior="padding" style={styles.sheetBackdrop}><Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${label}`} onPress={()=>setExpanded(false)} style={StyleSheet.absoluteFill}/><View accessibilityViewIsModal style={[styles.sheet,{backgroundColor:p.surface}]}><View style={styles.sheetHeader}><Text ref={heading} accessible accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>{label}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Close ${label}`} onPress={()=>setExpanded(false)} style={styles.sheetClose}><Text style={[styles.disclosureLabel,{color:p.accent}]}>Done</Text></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>{children}</ScrollView></View></KeyboardAvoidingView>
+      <KeyboardAvoidingView behavior="padding" style={styles.sheetBackdrop}><Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${label}`} onPress={()=>setExpanded(false)} style={StyleSheet.absoluteFill}/><View accessibilityViewIsModal style={[styles.sheet,{backgroundColor:p.surface}]}><View style={styles.sheetHeader}><Text ref={heading} accessible accessibilityRole="header" style={[styles.laneTitle,{color:p.text}]}>{label}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Close ${label}`} onPress={()=>setExpanded(false)} android_ripple={{color:p.ripple}} style={styles.sheetClose}><Text style={[styles.disclosureLabel,{color:p.accent}]}>Done</Text></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>{children}</ScrollView></View></KeyboardAvoidingView>
     </Modal>:children):null}
   </View>;
 }
 export function Status({dark,state,onRetry,label}:Theme&{state:LoadState<unknown>;onRetry():void;label:string}) {
-  if(state.phase==='ready'&&!state.message)return <Pressable accessibilityRole="button" accessibilityLabel={`Refresh ${label}`} accessibilityState={{disabled:false}} disabled={false} onPress={onRetry} style={styles.quietRefresh}><Text style={[styles.disclosureLabel,{color:palette(dark).accent}]}>Refresh {label}</Text></Pressable>;
+  if(state.phase==='ready'&&!state.message)return <Pressable accessibilityRole="button" accessibilityLabel={`Refresh ${label}`} accessibilityState={{disabled:false}} disabled={false} onPress={onRetry} android_ripple={{color:dark?'#FFFFFF33':'#1B6B5B33'}} style={styles.quietRefresh}><Text style={[styles.disclosureLabel,{color:palette(dark).accent}]}>Refresh {label}</Text></Pressable>;
   return <View style={styles.status} accessibilityLiveRegion="polite" accessibilityRole={state.message?'alert':undefined}>
     {state.phase==='loading'?<><ActivityIndicator accessibilityLabel={`Loading ${label}`} color={palette(dark).accent}/><Copy dark={dark}>Loading {label}…</Copy></>:null}
     {state.message?<Copy dark={dark} error>{state.message}</Copy>:null}
@@ -60,7 +60,8 @@ export function Status({dark,state,onRetry,label}:Theme&{state:LoadState<unknown
 }
 function MoneyRows({dark,label,values,featured=false}:Theme&{label:string;values:{currency:string;amountMinor:string}[];featured?:boolean}) {
   const p=palette(dark);
-  return <View style={[styles.card,featured&&styles.featuredTotal,{backgroundColor:featured?(dark?'#203B33':'#E3ECE4'):p.surface,borderColor:p.border}]}><Text accessibilityRole="header" style={[styles.copy,{color:p.text}]}>{label}</Text>{values.length?values.map(v=><Text key={v.currency} style={[styles.total,{color:p.text}]}>{formatMoney(v.amountMinor,v.currency)} <Text style={styles.currency}>{v.currency}</Text></Text>):<Copy dark={dark}>No supported amount is available.</Copy>}</View>;
+  const ink=featured?'#F8F5EE':p.text;
+  return <View style={[styles.card,featured&&styles.featuredTotal,{backgroundColor:featured?'#1D302B':p.surface,borderColor:featured?'#1D302B':p.border}]}><Text accessibilityRole="header" style={[styles.copy,{color:ink}]}>{label}</Text>{values.length?values.map(v=><Text key={v.currency} style={[styles.total,{color:ink}]}>{formatMoney(v.amountMinor,v.currency)} <Text style={styles.currency}>{v.currency}</Text></Text>):<Text style={[styles.copy,{color:ink}]}>No supported amount is available.</Text>}</View>;
 }
 function shortDate(value:string|null) {
   if(!value)return null;
@@ -80,7 +81,7 @@ type TrendLane=ReturnType<typeof reportView>['lanes'][number];
 type TrendPoint=TrendLane['points'][number];
 function TrendBar({dark,point,currency,max,active,highest,onSelect}:Theme&{point:TrendPoint;currency:string;max:bigint;active:boolean;highest:boolean;onSelect():void}) {
   const p=palette(dark),value=BigInt(point.amount),negative=value<0n,absolute=negative?-value:value,height=Number(absolute*100n/max);
-  return <Pressable accessibilityRole="button" accessibilityLabel={`${shortDate(point.date)}, ${currency}, ${formatMoney(point.amount,currency)}${highest?', highest spending day':''}`} accessibilityState={{selected:active}} onPress={onSelect} style={[styles.barColumn,{borderColor:active?p.accent:'transparent'}]}><View style={[styles.bar,{height:Math.max(2,height/2),backgroundColor:negative?p.error:p.accent,opacity:active||highest?1:0.55,top:negative?50:50-height/2}]}/></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityLabel={`${shortDate(point.date)}, ${currency}, ${formatMoney(point.amount,currency)}${highest?', highest spending day':''}`} accessibilityState={{selected:active}} onPress={onSelect} android_ripple={{color:p.ripple,foreground:true}} style={[styles.barColumn,{borderColor:active?p.accent:'transparent'}]}><View style={[styles.bar,{height:Math.max(2,height/2),backgroundColor:negative?p.error:currency==='CNY'?(dark?'#E6A389':'#B04E36'):p.accent,opacity:active||highest?1:0.7,top:negative?50:50-height/2}]}/></Pressable>;
 }
 function DailyBreakdown({dark,lane,include}:Theme&{lane:TrendLane;include:boolean}) {
   const p=palette(dark);
@@ -172,7 +173,7 @@ function ActivityFacet({dark,facetRows,filters,onFilter,name}:{dark:boolean;face
 function ActivityFilters({dark,facetRows,filters,onFilter}:{dark:boolean;facetRows:Transaction[];filters:Partial<ActivityQuery>;onFilter(value:Partial<ActivityQuery>):void}){
   const p=palette(dark);
   return <>
-    <TextInput accessibilityLabel="Search merchant, account, status" placeholder="Search merchant, account, status" placeholderTextColor={p.muted} value={filters.query??''} onChangeText={query=>onFilter({...filters,query})} style={[styles.input,{color:p.text,borderColor:p.border}]} returnKeyType="search"/>
+    <TextInput accessibilityLabel="Search merchant, account, status" placeholder="Search activity" placeholderTextColor={p.muted} value={filters.query??''} onChangeText={query=>onFilter({...filters,query})} style={[styles.input,{color:p.text,borderColor:p.border}]} returnKeyType="search"/>
     <FilterDisclosure dark={dark} modal label="Activity filters" summary={`${activityFacetNames.filter(name=>filters[name]).length} active`}>{activityFacetNames.map(name=><ActivityFacet key={name} dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter} name={name}/>)}</FilterDisclosure>
   </>;
 }
