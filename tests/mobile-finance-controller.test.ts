@@ -118,3 +118,12 @@ describe('native screen controller',()=>{
     expect(c.activityFacetRows).toEqual([]);c.dispose();
   });
 });
+  it('refreshes a category-cleaned transaction by ID and keeps its higher revision',async()=>{
+    const f=fixture(),c=new FinanceController(f.ports);await c.start();
+    const updated={...transaction,category:'Dining',revision:4};
+    f.ports.ledger.readTransactions=async query=>({items:query.query===transaction.id?[updated]:[],nextCursor:null,limit:query.limit});
+    const refreshed=await c.refreshTransaction(transaction.id);
+    expect(refreshed).toMatchObject({id:transaction.id,category:'Dining',revision:4});
+    expect(c.activityFacetRows.find(row=>row.id===transaction.id)).toMatchObject({category:'Dining',revision:4});
+    c.dispose();
+  });

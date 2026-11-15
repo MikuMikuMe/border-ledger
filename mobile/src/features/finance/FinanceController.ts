@@ -93,6 +93,10 @@ export class FinanceController {
     await this.mutation.submit(id,()=>this.ports.recurring.startClassify(id,stream.id,stream.revision,classification),key=>this.ports.session.queryOperation(key));
     if(!this.disposed&&this.mutation.current().status==='completed')await this.loadRecurring();
   }
+  async refreshTransaction(id:string) {
+    const page=await this.ports.ledger.readTransactions({cursor:null,limit:1,query:id,currency:null,status:null,source:null,category:null});
+    return rememberRows(this.transactions,page.items).find(transaction=>transaction.id===id)??null;
+  }
   private async readActivityPage(query:ActivityQuery,previous:Transactions|null):Promise<Transactions>{
     const page=await this.ports.ledger.readTransactions(query),items=rememberRows(this.transactions,page.items);
     return {...page,items:previous?mergeRows(rememberRows(this.transactions,previous.items),items):items};

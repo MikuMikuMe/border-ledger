@@ -1,5 +1,5 @@
 import {CategorySpending} from './CategorySpending';
-import {CategoryPicker} from './CategoryPicker';
+import {CategoryPicker,type CategoryCleanup} from './CategoryPicker';
 import {useAccessibilityReturnFocus} from './accessibilityFocus';
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {validDateRange} from '../../../../src/domain/reporting';
@@ -165,7 +165,7 @@ export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLen
     </>:state.phase==='ready'?<Copy dark={dark}>No report is available. Connect an account and refresh the owner snapshot.</Copy>:null}
   </View>;
 }
-export type ActivityProps=Theme&{state:LoadState<Transactions>;facetRows?:Transaction[];filters:Partial<ActivityQuery>;selected:Transaction|null;draft?:{category:string;note:string};mutation?:MutationState;onRetry():void;onFilter(value:Partial<ActivityQuery>):void;onOpen(id:string):void;onLoadMore():void;onClose():void;onDraft(value:{category:string;note:string}):void;onSave():void};
+export type ActivityProps=Theme&{state:LoadState<Transactions>;facetRows?:Transaction[];filters:Partial<ActivityQuery>;selected:Transaction|null;draft?:{category:string;note:string};mutation?:MutationState;onRetry():void;onFilter(value:Partial<ActivityQuery>):void;onOpen(id:string):void;onLoadMore():void;onClose():void;onDraft(value:{category:string;note:string}):void;onSave():void;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>};
 type ActivityFacetName='currency'|'category'|'status'|'source';
 const activityFacetNames:ActivityFacetName[]=['currency','category','status','source'];
 function activityFacetLabel(name:ActivityFacetName){return name==='status'?'State':name[0].toUpperCase()+name.slice(1);}
@@ -197,10 +197,12 @@ function ActivityResults({dark,state,rows,onLoadMore,onOpen,onActivate}:{dark:bo
 export function confirmDiscardChanges(onClose:()=>void){
   Alert.alert('Discard changes?','Your local category and note changes may be lost. Check the operation status before trying again.',[{text:'Keep editing',style:'cancel'},{text:'Discard',style:'destructive',onPress:onClose}]);
 }
-export function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose}:{dark:boolean;selected:Transaction;draft:{category:string;note:string};mutation:MutationState;onDraft(value:{category:string;note:string}):void;onSave():void;onClose():void}){
-  const p=palette(dark);
+export function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose,onCategoryCleanup}:{dark:boolean;selected:Transaction;draft:{category:string;note:string};mutation:MutationState;onDraft(value:{category:string;note:string}):void;onSave():void;onClose():void;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>}){
+  const p=palette(dark),[categoryCleanupStatus,setCategoryCleanupStatus]=useState('ready' as 'ready'|'refreshing'|'failed');
+  const refreshCategoryCleanup=async(cleanup:CategoryCleanup)=>{setCategoryCleanupStatus('refreshing');try{const refreshed=await onCategoryCleanup?.(cleanup);setCategoryCleanupStatus(refreshed===false?'failed':'ready');return refreshed!==false;}catch{setCategoryCleanupStatus('failed');return false;}};
+  const blocked=mutation.blocked||categoryCleanupStatus!=='ready';
   const close=()=>{
-    if(mutation.status==='saving')return;
+    if(mutation.status==='saving'||categoryCleanupStatus==='refreshing')return;
     if(draft.category!==(selected.category??'')||draft.note!==(selected.note??'')){
       confirmDiscardChanges(onClose);return;
     }
@@ -210,20 +212,20 @@ export function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onCl
     <Copy dark={dark}>{selected.merchant??'Merchant unavailable'} · {selected.currency} {formatMoney(selected.signedMinorUnits,selected.currency)}</Copy>
     <Copy dark={dark}>{selected.occurredAt} · {selected.status} · {selected.kind}</Copy>
     <Copy dark={dark}>Account: {selected.accountLabel??'unavailable'} · Source: {selected.sourceLabel??'unavailable'} · Revision {selected.revision}</Copy>
-    <CategoryPicker dark={dark} disabled={mutation.blocked} value={draft.category} onChange={category=>onDraft({...draft,category})}/>
-    <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" editable={!mutation.blocked} value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
-    <MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Changes affect only the category and note.</Copy>
-    <Action dark={dark} label="Save annotation" onPress={onSave} disabled={mutation.blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/>
+    <CategoryPicker dark={dark} disabled={blocked} value={draft.category} onChange={category=>onDraft({...draft,category})} onCleanup={refreshCategoryCleanup}/>
+    <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" editable={!blocked} value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
+    {categoryCleanupStatus==='failed'?<Copy dark={dark} error>Category updated, but the transaction could not be refreshed. Refresh Activity and reopen before saving.</Copy>:null}<MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Changes affect only the category and note.</Copy>
+    <Action dark={dark} label="Save annotation" onPress={onSave} disabled={blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/>
   </DetailModal>;
 }
-export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave}:ActivityProps) {
+export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave,onCategoryCleanup}:ActivityProps) {
   const rows=state.data?.items??[],visibleRows=filterActivity(rows,filters);
   const {remember:rememberOpener}=useAccessibilityReturnFocus(Boolean(selected));
   return <View style={styles.section}>
     <ActivityFilters dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter}/>
     <Status dark={dark} state={state} onRetry={onRetry} label="Activity"/>
     <ActivityResults dark={dark} state={state} rows={visibleRows} onLoadMore={onLoadMore} onOpen={onOpen} onActivate={rememberOpener}/>
-    {selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={mutation} onDraft={onDraft} onSave={onSave} onClose={onClose}/>:null}
+    {selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={mutation} onDraft={onDraft} onSave={onSave} onClose={onClose} onCategoryCleanup={onCategoryCleanup}/>:null}
   </View>;
 }
 export function MutationStatus({dark,mutation}:Theme&{mutation:MutationState}) {
