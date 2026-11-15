@@ -8,6 +8,32 @@ import type { LedgerApi } from '../src/domain/api';
 (globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
 
 describe('manual transaction form',()=>{
+  it('refreshes activity after category cleanup even when the entry is canceled',async()=>{
+    let writes=0;
+    const api:LedgerApi=async <T>(path:string)=>{
+      if(path.includes('/manual-matches'))return {matches:[]} as T;
+      if(path==='/api/categories')return {categories:[{name:'Food',archived:false}]} as T;
+      if(path==='/api/categories/preview')return {from:'Food',to:'Dining',transactions:1,budget:{},conflicts:[],version:'v1'} as T;
+      if(path==='/api/categories/cleanup')return {ok:true} as T;
+      writes++;return {id:'saved'} as T;
+    };
+    const changed=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);const root=createRoot(container);
+    try {
+      await act(async()=>root.render(createElement(ManualTransactions,{accounts:[{id:'acct',name:'Chequing',institution:'Bank',currency:'CAD'}],api,onChanged:changed})));
+      await act(async()=>[...container.querySelectorAll('button')].find(node=>node.textContent==='Add transaction')!.click());
+      const manager=container.querySelector('.category-manager')!;
+      const select=manager.querySelector('select') as HTMLSelectElement;
+      act(()=>{select.value='Food';select.dispatchEvent(new Event('change',{bubbles:true}));});
+      const target=manager.querySelector('input') as HTMLInputElement;
+      act(()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(target,'Dining');target.dispatchEvent(new Event('input',{bubbles:true}));});
+      await act(async()=>[...manager.querySelectorAll('button')].find(node=>node.textContent==='Preview changes')!.click());
+      await act(async()=>[...manager.querySelectorAll('button')].find(node=>node.textContent==='Confirm changes')!.click());
+      expect(changed).toHaveBeenCalledOnce();
+      await act(async()=>[...container.querySelectorAll('button')].find(node=>node.textContent==='Cancel')!.click());
+      expect(writes).toBe(0);
+    } finally {act(()=>root.unmount());container.remove();}
+  });
+
   it('keeps the same request and fields when a save outcome is uncertain',async()=>{
     const writes:string[]=[];
     const api:LedgerApi=async <T>(path:string,init?:RequestInit)=>{

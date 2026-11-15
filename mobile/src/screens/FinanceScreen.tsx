@@ -44,9 +44,14 @@ function currencyOptions(controller:FinanceControllerInstance):string[] {
   ])].sort();
 }
 
-async function refreshCategoryCleanedTransaction(controller:FinanceControllerInstance,transaction:Transaction,cleanup:CategoryCleanup):Promise<Transaction|null> {
+async function refreshCategoryActivity(controller:FinanceControllerInstance,cleanup:CategoryCleanup):Promise<boolean> {
  const filters=controller.activityFilters;
  if(filters.category===cleanup.from)await controller.filterActivity({...filters,category:cleanup.to});else await controller.loadActivity(false,true);
+ return controller.activity.current().phase==='ready';
+}
+
+async function refreshCategoryCleanedTransaction(controller:FinanceControllerInstance,transaction:Transaction,cleanup:CategoryCleanup):Promise<Transaction|null> {
+ if(!await refreshCategoryActivity(controller,cleanup))return null;
  return controller.activity.current().data?.items.find(row=>row.id===transaction.id)??await controller.refreshTransaction(transaction.id);
 }
 
@@ -72,8 +77,8 @@ function ActivityPanel({dark,controller,selected,draft,setSelected,setDraft,manu
       if(controller.mutation.current().status==='completed')setSelected(null);
     });
   };
-  const categoryCleanup=async(cleanup:CategoryCleanup)=>{if(!selected)return false;const transaction=await refreshCategoryCleanedTransaction(controller,selected,cleanup);if(!transaction)return false;setSelected(transaction);setDraft(draft.category===cleanup.from?{...draft,category:cleanup.to}:draft);return true;};
-  return <><ManualTransactions dark={dark} controller={controller} operationId={operationId} manualRequest={manualRequest}/><ActivityView dark={dark} state={controller.activity.current()} facetRows={controller.activityFacetRows} filters={controller.activityFilters} selected={selected} draft={draft} mutation={controller.mutation.current()}
+  const categoryCleanup=async(cleanup:CategoryCleanup)=>{if(!selected)return refreshCategoryActivity(controller,cleanup);const transaction=await refreshCategoryCleanedTransaction(controller,selected,cleanup);if(!transaction){setSelected(null);return false;}setSelected(transaction);if(draft.category===cleanup.from)setDraft({...draft,category:cleanup.to});return true;};
+  return <><ManualTransactions dark={dark} controller={controller} operationId={operationId} manualRequest={manualRequest} onCategoryCleanup={categoryCleanup}/><ActivityView dark={dark} state={controller.activity.current()} facetRows={controller.activityFacetRows} filters={controller.activityFilters} selected={selected} draft={draft} mutation={controller.mutation.current()}
     onRetry={()=>{void controller.loadActivity();}} onFilter={filters=>{void controller.filterActivity(filters);}} onOpen={openTransaction}
     onLoadMore={()=>{void controller.loadActivity(true);}} onClose={()=>setSelected(null)} onDraft={setDraft} onSave={saveTransaction} onCategoryCleanup={categoryCleanup}/></>;
 }

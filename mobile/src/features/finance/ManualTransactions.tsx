@@ -5,6 +5,7 @@ import NativeSession from '../../native/specs/NativeSession';
 import {Action,Card,Copy,DetailModal} from './FinanceViews';
 import {ManualEntryFocusContext} from './accessibilityFocus';
 import {ManualEntryForm,type ManualDraft} from './ManualEntryForm';
+import type {CategoryCleanup} from './CategoryPicker';
 import {formatMoney} from './model';
 import type {FinanceController} from './FinanceController';
 import type {Snapshot} from './contracts';
@@ -66,7 +67,7 @@ function AccountStatus({dark,snapshot,onRetry,onClose}:{dark:boolean;snapshot:Re
   </DetailModal>;
 }
 function needsDraft(open:boolean,draft:ManualDraft,accounts:Account[]){return open&&!draft.accountId&&accounts.length>0;}
-export function ManualTransactions({dark,controller,operationId,manualRequest}:{dark:boolean;controller:FinanceController;operationId:()=>string;manualRequest:number}){
+export function ManualTransactions({dark,controller,operationId,manualRequest,onCategoryCleanup}:{dark:boolean;controller:FinanceController;operationId:()=>string;manualRequest:number;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>|void}){
   const notifyOpen=useContext(ManualEntryFocusContext);
   const snapshot=controller.snapshot.current(), accounts=snapshot.data?.accounts??[];
   const lastRequest=useRef(manualRequest);
@@ -84,7 +85,7 @@ export function ManualTransactions({dark,controller,operationId,manualRequest}:{
   const formReady=open&&accounts.some(account=>account.id===draft.accountId);
   return <>
     <ManualStatus dark={dark} message={message} pending={pending} matches={matches} accounts={accounts} blocked={mutation.blocked} onRefresh={()=>{setMessage('');void load();}} onResume={()=>{void resume();}} onDecide={decide}/>
-    {formReady?<ManualEntryForm dark={dark} accounts={accounts} draft={draft} onDraft={setDraft} mutation={mutation} onSave={create} onClose={()=>setOpen(false)}/>:null}
+    {formReady?<ManualEntryForm dark={dark} accounts={accounts} draft={draft} onDraft={setDraft} mutation={mutation} onSave={create} onClose={()=>setOpen(false)} onCategoryCleanup={onCategoryCleanup}/>:null}
     {open&&!formReady?<AccountStatus dark={dark} snapshot={snapshot} onRetry={()=>{void controller.reload();}} onClose={()=>setOpen(false)}/>:null}
   </>;
 }

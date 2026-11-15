@@ -8,19 +8,31 @@ const native=vi.hoisted(()=>({write:vi.fn(async()=>({status:'completed'})),match
 vi.mock('../mobile/src/native/specs/NativeLedger',()=>({default:{readCategories:async()=>JSON.stringify({categories:[{name:"Food",archived:false}]}),readManualMatches:async()=>JSON.stringify({matches:native.matches}),startManualWrite:native.write,onChanged:()=>({remove(){}})}}));
 vi.mock('../mobile/src/native/specs/NativeSession',()=>({default:{readOperations:async()=>native.operations}}));
 const {CategoryServicesContext}=await import('../mobile/src/features/finance/categoryServices');
-const categoryServices={readCategories:async()=>JSON.stringify({categories:[{name:'Food',archived:false}]})};
+const categoryServices={readCategories:async()=>JSON.stringify({categories:[{name:'Food',archived:false}]}),categoryAction:async(action:string)=>JSON.stringify(action==='preview'?{from:'Food',to:'Dining',transactions:1,budget:{},conflicts:[],version:'v1'}:{ok:true})};
 const {ManualTransactions}=await import('../mobile/src/features/finance/ManualTransactions');
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
 const account={id:'boc',displayName:'Bank of China',institution:null,instrument:null,currencies:['CNY'],lastSuccessfulSyncAt:null};
 const snapshot=(accounts:any[])=>({accounts,transactions:[]});
 const makeController=(state:any)=>({snapshot:{current:()=>state},mutation:{current:()=>({blocked:false,status:'completed'}),submit:async(_:string,write:()=>Promise<unknown>)=>{await write();}},reload:vi.fn(),recover:vi.fn()});
-async function render(state:any){
+async function render(state:any,onCategoryCleanup?:()=>Promise<boolean>){
   const controller=makeController(state);let tree:any;
-  await act(async()=>{tree=create(React.createElement(CategoryServicesContext.Provider,{value:categoryServices},React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:0})));});
-  await act(async()=>{tree.update(React.createElement(CategoryServicesContext.Provider,{value:categoryServices},React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:1})));});
+  await act(async()=>{tree=create(React.createElement(CategoryServicesContext.Provider,{value:categoryServices},React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:0,onCategoryCleanup})));});
+  await act(async()=>{tree.update(React.createElement(CategoryServicesContext.Provider,{value:categoryServices},React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:1,onCategoryCleanup})));});
   return {tree,controller};
 }
 describe('manual transaction account states',()=>{
+  it('refreshes Activity after category cleanup even when the entry is canceled',async()=>{
+    native.write.mockClear();const onCategoryCleanup=vi.fn(async()=>true),{tree}=await render({phase:'ready',data:snapshot([account]),message:null},onCategoryCleanup);
+    act(()=>tree.root.findByProps({accessibilityLabel:'Manage categories'}).props.onPress());
+    act(()=>tree.root.findByProps({accessibilityLabel:'Manage Food'}).props.onPress());
+    act(()=>tree.root.findByProps({accessibilityLabel:'Rename or merge into'}).props.onChangeText('Dining'));
+    await act(async()=>tree.root.findByProps({accessibilityLabel:'Preview changes'}).props.onPress());
+    await act(async()=>tree.root.findByProps({accessibilityLabel:'Confirm changes'}).props.onPress());
+    expect(onCategoryCleanup).toHaveBeenCalledWith({from:'Food',to:'Dining'});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Cancel'}).props.onPress());
+    expect(native.write).not.toHaveBeenCalled();act(()=>tree.unmount());
+  });
+
   it('opens the form with accounts without visiting Accounts',async()=>{
     const {tree}=await render({phase:'ready',data:snapshot([account]),message:null});
     expect(tree.root.findByProps({accessibilityLabel:'Description'})).toBeTruthy();

@@ -991,7 +991,7 @@ function WorkspaceApp() {
           {activeView === 'budget' ? <BudgetView api={ledgerApi} initialMonth={monthWindow.end.slice(0,7)} accounts={accounts.filter(account=>account.kind==='chequing'||account.kind==='savings').map(account=>({id:account.id,name:account.name,currency:account.currency}))} /> : null}
           {activeView === 'recurring' ? <RecurringView today={monthWindow.end} startDate={monthWindow.start} endDate={monthWindow.end} accounts={accounts} /> : null}
           {activeView === 'wealth' ? <WealthView api={ledgerApi} linkedAccounts={accounts} /> : null}
-          {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} api={ledgerApi} onChanged={()=>refreshWorkspace(true)} manual={<ManualTransactions accounts={accounts} api={ledgerApi} onChanged={refreshWorkspace} />} /> : null}
+          {activeView === 'transactions' ? <TransactionsView transactions={transactions} onExport={exportLedger} api={ledgerApi} onChanged={()=>refreshWorkspace(true)} manual={<ManualTransactions accounts={accounts} api={ledgerApi} onChanged={()=>refreshWorkspace(true)} />} /> : null}
           {activeView === 'imports' ? (
             <ImportsView
               accounts={accounts}
