@@ -31,6 +31,9 @@ describe('transaction override storage',()=>{
    await purgeExpiredTransactionOverrides(fixture.db,'2026-01-01T00:00:00.000Z');
    const result=await commitStatementRows(fixture.db,OWNER_LEDGER,{importId:'d1-import',accountId:'owner-account',filename:'bank.csv',fileSha256:'a'.repeat(64),rows:[{id:'d1-statement',accountId:'owner-account',date:'2026-10-24',merchant:'owner',amountMinor:-100,currency:'CAD',category:'Food',kind:'expense',status:'confirmed',source:'statement',fingerprint:'d1-fingerprint',bankReference:'d1-reference',sourceIdentity:{accountId:'owner-account',fileSha256:'a'.repeat(64),rowIndex:0}}]});
    expect(await fixture.db.prepare('SELECT id FROM effective_transactions WHERE id=?').bind(result.transactionIds[0]).first()).toBeNull();
+   await purgeExpiredTransactionOverrides(fixture.db,'2026-01-01T00:00:00.000Z');
+   expect(await fixture.db.prepare('SELECT merchant,amount_minor,note FROM transactions WHERE id=?').bind(result.transactionIds[0]).first()).toEqual({merchant:'',amount_minor:0,note:null});
+   expect(await fixture.db.prepare('SELECT id FROM effective_transactions WHERE id=?').bind(result.transactionIds[0]).first()).toBeNull();
   }finally{await fixture.dispose();}
  });
  it('rejects overrides for nonexistent transactions',async()=>{

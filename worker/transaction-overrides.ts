@@ -116,6 +116,23 @@ export async function purgeExpiredTransactionOverrides(db:D1Database,now:string)
  await db.batch([
   ...evidence,
   db.prepare("INSERT INTO transaction_retention_cleanup SELECT ledger_id,transaction_id FROM transaction_overrides WHERE deleted_at IS NOT NULL AND julianday(?) - julianday(deleted_at) >= 365").bind(now),
+  db.prepare(`INSERT OR IGNORE INTO transaction_retention_cleanup(ledger_id,transaction_id)
+   SELECT link.ledger_id,link.statement_transaction_id FROM transaction_alert_links link
+   JOIN transactions target ON target.ledger_id=link.ledger_id AND target.id=link.statement_transaction_id AND target.source='statement'
+   JOIN transaction_retention_cleanup expired ON expired.ledger_id=link.ledger_id AND expired.transaction_id=link.alert_transaction_id
+   WHERE NOT EXISTS (SELECT 1 FROM transaction_alert_links other WHERE other.ledger_id=link.ledger_id AND other.statement_transaction_id=link.statement_transaction_id
+     AND NOT EXISTS (SELECT 1 FROM transaction_retention_cleanup c WHERE c.ledger_id=other.ledger_id AND c.transaction_id=other.alert_transaction_id))
+   AND NOT EXISTS (SELECT 1 FROM alert_projections p JOIN transaction_source_records r ON r.ledger_id=p.ledger_id AND r.event_id=p.event_id AND r.source_kind='alert'
+     WHERE p.ledger_id=link.ledger_id AND p.transaction_id=link.statement_transaction_id
+     AND NOT EXISTS (SELECT 1 FROM transaction_retention_cleanup c WHERE c.ledger_id=r.ledger_id AND c.transaction_id=r.transaction_id))
+   AND NOT EXISTS (SELECT 1 FROM alert_event_links related WHERE related.ledger_id=link.ledger_id AND related.to_transaction_id=link.statement_transaction_id
+     AND NOT EXISTS (SELECT 1 FROM transaction_source_records r JOIN transaction_retention_cleanup c ON c.ledger_id=r.ledger_id AND c.transaction_id=r.transaction_id
+       WHERE r.ledger_id=related.ledger_id AND r.source_kind='alert' AND r.event_id=related.from_event_id))
+   AND NOT EXISTS (SELECT 1 FROM transaction_source_records source JOIN alert_event_links related ON related.ledger_id=source.ledger_id AND (related.from_event_id=source.event_id OR related.to_event_id=source.event_id)
+     WHERE source.ledger_id=link.ledger_id AND source.transaction_id=link.alert_transaction_id AND source.source_kind='alert'
+     AND (EXISTS (SELECT 1 FROM transactions t WHERE t.ledger_id=related.ledger_id AND t.id=related.to_transaction_id AND t.id<>link.statement_transaction_id AND NOT EXISTS (SELECT 1 FROM transaction_retention_cleanup c WHERE c.ledger_id=t.ledger_id AND c.transaction_id=t.id))
+       OR EXISTS (SELECT 1 FROM alert_projections p WHERE p.ledger_id=related.ledger_id AND p.event_id=CASE WHEN related.from_event_id=source.event_id THEN related.to_event_id ELSE related.from_event_id END AND p.transaction_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM transaction_retention_cleanup c WHERE c.ledger_id=p.ledger_id AND c.transaction_id=p.transaction_id))))
+   `),
   db.prepare(`INSERT INTO ledger_preferences(ledger_id) SELECT CASE WHEN NOT EXISTS (
    SELECT 1 FROM transaction_source_records r JOIN alert_events e ON e.ledger_id=r.ledger_id AND e.id=r.event_id
    WHERE r.ledger_id=c.ledger_id AND r.transaction_id=c.transaction_id AND r.source_kind='alert' AND trim(COALESCE(r.bank_reference,e.bank_reference,''))<>''

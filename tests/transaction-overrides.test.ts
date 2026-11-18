@@ -405,3 +405,71 @@ describe('transaction overrides',()=>{
  });
 
 });
+
+
+it('scrubs statements hidden by expired alerts while retaining shared live records',async()=>{
+ const f=createSqliteD1Fixture();try{
+  await seedTenants(f.db);
+  await f.db.prepare("UPDATE transactions SET source='alert' WHERE id IN ('owner-tx-1','owner-tx-2')").run();
+  for(const id of ['hidden-statement','shared-statement'])await f.db.prepare("INSERT INTO transactions(id,ledger_id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,note) VALUES(?,'personal','owner-account','2026-01-01','Private statement',-100,'CAD','Food','expense','confirmed','statement','private fingerprint','Private note')").bind(id).run();
+  await f.db.prepare("INSERT INTO source_profiles(id,ledger_id,provider,source_kind,display_name,parser_version,status,config_json) VALUES('retention-link-profile','personal','bank','credit_alert','Bank','test','approved','{}')").run();
+  await f.db.prepare("INSERT INTO import_previews(id,ledger_id,account_id,filename,file_sha256,preview_digest,row_count,selected_count,status,expires_at) VALUES('linked-preview','personal','owner-account','bank.csv','linked-hash','digest',1,1,'published','2025-02-03')").run();
+  await f.db.prepare("INSERT INTO import_chunks(preview_id,ledger_id,chunk_index,operation_id,chunk_digest,row_start,row_count,rows_json) VALUES('linked-preview','personal',0,'linked-operation','chunk',0,1,?)").bind(JSON.stringify([{rowId:'linked-row',rowIndex:1,accountId:'owner-account',merchant:'Private statement',note:'Private note'}])).run();
+  await f.db.prepare("INSERT INTO transaction_source_records(id,ledger_id,source_kind,identity_key,transaction_id,account_id,file_sha256,row_index,content_digest) VALUES('linked-source','personal','statement','linked-identity','hidden-statement','owner-account','linked-hash',1,'hash')").run();
+  await f.db.prepare("INSERT INTO annotation_revisions(id,ledger_id,transaction_id,author_subject_hash,revision,category,note) VALUES('linked-annotation','personal','hidden-statement','owner',1,'Private','Private note')").run();
+  await f.db.prepare("INSERT INTO transaction_override_operations(ledger_id,request_id,transaction_id,payload,revision) VALUES('personal','linked-prior-operation','hidden-statement','hash',1)").run();
+  for(const [eventId,alertId,target] of [['hidden-event','owner-tx-1','hidden-statement'],['shared-event','owner-tx-2','shared-statement']]){
+   await f.db.prepare("INSERT INTO alert_events(id,event_id,observation_id,source_profile_id,parser_version,captured_at,event_time_basis,event_type,direction,merchant,payload_digest) VALUES(?,?,?,'retention-link-profile','test','2025-01-01','notification_posted','purchase_notice','outflow','Private alert','hash')").bind(eventId,eventId,eventId).run();
+   await f.db.prepare("INSERT INTO alert_projections(id,event_id,transaction_id,state) VALUES(?,?,?,'provisional')").bind(eventId,eventId,target).run();
+   await f.db.prepare("INSERT INTO transaction_source_records(id,source_kind,identity_key,transaction_id,account_id,event_id,content_digest) VALUES(?,'alert',?,?,'owner-account',?,'hash')").bind(eventId,eventId,alertId,eventId).run();
+   await f.db.prepare("INSERT INTO transaction_alert_links(ledger_id,alert_transaction_id,statement_transaction_id) VALUES('personal',?,?)").bind(alertId,target).run();
+   await deleteTransaction(f.db,OWNER_LEDGER,{id:alertId,revision:0,requestId:`expiry-${eventId}-operation`});
+  }
+  await f.db.prepare("INSERT INTO alert_events(id,event_id,observation_id,source_profile_id,parser_version,captured_at,event_time_basis,event_type,direction,merchant,payload_digest) VALUES('live-event','live-event','live-obs','retention-link-profile','test','2026-01-01','notification_posted','purchase_notice','outflow','Live','hash')").run();
+  await f.db.prepare("INSERT INTO alert_event_links(id,ledger_id,from_event_id,to_transaction_id,relation,evidence_basis,revision) VALUES('live-link','personal','live-event','shared-statement','confirms','user_review',1)").run();
+  await f.db.prepare("UPDATE transaction_overrides SET deleted_at='2025-01-01 00:00:00'").run();
+  await purgeExpiredTransactionOverrides(f.db,'2026-01-01T00:00:00.000Z');
+  expect(await f.db.prepare("SELECT merchant,amount_minor,note FROM transactions WHERE id='hidden-statement'").first()).toEqual({merchant:'',amount_minor:0,note:null});
+  expect(await f.db.prepare("SELECT merchant FROM alert_events WHERE id='hidden-event'").first()).toEqual({merchant:null});
+  expect(await f.db.prepare("SELECT COUNT(*) AS count FROM annotation_revisions WHERE transaction_id='hidden-statement'").first()).toEqual({count:0});
+  expect(await f.db.prepare("SELECT COUNT(*) AS count FROM transaction_override_operations WHERE transaction_id='hidden-statement'").first()).toEqual({count:0});
+  expect((await f.db.prepare("SELECT rows_json FROM import_chunks WHERE preview_id='linked-preview'").first<{rows_json:string}>())?.rows_json).not.toContain('Private');
+  expect(await f.db.prepare("SELECT merchant,amount_minor,note FROM transactions WHERE id='shared-statement'").first()).toEqual({merchant:'Private statement',amount_minor:-100,note:'Private note'});
+ }finally{f.close();}
+});
+
+
+it('keeps a linked statement recoverable until its alert reaches 365 days',async()=>{
+ const f=createSqliteD1Fixture();try{
+  await seedTenants(f.db);
+  await f.db.prepare("UPDATE transactions SET source='alert' WHERE id='owner-tx-1'").run();
+  await f.db.prepare("UPDATE transactions SET source='statement' WHERE id='owner-tx-2'").run();
+  await f.db.prepare("INSERT INTO transaction_alert_links(ledger_id,alert_transaction_id,statement_transaction_id) VALUES('personal','owner-tx-1','owner-tx-2')").run();
+  await deleteTransaction(f.db,OWNER_LEDGER,{id:'owner-tx-1',revision:0,requestId:'linked-boundary-delete'});
+  await f.db.prepare("UPDATE transaction_overrides SET deleted_at='2025-01-01 00:00:01' WHERE transaction_id='owner-tx-1'").run();
+  await purgeExpiredTransactionOverrides(f.db,'2026-01-01T00:00:00.000Z');
+  expect(await f.db.prepare("SELECT merchant FROM transactions WHERE id='owner-tx-2'").first()).toEqual({merchant:'owner'});
+  await purgeExpiredTransactionOverrides(f.db,'2026-01-01T00:00:01.000Z');
+  expect(await f.db.prepare("SELECT merchant FROM transactions WHERE id='owner-tx-2'").first()).toEqual({merchant:''});
+ }finally{f.close();}
+});
+
+
+it('retains a linked statement needed by a live related alert',async()=>{
+ const f=createSqliteD1Fixture();try{
+  await seedTenants(f.db);
+  await f.db.prepare("UPDATE transactions SET source='alert' WHERE id='owner-tx-1'").run();
+  await f.db.prepare("UPDATE transactions SET source='statement' WHERE id='owner-tx-2'").run();
+  await f.db.prepare("INSERT INTO source_profiles(id,ledger_id,provider,source_kind,display_name,parser_version,status,config_json) VALUES('related-profile','personal','bank','credit_alert','Bank','test','approved','{}')").run();
+  for(const id of ['expired-event','live-related-event'])await f.db.prepare("INSERT INTO alert_events(id,event_id,observation_id,source_profile_id,parser_version,captured_at,event_time_basis,event_type,direction,payload_digest) VALUES(?,?,?,'related-profile','test','2025-01-01','notification_posted','purchase_notice','outflow','hash')").bind(id,id,id).run();
+  await f.db.prepare("INSERT INTO transactions(id,ledger_id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint) VALUES('live-related','personal','owner-account','2026-01-01','Live',-100,'CAD','Food','expense','confirmed','alert','live')").run();
+  await f.db.prepare("INSERT INTO alert_projections(id,event_id,transaction_id,state) VALUES('expired-projection','expired-event','owner-tx-2','superseded'),('live-projection','live-related-event','live-related','provisional')").run();
+  await f.db.prepare("INSERT INTO transaction_source_records(id,source_kind,identity_key,transaction_id,account_id,event_id,content_digest) VALUES('expired-source','alert','expired-source','owner-tx-1','owner-account','expired-event','hash')").run();
+  await f.db.prepare("INSERT INTO transaction_alert_links(ledger_id,alert_transaction_id,statement_transaction_id) VALUES('personal','owner-tx-1','owner-tx-2')").run();
+  await f.db.prepare("INSERT INTO alert_event_links(id,ledger_id,from_event_id,to_event_id,relation,evidence_basis,revision) VALUES('related-event-link','personal','live-related-event','expired-event','refund_of','user_review',1)").run();
+  await deleteTransaction(f.db,OWNER_LEDGER,{id:'owner-tx-1',revision:0,requestId:'related-alert-delete'});
+  await f.db.prepare("UPDATE transaction_overrides SET deleted_at='2025-01-01 00:00:00'").run();
+  await purgeExpiredTransactionOverrides(f.db,'2026-01-01T00:00:00.000Z');
+  expect(await f.db.prepare("SELECT merchant,amount_minor FROM transactions WHERE id='owner-tx-2'").first()).toEqual({merchant:'owner',amount_minor:-100});
+ }finally{f.close();}
+});
