@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs';
 import {readBudgetActivity} from '../worker/budget-activity';
 import {readMobileTransactionPage} from '../worker/mobile-transactions';
 import {seedTenants,SECOND_LEDGER} from './helpers/tenants';
+import {editTransaction,deleteTransaction} from '../worker/transaction-overrides';
 import {createManualTransaction} from '../worker/manual-transactions';
 import {describe,expect,it,vi} from 'vitest';
 import {createSqliteD1Fixture} from './helpers/sqlite-d1';
@@ -53,4 +54,20 @@ describe('web transaction annotations',()=>{
       expect(await f.db.prepare('SELECT category FROM transactions WHERE id=?').bind(foreign.id).first()).toEqual({category:'Food'});
     }finally{f.close();}
   });
+  it('shows edited values and hides deleted entries in the web ledger',async()=>{
+    const f=createSqliteD1Fixture();try{
+      await provisionWebOwner(f.db);
+      await f.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
+      const owner={userId:'owner',ledgerId:'personal'};
+      const input={requestId:'web_manual_request_1',accountId:'acct',date:'2026-11-07',merchant:'Before',amount:'1.00',currency:'CAD',category:'Food',kind:'expense',note:null};
+      const transaction=await createManualTransaction(f.db,owner,input);
+      await editTransaction(f.db,owner,{id:transaction.id,revision:0},{...input,requestId:'web_edit_request_001',expectedAnnotationRevision:0,merchant:'After'});
+      const env={DB:f.db,...VERIFIED_WEB_ENV,LEDGER_APP_ORIGIN:'https://pf.example.com',ASSETS:{fetch:vi.fn()}};
+      const get=()=>worker.fetch(new Request('https://pf.example.com/api/transactions',{headers:VERIFIED_WEB_HEADERS}),env as never);
+      expect(await (await get()).json()).toMatchObject({transactions:[{id:transaction.id,merchant:'After'}]});
+      await deleteTransaction(f.db,owner,{id:transaction.id,revision:1,requestId:'web_delete_request_1'});
+      expect(await (await get()).json()).toMatchObject({transactions:[]});
+    }finally{f.close();}
+  });
+
 });

@@ -68,9 +68,20 @@ export function Copy({ dark, children, heading, muted, error, accessibilityLiveR
   return <Text accessibilityRole={heading ? 'header' : undefined} accessibilityLiveRegion={accessibilityLiveRegion} style={[heading ? styles.heading : styles.copy, { color: error ? colors.danger : muted ? colors.muted : colors.ink }]}>{children}</Text>;
 }
 
+function choiceBackground(dark:boolean,selected:boolean) {
+  if(!selected)return theme(dark).panel;
+  return dark?'#1D5145':'#D2E9DF';
+}
+function ChoiceIndicator({color,selected}:{color:string;selected:boolean}) {
+  return <View accessibilityElementsHidden importantForAccessibility="no" style={{width:20,height:20,borderRadius:10,borderWidth:2,borderColor:color,alignItems:'center',justifyContent:'center'}}>{selected?<View style={{width:10,height:10,borderRadius:5,backgroundColor:color}}/>:null}</View>;
+}
+function choiceAccessibility(selected:boolean|undefined,disabled:boolean|undefined) {
+  return selected===undefined?{accessibilityRole:'button' as const,accessibilityState:{disabled}}:{accessibilityRole:'radio' as const,accessibilityState:{disabled,checked:selected}};
+}
 export function Action({ dark, label, text, onPress, onActivate, disabled, selected }: { dark: boolean; label: string; text?: string; onPress: () => void; onActivate?: (ref:FocusTarget)=>void; disabled?: boolean; selected?: boolean }) {
-  const colors = theme(dark),ref=useRef<React.ComponentRef<typeof View>>(null);
-  return <Pressable ref={ref} accessibilityRole="button" accessibilityLabel={label} accessibilityValue={text?{text}:undefined} accessibilityState={{ disabled, selected }} disabled={disabled} onPress={()=>{onActivate?.(ref);onPress();}} style={({ pressed }) => [styles.action, { borderColor: colors.rule, backgroundColor: selected ? (dark ? '#244C3D' : '#DEE7DE') : colors.panel, opacity: disabled ? 0.5 : pressed ? 0.68 : 1 }]}><Text style={[styles.actionText, { color: selected ? colors.signal : colors.ink }]}>{text ?? label}</Text></Pressable>;
+  const colors = theme(dark),ref=useRef<React.ComponentRef<typeof View>>(null),choice=selected!==undefined;
+  const backgroundColor=choice?choiceBackground(dark,selected):dark?'#28463B':'#E0EEE7';
+  return <Pressable ref={ref} {...choiceAccessibility(selected,disabled)} accessibilityLabel={label} accessibilityValue={text?{text}:undefined} disabled={disabled} onPress={()=>{onActivate?.(ref);onPress();}} style={({ pressed }) => [styles.action, { flexDirection:'row',alignItems:'center',gap:10,borderColor:choice?colors.rule:colors.signal,backgroundColor,opacity:disabled?0.5:pressed?0.68:1 }]}>{choice?<ChoiceIndicator color={colors.signal} selected={selected}/>:null}<Text style={[styles.actionText,{color:colors.signal,flexShrink:1}]}>{text??label}</Text></Pressable>;
 }
 
 function Field({ dark, label, value, onChange, onBlur, placeholder, multiline = false, secure = false, numeric = false }: { dark: boolean; label: string; value: string; onChange: (value: string) => void; onBlur?:()=>void; placeholder?: string; multiline?: boolean; secure?: boolean; numeric?: boolean }) {

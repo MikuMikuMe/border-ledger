@@ -1,7 +1,7 @@
 import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
 import { validRecurringResponse } from './fixtures/recurring/valid';
-import { createD1Fixture, task23MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 import { normalizeRecurringSnapshot } from '../worker/plaid-recurring';
 import { publishRecurringSnapshot, requestRecurringSync } from '../worker/recurring-store';
 
@@ -25,7 +25,7 @@ async function seed(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
 
 describe('recurring snapshot publication', () => {
   it('publishes one guarded projection, replaces memberships, and preserves classification', async () => {
-    const fixture = await createD1Fixture(task23MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const snapshot = normalizeRecurringSnapshot(validRecurringResponse, 'item-1', new Map([
@@ -54,7 +54,7 @@ describe('recurring snapshot publication', () => {
   });
 
   it('keeps new demand durable and fences disconnected Items', async () => {
-    const fixture = await createD1Fixture(task23MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const messages: unknown[] = [];

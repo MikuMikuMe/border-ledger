@@ -11,7 +11,7 @@ import {
   upsertPlaidTransaction,
 } from '../worker/plaid';
 import { buildPlaidLinkTokenPayload } from '../worker/index';
-import { createD1Fixture, task23MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 
 const key = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -130,7 +130,7 @@ describe('Plaid integration primitives', () => {
   });
 
   it('locks a Plaid row on its pending date and preserves that lock when the posted date changes', async () => {
-    const fixture = await createD1Fixture(task23MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await fixture.db.batch([
       fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)

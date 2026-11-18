@@ -24,14 +24,24 @@ class ManualTransactionApi(origin: String, environment: String, credentials: Own
         JSONObject(body)
         return request("POST", "$categoriesRoot/$action", body)
     }
+    suspend fun deleted(): String = request("GET", "$root/deleted", null)
     suspend fun matches(offset: Int): String {
         require(offset in 0..1_000_000)
         return request("GET", "$root/manual-matches?offset=$offset", null)
     }
     suspend fun write(action: String, body: String): String {
         require(body.toByteArray(Charsets.UTF_8).size <= 16384)
-        JSONObject(body)
-        val path = when (action) { "create" -> root; "match" -> "$root/manual-matches"; else -> throw IllegalArgumentException() }
+        val input = JSONObject(body)
+        val path = when (action) {
+            "create" -> root
+            "match" -> "$root/manual-matches"
+            "edit", "delete", "restore" -> {
+                val id = input.getString("transactionId")
+                require(id.isNotBlank() && id.length <= 160)
+                "$root/by-id/$action"
+            }
+            else -> throw IllegalArgumentException()
+        }
         return request("POST", path, body)
     }
     private suspend fun request(method: String, url: String, body: String?): String {

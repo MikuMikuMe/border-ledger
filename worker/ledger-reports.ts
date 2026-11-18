@@ -138,7 +138,7 @@ export function notSupersededAlertTransactionPredicate(alias = 't') {
   // transaction. The source record's event_id remains the immutable link to
   // the preserved alert transaction; retain the direct lookup for legacy rows
   // that predate transaction_source_records.
-  return `NOT EXISTS (SELECT 1 FROM manual_transaction_matches manual_match JOIN transactions bank_match ON bank_match.id=manual_match.bank_id
+  return `NOT EXISTS (SELECT 1 FROM manual_transaction_matches manual_match JOIN effective_transactions bank_match ON bank_match.id=manual_match.bank_id
     WHERE manual_match.ledger_id=${alias}.ledger_id AND manual_match.manual_id=${alias}.id AND manual_match.decision='confirmed' AND ${manualMatchPredicate(alias, 'bank_match')}) AND NOT (${alias}.source = 'alert' AND (
     EXISTS (
       SELECT 1
@@ -201,7 +201,7 @@ function whereFor(context: LedgerContext, query: ReturnType<typeof validateQuery
     bindings.push(query.currency);
   }
   if(query.category) {
-    clauses.push(`COALESCE((SELECT a.category FROM annotation_revisions a WHERE a.ledger_id=t.ledger_id AND a.transaction_id=t.id ORDER BY a.revision DESC LIMIT 1),t.category) = ?`);
+    clauses.push(`COALESCE((SELECT a.category FROM annotation_revisions a WHERE a.ledger_id=t.ledger_id AND a.transaction_id=t.id AND a.revision>t.override_annotation_revision ORDER BY a.revision DESC LIMIT 1),t.category) = ?`);
     bindings.push(query.category);
   }
   return { where: clauses.join(' AND '), bindings };
@@ -353,7 +353,7 @@ async function convertedReport(
 }> {
   const rows = await db.prepare(`SELECT t.date, COALESCE(t.fx_lock_date, t.date) AS lock_date,
       t.amount_minor, t.currency, t.kind, t.status, COALESCE(a.institution, '') AS institution
-    FROM transactions t
+    FROM effective_transactions t
     JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
     WHERE ${where} AND (${confirmed} OR ${query.includeProvisional ? provisional : '0'})
     ORDER BY t.date, t.id`).bind(...bindings).all<ConversionRow>();
@@ -485,15 +485,15 @@ export async function readLedgerReport(
       COALESCE(SUM(CASE WHEN ${query.includeProvisional ? provisional : '0'} THEN ${signedAmount} ELSE 0 END), 0) AS provisional_minor_units,
       SUM(CASE WHEN ${confirmed} THEN 1 ELSE 0 END) AS confirmed_count,
       SUM(CASE WHEN ${query.includeProvisional ? provisional : '0'} THEN 1 ELSE 0 END) AS provisional_count
-    FROM transactions t WHERE ${where} GROUP BY t.currency ORDER BY t.currency`).bind(...bindings).all<SummaryRow>();
+    FROM effective_transactions t WHERE ${where} GROUP BY t.currency ORDER BY t.currency`).bind(...bindings).all<SummaryRow>();
   const daily = await db.prepare(`SELECT t.date, t.currency,
       COALESCE(SUM(CASE WHEN ${confirmed} THEN ${signedAmount} ELSE 0 END), 0) AS confirmed_minor_units,
       COALESCE(SUM(CASE WHEN ${query.includeProvisional ? provisional : '0'} THEN ${signedAmount} ELSE 0 END), 0) AS provisional_minor_units
-    FROM transactions t WHERE ${where} GROUP BY t.date, t.currency ORDER BY t.date, t.currency`).bind(...bindings).all<DailyRow>();
-  const reviews = await db.prepare(`SELECT COUNT(*) AS count FROM transactions t WHERE ${where} AND t.status = 'needs_review'`).bind(...bindings).first<CountRow>();
-  const excluded = await db.prepare(`SELECT COUNT(*) AS count FROM transactions t WHERE ${where}
+    FROM effective_transactions t WHERE ${where} GROUP BY t.date, t.currency ORDER BY t.date, t.currency`).bind(...bindings).all<DailyRow>();
+  const reviews = await db.prepare(`SELECT COUNT(*) AS count FROM effective_transactions t WHERE ${where} AND t.status = 'needs_review'`).bind(...bindings).first<CountRow>();
+  const excluded = await db.prepare(`SELECT COUNT(*) AS count FROM effective_transactions t WHERE ${where}
     AND status <> 'needs_review' AND NOT (${confirmed} OR ${query.includeProvisional ? provisional : '0'})`).bind(...bindings).first<CountRow>();
-  const sources = await db.prepare(`SELECT t.source, COUNT(*) AS count FROM transactions t WHERE ${where} GROUP BY t.source ORDER BY t.source`).bind(...bindings).all<SourceRow>();
+  const sources = await db.prepare(`SELECT t.source, COUNT(*) AS count FROM effective_transactions t WHERE ${where} GROUP BY t.source ORDER BY t.source`).bind(...bindings).all<SourceRow>();
   const converted = query.reportingCurrency
     ? await convertedReport(db, query, where, bindings, confirmed, provisional, dependencies)
     : { convertedTotals: null, convertedDailyTotals: [], fx: emptyFx() };

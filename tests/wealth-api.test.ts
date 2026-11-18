@@ -1,32 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createD1Fixture, task24MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import worker from '../worker/index';
 import { createOpaqueCredential, hashSecret } from '../worker/mobile-auth';
 import { computeFxSnapshotDigest } from '../worker/ledger-reports';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
-const wealthMigrations = [
-  ...task24MigrationNames,
-  '0025-lunchflow-platform.sql',
-  '0026-lunchflow-connection-mappings.sql',
-  '0027-hosted-users-activation.sql',
-  '0028-recurring-plans.sql',
-  '0029-budget.sql',
-  '0030-ai-settings.sql',
-  '0031-budget-tracking.sql',
-  '0032-ai-official-providers.sql',
-  '0033-wealth.sql',
-  '0034-manual-matches.sql',
-] as const;
-
 afterEach(async () => {
   vi.unstubAllGlobals();
   while (fixtures.length > 0) await fixtures.pop()!.dispose();
 });
 
 async function fixture() {
-  const value = await createD1Fixture(wealthMigrations);
+  const value = await createD1Fixture(currentMigrationNames);
   fixtures.push(value);
   await provisionWebOwner(value.db);
   return value;

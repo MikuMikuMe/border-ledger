@@ -1,3 +1,5 @@
+import {seedTenants,OWNER_LEDGER} from './helpers/tenants';
+import {editTransaction,deleteTransaction} from '../worker/transaction-overrides';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../worker/index';
@@ -73,6 +75,16 @@ describe('daily FX snapshot warming', () => {
 
     await expect(scheduledHandler()({ scheduledTime: Date.parse('2026-10-14T06:15:00.000Z'), cron: '15 6 * * *' }, { DB: db as never }, { waitUntil: vi.fn() }))
       .rejects.toThrow('database unavailable');
+  });
+
+  it('still purges expired recovery details when FX warming fails', async () => {
+    const {db}=fixture();await seedTenants(db);
+    await editTransaction(db,OWNER_LEDGER,{id:'owner-tx-1',revision:0},{requestId:'scheduled-edit-001',accountId:'owner-account',date:'2026-10-25',merchant:'Private edit',amount:'12.34',currency:'CAD',category:'Food',kind:'expense',note:'Private note',expectedAnnotationRevision:0});
+    await deleteTransaction(db,OWNER_LEDGER,{id:'owner-tx-1',revision:1,requestId:'scheduled-delete-01'});
+    await db.prepare("UPDATE transaction_overrides SET deleted_at='2025-01-01 00:00:00' WHERE transaction_id='owner-tx-1'").run();
+    const failing={prepare:(sql:string)=>{if(sql.includes('FROM fx_rate_snapshots'))throw new Error('FX database failure');return db.prepare(sql);},batch:db.batch.bind(db)};
+    await expect(scheduledHandler()({scheduledTime:Date.parse('2026-10-14T06:15:00.000Z'),cron:'15 6 * * *'},{DB:failing as never},{waitUntil:vi.fn()})).rejects.toThrow('FX database failure');
+    expect(await db.prepare("SELECT merchant,note,has_edits FROM transaction_overrides WHERE transaction_id='owner-tx-1'").first()).toEqual({merchant:null,note:null,has_edits:0});
   });
 
   it('configures the same daily trigger for root and production', () => {

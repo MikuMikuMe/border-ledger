@@ -94,8 +94,16 @@ export class FinanceController {
     if(!this.disposed&&this.mutation.current().status==='completed')await this.loadRecurring();
   }
   async refreshTransaction(id:string) {
-    const page=await this.ports.ledger.readTransactions({cursor:null,limit:1,query:id,currency:null,status:null,source:null,category:null});
-    return rememberRows(this.transactions,page.items).find(transaction=>transaction.id===id)??null;
+    let cursor:string|null=null;const seen=new Set<string>();
+    do {
+      const page=await this.ports.ledger.readTransactions({cursor,limit:100,query:id,currency:null,status:null,source:null,category:null});
+      const match=rememberRows(this.transactions,page.items).find(transaction=>transaction.id===id);
+      if(match)return match;
+      cursor=page.nextCursor;
+      if(cursor&&seen.has(cursor))throw new Error('Transaction search pagination repeated.');
+      if(cursor)seen.add(cursor);
+    }while(cursor);
+    return null;
   }
   private async readActivityPage(query:ActivityQuery,previous:Transactions|null):Promise<Transactions>{
     const page=await this.ports.ledger.readTransactions(query),items=rememberRows(this.transactions,page.items);

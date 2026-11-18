@@ -310,7 +310,7 @@ async function readAlertEvidence(db: D1Database, context: FinancialContext, rows
         t.amount_minor AS target_amount_minor, t.currency AS target_currency, t.kind AS target_kind,
         t.status AS target_status, t.source AS target_source
       FROM statement_reconciliation_candidates c
-      JOIN transactions t ON t.id = c.statement_transaction_id AND t.ledger_id = c.ledger_id
+      JOIN effective_transactions t ON t.id = c.statement_transaction_id AND t.ledger_id = c.ledger_id
       WHERE c.ledger_id = ?
         AND c.candidate_transaction_id IN (${placeholders(transactionIds.length)})
         AND t.source = 'statement'
@@ -388,6 +388,7 @@ async function readAlertPageRows(db: D1Database, context: FinancialContext, quer
   const clauses = [
     'p.ledger_id = ?',
     'e.ledger_id = p.ledger_id',
+    '(p.transaction_id IS NULL OR EXISTS (SELECT 1 FROM effective_transactions visible WHERE visible.ledger_id=p.ledger_id AND visible.id=p.transaction_id))',
   ];
   const bindings: unknown[] = [context.ledgerId];
   if (cursor) {
@@ -528,7 +529,7 @@ async function readAlertProjection(db: D1Database, context: FinancialContext, ev
       p.reason_codes_json, p.counted_currency, p.counted_amount_minor
     FROM alert_projections p
     JOIN alert_events e ON e.event_id = p.event_id AND e.ledger_id = p.ledger_id
-    WHERE p.ledger_id = ? AND p.event_id = ? LIMIT 1`).bind(context.ledgerId, eventId).first<AlertProjectionRow>();
+    WHERE p.ledger_id = ? AND p.event_id = ? AND (p.transaction_id IS NULL OR EXISTS (SELECT 1 FROM effective_transactions visible WHERE visible.ledger_id=p.ledger_id AND visible.id=p.transaction_id)) LIMIT 1`).bind(context.ledgerId, eventId).first<AlertProjectionRow>();
   await assertFinancialAuthority(db, context, 'ledger:review');
   return row;
 }
@@ -559,7 +560,7 @@ async function openCandidateForReview(db: D1Database, context: FinancialContext,
   const candidateId = target.candidateTransactionId ?? row.transaction_id;
   const candidate = await db.prepare(`SELECT c.id
     FROM statement_reconciliation_candidates c
-    JOIN transactions target ON target.id = c.statement_transaction_id AND target.ledger_id = c.ledger_id
+    JOIN effective_transactions target ON target.id = c.statement_transaction_id AND target.ledger_id = c.ledger_id
     WHERE c.ledger_id = ? AND c.status = 'open'
       AND c.statement_transaction_id = ? AND c.candidate_transaction_id = ?
       AND target.source = 'statement'
@@ -610,7 +611,7 @@ async function standaloneDecision(db: D1Database, context: FinancialContext, row
   const reviewId = `mobile-review:${row.event_id}:${revision}`;
   const statements: D1Statement[] = [
     reviewStateGuard(db, context, `EXISTS (SELECT 1 FROM alert_projections
-      WHERE id=? AND ledger_id=? AND revision=? AND state='needs_review' AND transaction_id IS ?)`,
+      WHERE id=? AND ledger_id=? AND revision=? AND state='needs_review' AND transaction_id IS ? AND (transaction_id IS NULL OR EXISTS (SELECT 1 FROM effective_transactions visible WHERE visible.ledger_id=alert_projections.ledger_id AND visible.id=alert_projections.transaction_id)))`,
       [row.id, context.ledgerId, expectedRevision, row.transaction_id]),
     db.prepare(`UPDATE alert_projections SET state = ?, reason_codes_json = ?,
         counted_currency = CASE WHEN ? = 'keep_separate' THEN counted_currency ELSE NULL END,

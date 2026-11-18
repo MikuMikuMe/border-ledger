@@ -3,7 +3,7 @@ import {TurboModuleRegistry} from 'react-native';
 type Change = {sequence: number; observedAt: string};
 type Operation = {operationId: string; kind: string; status: string; updatedAt: string; resultId: string | null};
 export type CaptureSyncRequest = {operationId: string};
-export type Transaction = {id: string; occurredAt: string; currency: string; signedMinorUnits: string; merchant: string | null; accountLabel: string | null; status: string; sourceLabel: string | null; category: string | null; note: string | null; kind: string; revision: number; accountId: string | null};
+export type Transaction = {id: string; occurredAt: string; currency: string; signedMinorUnits: string; merchant: string | null; accountLabel: string | null; status: string; sourceLabel: string | null; category: string | null; note: string | null; kind: string; revision: number; accountId: string | null; editRevision: number | null; sourceAmountMinor: string | null};
 export type Transactions = {items: Transaction[]; nextCursor: string | null; limit: number};
 export type ActivityQuery = {cursor: string | null; limit: number; query: string | null; currency: string | null; status: string | null; source: string | null; category: string | null; from?: string | null; to?: string | null};
 export type ReportQuery = {startDate: string; endDate: string; includeProvisional: boolean; currency: string | null; reportingCurrency: string | null; timeZone: string; category?: string | null};
@@ -26,6 +26,7 @@ export interface Spec extends TurboModule {
   readCategories(): Promise<string>;
   createCategory(name:string): Promise<string>;
   categoryAction(action:string,body:string): Promise<string>;
+  readDeletedTransactions(): Promise<string>;
   readManualMatches(offset:number): Promise<string>;
   startManualWrite(operationId:string, action:string, body:string): Promise<Operation>;
   resumeManualWrite(operationId:string): Promise<Operation>;

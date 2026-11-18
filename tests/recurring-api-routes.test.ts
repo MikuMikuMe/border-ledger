@@ -1,7 +1,7 @@
 import { VERIFIED_WEB_ENV, VERIFIED_WEB_HEADERS, provisionWebOwner } from './helpers/web-identity';
 import { afterEach, describe, expect, it } from 'vitest';
 import worker from '../worker/index';
-import { createD1Fixture, task22MigrationNames } from './helpers/d1';
+import { createD1Fixture, task22MigrationNames, currentMigrationNames } from './helpers/d1';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 const env = (db: Awaited<ReturnType<typeof createD1Fixture>>['db']) => ({
@@ -44,7 +44,7 @@ describe('recurring API routes', () => {
   });
 
   it('reads the private recurring projection and summary without contacting Plaid', async () => {
-    const fixture = await createD1Fixture(task22MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const runtime = env(fixture.db);

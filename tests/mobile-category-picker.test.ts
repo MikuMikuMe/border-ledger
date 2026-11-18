@@ -14,6 +14,8 @@ describe('mobile category picker',()=>{
   const onChange=vi.fn();let tree:any;
   await act(async()=>{tree=create(React.createElement(CategoryServicesContext.Provider,{value:api},React.createElement(CategoryPicker,{dark:false,value:'',disabled:false,onChange})));});
   expect(tree.root.findAll((n:any)=>n.type==='Pressable'&&n.props.accessibilityLabel==='Choose category')[0].props.accessibilityValue).toEqual({text:'No category selected'});
+  const selector=tree.root.findByProps({accessibilityLabel:'Choose category'}),manage=tree.root.findByProps({accessibilityLabel:'Manage categories'});
+  expect(selector.findByProps({testID:'disclosure-indicator'})).toBeTruthy();expect(selector.props.style.backgroundColor).not.toBe(manage.props.style.backgroundColor);
   act(()=>tree.root.findByProps({accessibilityLabel:'Choose category'}).props.onPress());
   act(()=>tree.root.findByProps({accessibilityLabel:'Food'}).props.onPress());
   expect(onChange).toHaveBeenCalledWith('Food');

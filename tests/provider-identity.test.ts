@@ -1,6 +1,6 @@
 import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyMigrations, createD1Fixture, task23MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task23MigrationNames, currentMigrationNames } from './helpers/d1';
 import { mapPlaidTransaction, upsertPlaidTransaction } from '../worker/plaid';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -13,7 +13,7 @@ describe('Task 3 provider and candidate identity', () => {
   it('upserts by provider identity and writes source provenance idempotently', async () => {
     const fixture = await createD1Fixture();
     fixtures.push(fixture);
-    await applyMigrations(fixture.db, task23MigrationNames);
+    await applyMigrations(fixture.db, currentMigrationNames);
     await fixture.db.batch([
       fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)')
         .bind('account-rbc', 'Synthetic RBC', 'RBC', 'CAD', 'chequing', 'connected'),
@@ -62,7 +62,7 @@ describe('Task 3 provider and candidate identity', () => {
   it('retains pending and current provider lineage when later payloads omit one side', async () => {
     const fixture = await createD1Fixture();
     fixtures.push(fixture);
-    await applyMigrations(fixture.db, task23MigrationNames);
+    await applyMigrations(fixture.db, currentMigrationNames);
     await fixture.db.batch([
       fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)')
         .bind('account-rbc', 'Synthetic RBC', 'RBC', 'CAD', 'chequing', 'connected'),

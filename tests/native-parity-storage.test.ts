@@ -1,6 +1,6 @@
 import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyMigrations, createD1Fixture, task3MigrationNames, task22MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task3MigrationNames, task22MigrationNames, currentMigrationNames } from './helpers/d1';
 import { appendAnnotationRevision } from '../worker/annotation-store';
 import { createImportPreview, publishImport, stageImportChunk, cleanupExpiredImportStaging } from '../worker/import-store';
 import { createOwnerAuthRequest, createOwnerSessionFamily, putReplayRecord, cleanupExpiredReplayRecords } from '../worker/owner-session-store';
@@ -113,6 +113,7 @@ describe('Task 3 native-parity stores', () => {
   it('updates shared preferences by revision and appends immutable annotation revisions', async () => {
     const fixture = await setup();
     await applyMigrations(fixture.db, task22MigrationNames);
+    await applyMigrations(fixture.db, currentMigrationNames);
     await expect(readPreferences(fixture.db, OWNER_LEDGER)).resolves.toMatchObject({ ledgerId: 'personal', reportingTimezone: 'America/Toronto', weekStart: 1, revision: 0 });
     await expect(updatePreferences(fixture.db, OWNER_LEDGER, 0, { reportingTimezone: 'Asia/Shanghai', weekStart: 0, preferredCurrency: 'CNY' })).resolves.toMatchObject({ reportingTimezone: 'Asia/Shanghai', weekStart: 0, preferredCurrency: 'CNY', revision: 1 });
     await expect(updatePreferences(fixture.db, OWNER_LEDGER, 0, { reportingTimezone: 'UTC', weekStart: 1, preferredCurrency: null })).rejects.toThrow(/revision/i);

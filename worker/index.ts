@@ -1,3 +1,4 @@
+import {purgeExpiredTransactionOverrides} from './transaction-overrides';
 import {readMobileTransactionPage} from './mobile-transactions';
 import {handleCategoryApi} from './category-http';
 import { annotateMobileTransaction, MobileReviewError } from './mobile-review';
@@ -740,8 +741,7 @@ function summarize(transactions: StoredTransaction[], includeProvisional: boolea
 }
 
 function projectAnnotation({ annotation_category, annotation_note, ...transaction }: StoredTransaction & { annotation_revision: number | null; annotation_category: string | null; annotation_note: string | null }) {
-  if (transaction.annotation_revision === null) return { ...transaction, annotation_revision: 0 };
-  return { ...transaction, category: annotation_category!, note: annotation_note };
+  return { ...transaction, annotation_revision: transaction.annotation_revision ?? 0 };
 }
 async function readTransactions(env: Env, context: LedgerContext, url: URL) {
   const clauses: string[] = ['t.ledger_id = ?', notSupersededAlertTransactionPredicate('t')];
@@ -765,7 +765,7 @@ async function readTransactions(env: Env, context: LedgerContext, url: URL) {
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const statement = env.DB.prepare(`SELECT t.*, ar.revision AS annotation_revision,
       ar.category AS annotation_category, ar.note AS annotation_note
-    FROM transactions t LEFT JOIN annotation_revisions ar ON ar.id = (
+    FROM effective_transactions t LEFT JOIN annotation_revisions ar ON ar.id = (
       SELECT latest.id FROM annotation_revisions latest
       WHERE latest.ledger_id=t.ledger_id AND latest.transaction_id=t.id
       ORDER BY latest.revision DESC LIMIT 1
@@ -1217,12 +1217,16 @@ export default {
   async scheduled(controller: { scheduledTime: number }, env: Env) {
     const requestedDate = new Date(controller.scheduledTime).toISOString().slice(0, 10);
     try {
-      await warmFxSnapshot(env.DB, requestedDate, { now: () => new Date(controller.scheduledTime) });
-    } catch (error) {
-      if (!isFxProviderError(error)) throw error;
-      console.error('fx_snapshot_refresh_failed', error.name);
+      try {
+        await warmFxSnapshot(env.DB, requestedDate, { now: () => new Date(controller.scheduledTime) });
+      } catch (error) {
+        if (!isFxProviderError(error)) throw error;
+        console.error('fx_snapshot_refresh_failed', error.name);
+      }
+      await scheduleLunchFlow(env);
+    } finally {
+      await purgeExpiredTransactionOverrides(env.DB,new Date(controller.scheduledTime).toISOString());
     }
-    await scheduleLunchFlow(env);
 
   },
 

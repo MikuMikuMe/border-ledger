@@ -498,7 +498,7 @@ function snapshotTransactionStatements(context: SnapshotSqlContext) {
       note = CASE WHEN EXISTS(SELECT 1 FROM annotation_revisions ar WHERE ar.ledger_id=transactions.ledger_id AND ar.transaction_id=transactions.id) THEN transactions.note ELSE excluded.note END,
       provider_transaction_id = excluded.provider_transaction_id,
       provider_pending_transaction_id = NULL,
-      updated_at = CURRENT_TIMESTAMP WHERE transactions.ledger_id = excluded.ledger_id AND transactions.account_id = excluded.account_id AND transactions.source = 'lunchflow'`)
+      updated_at = CURRENT_TIMESTAMP WHERE transactions.ledger_id = excluded.ledger_id AND transactions.account_id = excluded.account_id AND transactions.source = 'lunchflow' AND NOT EXISTS (SELECT 1 FROM transaction_overrides o WHERE o.ledger_id=transactions.ledger_id AND o.transaction_id=transactions.id AND o.deleted_at IS NOT NULL AND julianday('now')-julianday(o.deleted_at)>=365)`)
     .bind(ledgerId, accountId, payload, ...fenceBindings)];
 }
 
@@ -510,7 +510,7 @@ function snapshotSourceStatements(context: SnapshotSqlContext) {
     SELECT json_extract(incoming.value, '$.sourceRecordId'), ?, 'lunchflow',
       json_extract(incoming.value, '$.sourceIdentity'), json_extract(incoming.value, '$.id'), ?, NULL,
       json_extract(incoming.value, '$.providerAccountId'), json_extract(incoming.value, '$.providerTransactionId'),
-      json_extract(incoming.value, '$.contentDigest')
+      CASE WHEN EXISTS (SELECT 1 FROM transaction_overrides o WHERE o.ledger_id=? AND o.transaction_id=json_extract(incoming.value, '$.id') AND o.deleted_at IS NOT NULL AND julianday('now')-julianday(o.deleted_at)>=365) THEN '' ELSE json_extract(incoming.value, '$.contentDigest') END
     FROM json_each(?) AS incoming
     WHERE ${revisionFence}
     ON CONFLICT(ledger_id, source_kind, identity_key) DO UPDATE SET
@@ -520,13 +520,14 @@ function snapshotSourceStatements(context: SnapshotSqlContext) {
       provider_account_id = excluded.provider_account_id,
       provider_transaction_id = excluded.provider_transaction_id,
       content_digest = excluded.content_digest`)
-    .bind(ledgerId, accountId, payload, ...fenceBindings)];
+    .bind(ledgerId, accountId, ledgerId, payload, ...fenceBindings)];
 }
 
 function snapshotCleanupStatements(context: SnapshotSqlContext) {
   const { db, ledgerId, accountId, providerAccountId, revision, payload, revisionFence, fenceBindings } = context;
   return [db.prepare(`DELETE FROM transactions
     WHERE ledger_id = ? AND account_id = ? AND source = 'lunchflow' AND status = 'provisional'
+      AND NOT EXISTS(SELECT 1 FROM transaction_overrides o WHERE o.ledger_id=transactions.ledger_id AND o.transaction_id=transactions.id)
       AND ${revisionFence}
       AND EXISTS (SELECT 1 FROM transaction_source_records source_row
         WHERE source_row.transaction_id = transactions.id AND source_row.ledger_id=transactions.ledger_id AND source_row.source_kind = 'lunchflow'

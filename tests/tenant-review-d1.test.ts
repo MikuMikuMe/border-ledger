@@ -1,11 +1,11 @@
 import { expect, it } from 'vitest';
-import { createD1Fixture, task24MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 import { seedRouteTenants, routeRequest, callRoute } from './helpers/tenant-routes';
 import { event } from './helpers/alerts';
 import type { D1Database } from '../worker/db-types';
 
 async function reviewFixture(resolved=false) {
-  const fixture=await createD1Fixture(task24MigrationNames);
+  const fixture=await createD1Fixture(currentMigrationNames);
   const route=await seedRouteTenants(fixture.db);
   for(const user of ['owner','second']) {
     const response=await callRoute(route.env,routeRequest('/api/mobile/v1/alerts',{token:`capture-${user}`},'POST',{

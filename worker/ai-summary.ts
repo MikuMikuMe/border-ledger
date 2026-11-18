@@ -29,7 +29,7 @@ function groupTransactions(rows:SummaryTransaction[]):SummaryGroup[] {
 export async function readAiLedgerSummary(db:D1Database,context:FinancialContext,period:SummaryPeriod) {
   validatePeriod(period);
   await assertFinancialAuthority(db,context,'ledger:read');
-  const rows=await db.prepare(`SELECT t.date,t.merchant,t.category,t.currency,t.kind,t.amount_minor AS amountMinor,a.name AS account,t.note,t.source FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.ledger_id=t.ledger_id
+  const rows=await db.prepare(`SELECT t.date,t.merchant,t.category,t.currency,t.kind,t.amount_minor AS amountMinor,a.name AS account,t.note,t.source FROM effective_transactions t JOIN accounts a ON a.id=t.account_id AND a.ledger_id=t.ledger_id
     WHERE t.ledger_id=? AND t.date>=? AND t.date<=? AND t.status='confirmed' AND (?=1 OR t.kind<>'transfer')
     AND ${notSupersededAlertTransactionPredicate('t')} ORDER BY t.date,t.id LIMIT 3001`)
     .bind(context.ledgerId,period.from,period.to,period.includeTransfers?1:0).all<SummaryTransaction>();

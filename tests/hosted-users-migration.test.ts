@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyMigrations, createD1Fixture, task20MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task20MigrationNames, currentMigrationNames } from './helpers/d1';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import type { D1Database } from '../worker/db-types';
 import { provisionOwnerIdentityBindings, resolveLedgerContext } from '../worker/tenant-context';
@@ -108,12 +108,7 @@ describe('hosted users migration', () => {
     const fixture = await createD1Fixture([...existingMigrations, migration]);
     const fresh = createSqliteD1Fixture();
     try {
-      await applyMigrations(fixture.db, [
-        '0022-unbound-auth.sql',
-        '0023-plaid-tenant-connections.sql',
-        '0024-alert-raw-identities.sql',
-        '0025-lunchflow-platform.sql', '0026-lunchflow-connection-mappings.sql', '0027-hosted-users-activation.sql', '0028-recurring-plans.sql', '0029-budget.sql', '0030-ai-settings.sql','0031-budget-tracking.sql', '0032-ai-official-providers.sql', '0033-wealth.sql', '0034-manual-matches.sql', '0035-annotation-projection.sql', '0036-categories.sql',
-      ]);
+      await applyMigrations(fixture.db, currentMigrationNames);
       const tables = (await fresh.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all<{name:string}>()).results;
       for (const {name} of tables) {
         const columns = (db: D1Database) => db.prepare(`PRAGMA table_info(${name})`).all();

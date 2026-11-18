@@ -9,9 +9,10 @@ vi.mock('../mobile/node_modules/react-native/index.js', () => ({
   Text: 'Text', View: 'View', Pressable: 'Pressable', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator', Modal: 'Modal', ScrollView: 'ScrollView', KeyboardAvoidingView: 'KeyboardAvoidingView',
   StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
   TurboModuleRegistry: { getEnforcing: () => ({}) },
+  findNodeHandle: () => null,
 }));
 
-const { InvestmentOperations, newDraftId } = await import('../mobile/src/features/wealth/WealthViews');
+const { Action, InvestmentOperations, newDraftId } = await import('../mobile/src/features/wealth/WealthViews');
 const { DraftOperationIdentityRegistry, safeEventPayload } = await import('../mobile/src/screens/WealthScreen');
 
 type WriteCall = { operationId: string; action: string; body: string };
@@ -446,5 +447,19 @@ describe('Android Wealth typed write flow', () => {
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Show CSV column mapping' }).props.onPress(); });
     act(() => { tree.root.findByProps({ accessibilityLabel: 'Re-preview mapped CSV' }).props.onPress(); });
     expect(remap).toHaveBeenCalledWith({ date: 'posted_on' });
+  });
+});
+
+
+describe('Wealth action affordances', () => {
+  it('exposes choices as checked radio controls and ordinary actions as buttons', () => {
+    let choice: any, action: any;
+    act(() => {
+      choice = create(React.createElement(Action, { dark: false, label: 'Stock', selected: true, onPress: () => {} }));
+      action = create(React.createElement(Action, { dark: false, label: 'Save', onPress: () => {} }));
+    });
+    expect(choice.root.findByProps({ accessibilityLabel: 'Stock' }).props).toMatchObject({ accessibilityRole: 'radio', accessibilityState: { checked: true } });
+    expect(action.root.findByProps({ accessibilityLabel: 'Save' }).props.accessibilityRole).toBe('button');
+    act(() => { choice.unmount(); action.unmount(); });
   });
 });

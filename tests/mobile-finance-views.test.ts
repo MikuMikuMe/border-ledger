@@ -8,7 +8,7 @@ const confirmDiscard=vi.hoisted(()=>vi.fn());
 vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{NativeDatePicker:{pick:pickDate}},Alert:{alert:confirmDiscard},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
 // Runtime import keeps RN ambient declarations out of the independent React 18 web typecheck.
 const viewModule='../mobile/src/features/finance/FinanceViews';
-const {OverviewView,ActivityView,RecurringView}=await import(viewModule);
+const {OverviewView,ActivityView,RecurringView,Action}=await import(viewModule);
 const {ManualEntryForm}=await import('../mobile/src/features/finance/ManualEntryForm');
 const {PlanEditor}=await import('../mobile/src/features/finance/PlanEditor');
 const motion=await import('../mobile/src/features/auth/presentationPolicy');
@@ -20,6 +20,41 @@ const text=(tree:any)=>JSON.stringify(tree.toJSON());
 const ready=(data:unknown)=>({phase:'ready',message:null,data});
 const actions={onRetry:()=>{},onLens:()=>{},onFilter:()=>{},onOpen:()=>{},onLoadMore:()=>{},onClose:()=>{},onSave:()=>{},onDraft:()=>{}};
 describe('native financial view fixtures and accessibility',()=>{
+  it('visually distinguishes actions from selection controls in both themes',()=>{
+    for(const dark of [false,true]){
+      const button=render(Action,{dark,label:'Save',onPress:()=>{}});
+      const choice=render(Action,{dark,label:'Expense',radio:true,selected:false,onPress:()=>{}});
+      const selected=render(Action,{dark,label:'Expense',radio:true,selected:true,onPress:()=>{}});
+      const primary=render(Action,{dark,label:'Save',variant:'primary',onPress:()=>{}}),danger=render(Action,{dark,label:'Delete',variant:'danger',onPress:()=>{}});
+      const b=button.root.findByType('Pressable'),c=choice.root.findByType('Pressable'),s=selected.root.findByType('Pressable');
+      expect(b.props.style.backgroundColor).not.toBe(c.props.style.backgroundColor);
+      expect(primary.root.findByType('Pressable').props.style.backgroundColor).not.toBe(b.props.style.backgroundColor);
+      expect(danger.root.findByType('Pressable').props.style.backgroundColor).not.toBe(b.props.style.backgroundColor);
+      expect(s.props.accessibilityState.checked).toBe(true);
+      expect(s.props.style.backgroundColor).not.toBe(c.props.style.backgroundColor);
+      act(()=>{button.unmount();choice.unmount();selected.unmount();primary.unmount();danger.unmount();});
+    }
+  });
+
+  it('distinguishes currency choices from the more-currencies disclosure',()=>{
+    const draft={accountId:'account',date:'2026-11-07',merchant:'Coffee',amount:'1.00',currency:'CAD',kind:'expense',direction:'out',category:'Food',note:''};
+    const account={id:'account',displayName:'Bank',institution:'Bank',instrument:null,currencies:['CAD'],lastSuccessfulSyncAt:null};
+    const tree=render(ManualEntryForm,{dark:false,accounts:[account],draft,onDraft:()=>{},mutation:{blocked:false,status:'ready'},onSave:()=>{},onClose:()=>{}});
+    const choice=tree.root.findByProps({accessibilityLabel:'CAD'}),more=tree.root.findByProps({accessibilityLabel:'More currencies'});
+    expect(choice.props.accessibilityRole).toBe('radio');expect(choice.findByProps({testID:'selection-indicator'})).toBeTruthy();
+    expect(more.props.accessibilityRole).toBe('button');expect(more.props.accessibilityState.expanded).toBe(false);expect(more.props.style.borderWidth).toBe(0);
+    act(()=>more.props.onPress());expect(tree.root.findByProps({accessibilityLabel:'Hide currencies'}).props.accessibilityState.expanded).toBe(true);
+    act(()=>tree.unmount());
+  });
+
+  it('shows category and note as read-only when the full editor is available',()=>{
+    const selected={...transaction,editRevision:0,sourceAmountMinor:'-1234',accountId:'acct',category:'Food',note:'Dinner'};
+    const tree=render(ActivityView,{...actions,dark:false,state:ready({items:[selected],nextCursor:null,limit:50}),filters:{},selected,draft:{category:'Food',note:'Dinner'},mutation:{blocked:false,status:'ready'},onEdit:()=>{},onDelete:()=>{}});
+    expect(tree.root.findByProps({accessibilityLabel:'Edit transaction'})).toBeTruthy();
+    expect(tree.root.findAllByProps({accessibilityLabel:'Save annotation'})).toHaveLength(0);
+    expect(tree.root.findAllByProps({accessibilityLabel:'Note'})).toHaveLength(0);
+    act(()=>tree.unmount());
+  });
   it('distinguishes CNY spending bars with the ledger currency color',()=>{
     const cnyReport={...report,dailyTotals:[{date:'2026-10-17',currency:'CNY',confirmedMinorUnits:'2000',provisionalMinorUnits:'0'}]};
     const tree=render(OverviewView,{...actions,dark:false,state:ready(cnyReport),snapshot:null,lens:{window:'Month',source:null,target:null,include:false},currencies:['CAD','CNY']});

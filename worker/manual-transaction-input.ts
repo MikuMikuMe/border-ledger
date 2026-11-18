@@ -99,7 +99,7 @@ function matchRevision(value: unknown) {
 export function matchInput(value: unknown) {
   const body = record(value);
   const manualId = text(body.manualId, 'manual transaction', 128);
-  const bankId = text(body.bankId, 'bank transaction', 128);
+  const bankId = text(body.bankId, 'bank transaction', 160);
   const decision = matchDecision(body.decision);
   const revision = matchRevision(body.expectedRevision);
   return {manualId,bankId,decision,revision};

@@ -32,7 +32,7 @@ object BridgePayloads {
     fun operation(v: BridgeOperation) = mapOf("operationId" to v.operationId, "kind" to v.kind, "status" to v.status, "updatedAt" to v.updatedAt, "resultId" to v.resultId)
     fun transaction(v: LedgerTransaction) = mapOf("id" to v.id, "occurredAt" to v.occurredAt, "currency" to v.currency,
         "signedMinorUnits" to v.signedMinorUnits.toString(), "merchant" to v.merchant, "accountLabel" to v.accountLabel, "status" to v.status,
-        "sourceLabel" to v.sourceLabel, "category" to v.category, "note" to v.note, "kind" to v.kind, "revision" to v.revision, "accountId" to v.accountId)
+        "sourceLabel" to v.sourceLabel, "category" to v.category, "note" to v.note, "kind" to v.kind, "revision" to v.revision, "accountId" to v.accountId, "editRevision" to v.editRevision, "sourceAmountMinor" to v.sourceAmountMinor?.toString())
     fun transactions(v: LedgerTransactionPage) = mapOf("items" to v.items.map(::transaction), "nextCursor" to v.nextCursor, "limit" to v.limit)
     fun snapshot(v: LedgerSnapshot) = mapOf("schemaVersion" to v.schemaVersion, "snapshotAt" to v.snapshotAt, "timeZone" to v.timeZone,
         "accounts" to v.accounts.map { mapOf("id" to it.id, "displayName" to it.displayName, "institution" to it.institution, "instrument" to it.instrument, "currencies" to it.currencies, "lastSuccessfulSyncAt" to it.lastSuccessfulSyncAt) },

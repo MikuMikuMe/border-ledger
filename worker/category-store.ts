@@ -11,8 +11,8 @@ export function categoryName(value:unknown) {
 export async function listCategories(db:D1Database,context:FinancialContext) {
  await assertFinancialAuthority(db,context,'ledger:read');
  const result=await db.prepare(`SELECT name,archived FROM (SELECT name,archived FROM categories WHERE ledger_id=?
- UNION SELECT category AS name,0 AS archived FROM transactions WHERE ledger_id=? AND category NOT IN (SELECT name FROM categories WHERE ledger_id=?)
- UNION SELECT a.category AS name,0 AS archived FROM annotation_revisions a WHERE a.ledger_id=? AND a.revision=(SELECT MAX(latest.revision) FROM annotation_revisions latest WHERE latest.ledger_id=a.ledger_id AND latest.transaction_id=a.transaction_id) AND a.category NOT IN (SELECT name FROM categories WHERE ledger_id=?)
+ UNION SELECT category AS name,0 AS archived FROM transaction_projections WHERE ledger_id=? AND category NOT IN (SELECT name FROM categories WHERE ledger_id=?)
+ UNION SELECT a.category AS name,0 AS archived FROM annotation_revisions a JOIN transaction_projections t ON t.ledger_id=a.ledger_id AND t.id=a.transaction_id WHERE a.ledger_id=? AND a.revision>t.override_annotation_revision AND a.revision=(SELECT MAX(latest.revision) FROM annotation_revisions latest WHERE latest.ledger_id=a.ledger_id AND latest.transaction_id=a.transaction_id) AND a.category NOT IN (SELECT name FROM categories WHERE ledger_id=?)
  UNION SELECT category AS name,0 AS archived FROM budget_allocations WHERE ledger_id=? AND category NOT IN (SELECT name FROM categories WHERE ledger_id=?)
  ) UNION SELECT category AS name,0 AS archived FROM budget_targets WHERE ledger_id=? AND category NOT IN (SELECT name FROM categories WHERE ledger_id=?)
  UNION SELECT category AS name,0 AS archived FROM budget_tracking_plans WHERE ledger_id=? AND category NOT IN (SELECT name FROM categories WHERE ledger_id=?)

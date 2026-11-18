@@ -1,3 +1,4 @@
+import {editTransaction,deleteTransaction,restoreTransaction,listDeletedTransactions} from './transaction-overrides';
 import {handleCategoryApi} from './category-http';
 import type {AiEgressBinding} from './ai-egress';
 import { createManualTransaction, listManualMatches, decideManualMatch, manualMatchOffset, ManualTransactionConflict } from './manual-transactions';
@@ -560,12 +561,30 @@ async function handleMobileManualTransactions(request: Request, env: MobileRoute
   return isCreate ? json(await createManualTransaction(env.DB, owner, body), {status:201}) : json(await decideManualMatch(env.DB, owner, body));
 }
 
+async function executeMobileTransactionOverride(request:Request,db:D1Database,owner:Awaited<ReturnType<typeof authenticateOwner>>,match:RegExpExecArray) {
+  const input=bodyRecord(await readJsonBody<unknown>(request,16*1024));
+  const id=match[1]==='by-id'&&typeof input.transactionId==='string'?input.transactionId:decodeURIComponent(match[1]);
+  const target={id,revision:safeIntegerField(input,'expectedRevision'),requestId:stringField(input,'requestId',128)};
+  const actions={edit:()=>editTransaction(db,owner,target,input),delete:()=>deleteTransaction(db,owner,target),restore:()=>restoreTransaction(db,owner,target)};
+  return json(await actions[match[2] as keyof typeof actions]());
+}
+async function handleMobileTransactionOverrides(request:Request,env:MobileRouteEnv,config:MobileAuthConfig,url:URL) {
+  const list=request.method==='GET' && url.pathname==='/api/mobile/v1/transactions/deleted';
+  const match=request.method==='POST' ? /^\/api\/mobile\/v1\/transactions\/([^/]+)\/(edit|delete|restore)$/.exec(url.pathname) : null;
+  if(!list && !match)return null;
+  const scope=list?'ledger:read':'ledger:review';
+  const owner=await authenticateOwner(bearer(request),env.DB,config,scope);
+  authorizeMobileRoute(owner,url.pathname,scope);
+  if(list)return json({items:await listDeletedTransactions(env.DB,owner)});
+  return executeMobileTransactionOverride(request,env.DB,owner,match!);
+}
+
 async function handleMobileFeatureRoutes(request: Request, env: MobileRouteEnv, config: MobileAuthConfig, url: URL): Promise<Response | null> {
   const wealthResponse = await handleMobileWealthRequest(request, env, config, url);
   if (wealthResponse) return wealthResponse;
   const lunchFlowResponse = await handleLunchFlowMobileRequest(request, env, config);
   if (lunchFlowResponse) return lunchFlowResponse;
-  const connectionResponse = await handleMobileManualTransactions(request, env, config, url) ?? await handleMobileCategories(request, env, config, url) ?? await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
+  const connectionResponse = await handleMobileTransactionOverrides(request, env, config, url) ?? await handleMobileManualTransactions(request, env, config, url) ?? await handleMobileCategories(request, env, config, url) ?? await handleMobileBudgetRequest(request, env, config, url) ?? await handleMobileAiRequest(request, env, config, url) ?? await handleMobilePlanRequest(request, env, config, url) ?? await handleConnectionMobileRequest(request, env, config, url);
   return connectionResponse;
 }
 

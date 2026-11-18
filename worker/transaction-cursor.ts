@@ -1,5 +1,5 @@
-const MAX_CURSOR_LENGTH = 512;
-const MAX_ID_LENGTH = 128;
+const MAX_CURSOR_LENGTH = 1024;
+const MAX_ID_LENGTH = 160;
 
 export interface TransactionCursor {
   date: string;
