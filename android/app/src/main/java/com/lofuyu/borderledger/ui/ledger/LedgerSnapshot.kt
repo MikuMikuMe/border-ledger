@@ -259,7 +259,7 @@ object LedgerSnapshotDecoder {
                     reader.beginObject()
                     while (reader.hasNext()) {
                         when (reader.nextName()) {
-                            "nextCursor" -> nextCursor = reader.nextNullableStringBounded()
+                            "nextCursor" -> nextCursor = reader.nextNullableStringBounded(1024)
                             "limit" -> limit = reader.nextInt()
                             else -> reader.skipValue()
                         }
@@ -272,7 +272,7 @@ object LedgerSnapshotDecoder {
         reader.endObject()
         val pageLimit = requireNotNull(limit)
         require(pageLimit in 1..100)
-        require(nextCursor == null || nextCursor.length <= 512)
+        require(nextCursor == null || nextCursor.length <= 1024)
         return LedgerTransactionPage(items, nextCursor, pageLimit)
     }
 
@@ -289,6 +289,7 @@ object LedgerSnapshotDecoder {
         var source: String? = null
         var note: String? = null
         var revision = 0
+        var editRevision: Int? = null
         reader.beginObject()
         while (reader.hasNext()) {
             when (reader.nextName()) {
@@ -304,6 +305,7 @@ object LedgerSnapshotDecoder {
                 "source" -> source = reader.nextStringBounded()
                 "note" -> note = reader.nextNullableStringBounded()
                 "revision" -> revision = reader.nextInt()
+                "editRevision" -> editRevision = reader.nextInt().also { require(it >= 0) }
                 else -> reader.skipValue()
             }
         }
@@ -326,6 +328,8 @@ object LedgerSnapshotDecoder {
             kind = transactionKind,
             revision = revision,
             accountId = requireNonBlank(accountId),
+            editRevision = editRevision,
+            sourceAmountMinor = rawAmount,
         )
     }
 
@@ -702,16 +706,16 @@ object LedgerSnapshotDecoder {
         return requireNotNull(CurrencyRegistry().metadata(normalized)?.code) { "Currency is not registered." }
     }
 
-    private fun JsonReader.nextStringBounded(): String {
+    private fun JsonReader.nextStringBounded(maxLength: Int = MAX_STRING): String {
         require(peek() == JsonToken.STRING)
-        return nextString().also { require(it.length <= MAX_STRING) }
+        return nextString().also { require(it.length <= maxLength) }
     }
 
-    private fun JsonReader.nextNullableStringBounded(): String? = if (peek() == JsonToken.NULL) {
+    private fun JsonReader.nextNullableStringBounded(maxLength: Int = MAX_STRING): String? = if (peek() == JsonToken.NULL) {
         nextNull()
         null
     } else {
-        nextStringBounded()
+        nextStringBounded(maxLength)
     }
 
     private fun JsonReader.nextCurrency(): String = requireCurrency(nextStringBounded())

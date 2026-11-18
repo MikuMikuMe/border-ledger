@@ -332,7 +332,7 @@ function automaticConfirmationStatements(db:D1Database,scoped:ScopedEvent,match:
       linkId,
       ledger,
     ),
-    db.prepare(`UPDATE transactions SET status='needs_review',updated_at=CURRENT_TIMESTAMP WHERE id=? AND ledger_id=? AND source='alert' AND EXISTS (SELECT 1 FROM annotation_revisions WHERE transaction_id=? AND ledger_id=?) AND ${linkExists}`).bind(
+    db.prepare(`UPDATE transactions SET status='needs_review',updated_at=CURRENT_TIMESTAMP WHERE id=? AND ledger_id=? AND source='alert' AND (EXISTS (SELECT 1 FROM annotation_revisions WHERE transaction_id=? AND ledger_id=?) OR EXISTS (SELECT 1 FROM transaction_overrides WHERE transaction_id=transactions.id AND ledger_id=transactions.ledger_id)) AND ${linkExists}`).bind(
       id,
       ledger,
       id,
@@ -342,6 +342,7 @@ function automaticConfirmationStatements(db:D1Database,scoped:ScopedEvent,match:
     ),
     db.prepare(`DELETE FROM transactions WHERE id=? AND ledger_id=? AND source='alert'
       AND NOT EXISTS (SELECT 1 FROM annotation_revisions WHERE transaction_id=? AND ledger_id=?)
+      AND NOT EXISTS (SELECT 1 FROM transaction_overrides WHERE transaction_id=transactions.id AND ledger_id=transactions.ledger_id)
       AND NOT EXISTS (SELECT 1 FROM alert_projections WHERE transaction_id=? AND event_id<>? AND ledger_id=?)
       AND NOT EXISTS (SELECT 1 FROM alert_event_links WHERE to_transaction_id=? AND ledger_id=?) AND ${linkExists}`).bind(
         id,

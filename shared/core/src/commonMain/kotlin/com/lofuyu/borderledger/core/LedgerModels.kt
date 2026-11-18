@@ -121,6 +121,8 @@ data class LedgerTransaction(
     val kind: String = "expense",
     val revision: Int = 0,
     val accountId: String? = null,
+    val editRevision: Int? = null,
+    val sourceAmountMinor: Long? = null,
 )
 
 data class LedgerTransactionPage(

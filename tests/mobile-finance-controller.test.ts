@@ -127,3 +127,12 @@ describe('native screen controller',()=>{
     expect(c.activityFacetRows.find(row=>row.id===transaction.id)).toMatchObject({category:'Dining',revision:4});
     c.dispose();
   });
+
+  it('finds an exact long transaction ID after a page of partial matches',async()=>{
+    const f=fixture(),controller=new FinanceController(f.ports);await controller.start();
+    const id='a'.repeat(160),target={...transaction,id,revision:9},queries:unknown[]=[];
+    f.ports.ledger.readTransactions=async query=>{queries.push(query);return query.cursor?{items:[target],nextCursor:null,limit:query.limit}:{items:[{...transaction,id:'partial'}],nextCursor:'next-page',limit:query.limit};};
+    expect(await controller.refreshTransaction(id)).toMatchObject({id,revision:9});
+    expect(queries).toHaveLength(2);expect(queries[0]).toMatchObject({query:id,limit:100,cursor:null});expect(queries[1]).toMatchObject({query:id,cursor:'next-page'});
+    controller.dispose();
+  });

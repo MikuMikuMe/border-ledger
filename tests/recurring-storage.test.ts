@@ -1,6 +1,9 @@
+import {createSqliteD1Fixture} from './helpers/sqlite-d1';
+import { editTransaction, deleteTransaction, restoreTransaction, purgeExpiredTransactionOverrides } from '../worker/transaction-overrides';
+import { readMobileTransactionPage } from '../worker/mobile-transactions';
 import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createD1Fixture, task23MigrationNames } from './helpers/d1';
+import { createD1Fixture, currentMigrationNames } from './helpers/d1';
 import { mapPlaidTransaction, removePlaidTransaction, upsertPlaidTransaction } from '../worker/plaid';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -33,7 +36,7 @@ async function seedLedger(db: Awaited<ReturnType<typeof createD1Fixture>>['db'])
 
 describe('Plaid transaction storage identity', () => {
   it('keeps one local row across pending, posted, modified, and removal events', async () => {
-    const fixture = await createD1Fixture(task23MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await seedLedger(fixture.db);
 
@@ -59,6 +62,36 @@ describe('Plaid transaction storage identity', () => {
 
     await removePlaidTransaction(fixture.db,OWNER_LEDGER, 'item-1', 'posted-1');
     await expect(fixture.db.prepare('SELECT id FROM transactions').all()).resolves.toMatchObject({ results: [] });
+  });
+
+  it('retains pending-to-posted identity without restoring expired Plaid details', async () => {
+    const fixture=createSqliteD1Fixture();fixtures.push({dispose:async()=>fixture.close()});await seedLedger(fixture.db);
+    const pending=mapPlaidTransaction(plaidTransaction(),{accountId:'account-rbc',itemId:'item-1'})!;
+    const id=await upsertPlaidTransaction(fixture.db,OWNER_LEDGER,pending);
+    await deleteTransaction(fixture.db,OWNER_LEDGER,{id,revision:0,requestId:'expired-plaid-delete'});
+    await fixture.db.prepare("UPDATE transaction_overrides SET deleted_at=datetime('now','-366 days') WHERE transaction_id=?").bind(id).run();
+    await purgeExpiredTransactionOverrides(fixture.db,new Date().toISOString());
+    const posted=mapPlaidTransaction(plaidTransaction({transaction_id:'posted-1',pending_transaction_id:'pending-1',pending:false,merchant_name:'New merchant'}),{accountId:'account-rbc',itemId:'item-1'})!;
+    expect(await upsertPlaidTransaction(fixture.db,OWNER_LEDGER,posted)).toBe(id);
+    expect(await fixture.db.prepare('SELECT merchant,amount_minor,category,note,provider_transaction_id FROM transactions WHERE id=?').bind(id).first()).toEqual({merchant:'',amount_minor:0,category:'',note:null,provider_transaction_id:'posted-1'});
+    const sources=await fixture.db.prepare('SELECT content_digest FROM transaction_source_records WHERE transaction_id=?').bind(id).all<{content_digest:string}>();
+    expect(sources.results.length).toBeGreaterThan(0);
+    expect(sources.results.every(row=>row.content_digest==='')).toBe(true);
+  });
+
+  it('keeps edits and deletion through subsequent Plaid updates', async () => {
+    const fixture=await createD1Fixture(currentMigrationNames);fixtures.push(fixture);await seedLedger(fixture.db);
+    const original=mapPlaidTransaction(plaidTransaction({transaction_id:'posted-edit',pending:false}),{accountId:'account-rbc',itemId:'item-1'})!;
+    const id=await upsertPlaidTransaction(fixture.db,OWNER_LEDGER,original);
+    await editTransaction(fixture.db,OWNER_LEDGER,{id,revision:0},{requestId:'plaid-edit-operation',accountId:'account-rbc',date:'2026-10-10',merchant:'My corrected merchant',amount:'17.50',currency:'CAD',kind:'expense',category:'Food',note:'Corrected',expectedAnnotationRevision:0});
+    const update=mapPlaidTransaction(plaidTransaction({transaction_id:'posted-edit',pending:false,amount:30,merchant_name:'Bank update'}),{accountId:'account-rbc',itemId:'item-1'})!;
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER,update);
+    expect((await readMobileTransactionPage(fixture.db,OWNER_LEDGER,new URLSearchParams())).items.find(item=>item.id===id)).toMatchObject({merchant:'My corrected merchant',amountMinor:-1750,date:'2026-10-10',note:'Corrected'});
+    await deleteTransaction(fixture.db,OWNER_LEDGER,{id,revision:1,requestId:'plaid-delete-operation'});
+    await upsertPlaidTransaction(fixture.db,OWNER_LEDGER,update);
+    expect((await readMobileTransactionPage(fixture.db,OWNER_LEDGER,new URLSearchParams())).items.some(item=>item.id===id)).toBe(false);
+    await restoreTransaction(fixture.db,OWNER_LEDGER,{id,revision:2,requestId:'plaid-restore-operation'});
+    expect((await readMobileTransactionPage(fixture.db,OWNER_LEDGER,new URLSearchParams())).items.find(item=>item.id===id)).toMatchObject({merchant:'My corrected merchant',amountMinor:-1750});
   });
 
   it('preserves the existing ledger and skips a tracked migration on repeat', async () => {

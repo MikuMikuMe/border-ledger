@@ -91,7 +91,7 @@ async function readPage(db: D1Database, context: LedgerContext, filters: ExportF
   const { conditions, args } = exportConditions(context, filters, page.cursor);
   const result = await db.prepare(`SELECT t.id, t.account_id, t.date, t.merchant, t.category, t.kind, t.status, t.source,
       t.amount_minor, t.currency, t.note, t.fingerprint, source.bank_reference
-    FROM transactions t
+    FROM effective_transactions t
     LEFT JOIN (
       SELECT transaction_id, MAX(bank_reference) AS bank_reference
       FROM transaction_source_records
@@ -115,7 +115,7 @@ function exportConditions(context: LedgerContext, filters: ExportFilters, cursor
 
 async function countExportRows(db: D1Database, context: LedgerContext, filters: ExportFilters) {
   const { conditions, args } = exportConditions(context, filters);
-  const result = await db.prepare(`SELECT COUNT(*) AS count FROM transactions t WHERE ${conditions.join(' AND ')}`).bind(...args).first<{ count: number }>();
+  const result = await db.prepare(`SELECT COUNT(*) AS count FROM effective_transactions t WHERE ${conditions.join(' AND ')}`).bind(...args).first<{ count: number }>();
   return result?.count ?? 0;
 }
 

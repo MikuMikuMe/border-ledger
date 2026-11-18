@@ -6,7 +6,7 @@ import { notSupersededAlertTransactionPredicate } from './ledger-reports';
 
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
-const MAX_QUERY_LENGTH = 120;
+const MAX_QUERY_LENGTH = 160;
 const MAX_CATEGORY_LENGTH = 120;
 
 const VALID_STATUSES = new Set(['confirmed', 'provisional', 'needs_review']);
@@ -25,6 +25,7 @@ interface TransactionRow {
   source: string;
   note: string | null;
   annotation_revision: number | null;
+  override_revision: number;
 }
 
 function invalid(message: string): never {
@@ -121,11 +122,11 @@ export async function readMobileTransactionPage(db: D1Database, context: LedgerC
   const result = await db.prepare(`SELECT t.id, t.account_id, t.date, t.merchant, t.amount_minor, t.currency,
       COALESCE(annotation.category, t.category) AS category, t.kind, t.status, t.source,
       CASE WHEN annotation.revision IS NULL THEN t.note ELSE annotation.note END AS note,
-      annotation.revision AS annotation_revision
-    FROM transactions t JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
+      (SELECT MAX(revision) FROM annotation_revisions latest_revision WHERE latest_revision.ledger_id=t.ledger_id AND latest_revision.transaction_id=t.id) AS annotation_revision, t.override_revision
+    FROM effective_transactions t JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
     LEFT JOIN annotation_revisions annotation ON annotation.id = (
       SELECT latest.id FROM annotation_revisions latest
-      WHERE latest.ledger_id = t.ledger_id AND latest.transaction_id = t.id
+      WHERE latest.ledger_id = t.ledger_id AND latest.transaction_id = t.id AND latest.revision > t.override_annotation_revision
       ORDER BY latest.revision DESC LIMIT 1
     )
     WHERE ${clauses.join(' AND ')}
@@ -151,6 +152,7 @@ function transactionPage(results: TransactionRow[], limit: number) {
       source: row.source,
       note: row.note,
       revision: Number(row.annotation_revision ?? 0),
+      editRevision: Number(row.override_revision),
     })),
     page: {
       nextCursor: hasMore && last ? encodeCursor({ date: last.date, id: last.id }) : null,

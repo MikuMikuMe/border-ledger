@@ -1,3 +1,4 @@
+import {deleteTransaction,restoreTransaction,editTransaction} from '../worker/transaction-overrides';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import { OWNER_LEDGER, SECOND_LEDGER, seedTenants, tenantOwner } from './helpers/tenants';
@@ -26,6 +27,17 @@ it('isolates equal raw event identities and standalone review revisions',async()
   await applyMobileAlertReview(db,SECOND_LEDGER,'shared-event',{expectedRevision:1,decision:'ignore'});
   expect((await readMobileAlertPage(db,OWNER_LEDGER,new URLSearchParams())).items[0].revision).toBe(1);
   expect((await readMobileAlertPage(db,SECOND_LEDGER,new URLSearchParams())).items[0].revision).toBe(2);
+});
+it('hides a deleted transaction from its linked alert review until restoration',async()=>{
+  const db=await setup();
+  await db.prepare("UPDATE alert_projections SET transaction_id='second-tx-1' WHERE ledger_id='second-ledger'").run();
+  expect((await readMobileAlertPage(db,SECOND_LEDGER,new URLSearchParams())).items).toHaveLength(1);
+  await deleteTransaction(db,SECOND_LEDGER,{id:'second-tx-1',revision:0,requestId:'review-delete-linked'});
+  expect((await readMobileAlertPage(db,SECOND_LEDGER,new URLSearchParams())).items).toHaveLength(0);
+  await expect(applyMobileAlertReview(db,SECOND_LEDGER,'shared-event',{expectedRevision:1,decision:'ignore'})).rejects.toThrow();
+  expect((await readMobileAlertPage(db,OWNER_LEDGER,new URLSearchParams())).items).toHaveLength(1);
+  await restoreTransaction(db,SECOND_LEDGER,{id:'second-tx-1',revision:1,requestId:'review-restore-linked'});
+  expect((await readMobileAlertPage(db,SECOND_LEDGER,new URLSearchParams())).items).toHaveLength(1);
 });
 it('isolates equal annotation operation identities and rejects foreign transactions',async()=>{
   const db=await setup();
@@ -58,6 +70,20 @@ function review(transactionId: string) {
   return {id:'same-review-operation',alertEventId:'shared-event',statementTransactionId:transactionId,
     relation:'possible_duplicate' as const,evidenceBasis:'user_review' as const,revision:2};
 }
+it.each(['before','during'] as const)('rejects a review when the statement amount changes %s publication',async timing=>{
+  const db=await setup();const target=await statement(db,SECOND_LEDGER);
+  const edit=()=>editTransaction(db,SECOND_LEDGER,{id:target,revision:0},{requestId:'review-target-edit-01',accountId:'second-account',date:'2026-10-24',merchant:'Changed',amount:'2.00',currency:'CAD',kind:'expense',category:'Food',note:null,expectedAnnotationRevision:0});
+  if(timing==='before')await edit();
+  await expect(applyAlertReview(timing==='during'?atBatch(db,edit):db,SECOND_LEDGER,review(target))).rejects.toThrow();
+  expect(await db.prepare('SELECT COUNT(*) AS n FROM alert_event_links').first()).toEqual({n:0});
+});
+it('rejects review links to a deleted statement, including concurrent deletion',async()=>{
+  const db=await setup();const target=await statement(db,SECOND_LEDGER);
+  const raced=atBatch(db,()=>deleteTransaction(db,SECOND_LEDGER,{id:target,revision:0,requestId:'review-race-delete'}));
+  await expect(applyAlertReview(raced,SECOND_LEDGER,review(target))).rejects.toThrow();
+  expect(await db.prepare('SELECT COUNT(*) AS n FROM alert_event_links').first()).toEqual({n:0});
+  await expect(applyAlertReview(db,SECOND_LEDGER,review(target))).rejects.toThrow();
+});
 it('scopes equal raw review operations and replays without advancing twice',async()=>{
   const db=await setup();
   for (const context of [OWNER_LEDGER,SECOND_LEDGER]) {

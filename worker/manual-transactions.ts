@@ -56,7 +56,7 @@ export async function listManualMatches(db: D1Database, context: FinancialContex
   const rows = await db.prepare(`SELECT m.id AS manualId,b.id AS bankId,m.account_id AS accountId,m.date AS manualDate,b.date AS bankDate,
     m.merchant AS manualMerchant,b.merchant AS bankMerchant,m.amount_minor AS amountMinor,m.currency,b.amount_minor AS bankAmountMinor,b.currency AS bankCurrency,m.category,m.note,
     CASE WHEN d.decision='confirmed' AND NOT COALESCE((${matchCondition}),0) THEN 'stale' ELSE COALESCE(d.decision,'open') END AS decision,COALESCE(d.revision,0) AS revision
-    FROM transactions m JOIN transactions b ON b.ledger_id=m.ledger_id AND (b.account_id=m.account_id OR EXISTS(SELECT 1 FROM manual_transaction_matches prior WHERE prior.ledger_id=m.ledger_id AND prior.manual_id=m.id AND prior.bank_id=b.id))
+    FROM effective_transactions m JOIN effective_transactions b ON b.ledger_id=m.ledger_id AND (b.account_id=m.account_id OR EXISTS(SELECT 1 FROM manual_transaction_matches prior WHERE prior.ledger_id=m.ledger_id AND prior.manual_id=m.id AND prior.bank_id=b.id))
     LEFT JOIN manual_transaction_matches d ON d.ledger_id=m.ledger_id AND d.manual_id=m.id AND d.bank_id=b.id
     WHERE m.ledger_id=? AND m.source='manual' AND ((${matchCondition}) OR d.decision IS NOT NULL)
     ORDER BY m.date DESC,m.id,b.id LIMIT 200 OFFSET ?`).bind(context.ledgerId,offset).all();
@@ -69,7 +69,7 @@ export async function decideManualMatch(db: D1Database, authority: FinancialCont
   const {manualId,bankId,decision,revision} = matchInput(value);
   const prior = await db.prepare('SELECT decision,revision FROM manual_transaction_matches WHERE ledger_id=? AND manual_id=? AND bank_id=?').bind(context.ledgerId,manualId,bankId).first<{decision:string;revision:number}>();
   if (prior?.decision === decision && prior.revision === revision+1) return {manualId,bankId,decision,revision:prior.revision};
-  const exists = `EXISTS(SELECT 1 FROM transactions m JOIN transactions b ON b.ledger_id=m.ledger_id
+  const exists = `EXISTS(SELECT 1 FROM effective_transactions m JOIN effective_transactions b ON b.ledger_id=m.ledger_id
     WHERE m.ledger_id=? AND m.id=? AND b.id=? AND ((${matchCondition}) OR (?='dismissed' AND EXISTS
       (SELECT 1 FROM manual_transaction_matches d WHERE d.ledger_id=m.ledger_id AND d.manual_id=m.id AND d.bank_id=b.id))))`;
   await publishManual(db, context, [

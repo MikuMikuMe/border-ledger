@@ -1,3 +1,5 @@
+import { editTransaction,deleteTransaction,restoreTransaction,purgeExpiredTransactionOverrides } from '../worker/transaction-overrides';
+import { readMobileTransactionPage } from '../worker/mobile-transactions';
 import { annotateMobileTransaction } from '../worker/mobile-review';
 import { expect, it } from 'vitest';
 import { setup, connect, SECOND_LEDGER, OWNER_LEDGER, browser, token, deferred } from './helpers/lunchflow-platform';
@@ -62,6 +64,33 @@ it('preserves a user annotation when the provider resyncs',async()=>{
   await annotateMobileTransaction(f.db,SECOND_LEDGER,row!.id,{expectedRevision:0,category:'Dining',note:'Lunch'});
   await f.service.sync();
   expect(await f.db.prepare('SELECT category,note FROM transactions WHERE id=?').bind(row!.id).first()).toEqual({category:'Dining',note:'Lunch'});
+ }finally{f.close();}
+});
+it('preserves edited and deleted transactions through Lunch Flow sync',async()=>{
+ const f=await selectedFixture();try{
+  const row=await f.db.prepare("SELECT id,account_id FROM transactions WHERE source='lunchflow'").first<{id:string;account_id:string}>();
+  await f.db.prepare("INSERT INTO accounts(id,ledger_id,name,institution,currency,kind,status) VALUES('edited-account',?,'Edited account','Bank','USD','chequing','import_only')").bind(SECOND_LEDGER.ledgerId).run();
+  const edited={accountId:'edited-account',date:'2026-10-22',merchant:'My edit',amountMinor:1100,currency:'USD',kind:'transfer',category:'Travel',note:'Updated note'};
+  await editTransaction(f.db,SECOND_LEDGER,{id:row!.id,revision:0},{requestId:'lunchflow-edit-0001',accountId:edited.accountId,date:edited.date,merchant:edited.merchant,amount:'11.00',currency:edited.currency,kind:edited.kind,direction:'in',category:edited.category,note:edited.note,expectedAnnotationRevision:0});
+  await f.service.sync();
+  expect((await readMobileTransactionPage(f.db,SECOND_LEDGER,new URLSearchParams())).items.find(item=>item.id===row!.id)).toMatchObject(edited);
+  await deleteTransaction(f.db,SECOND_LEDGER,{id:row!.id,revision:1,requestId:'lunchflow-delete-01'});
+  await f.service.sync();
+  expect((await readMobileTransactionPage(f.db,SECOND_LEDGER,new URLSearchParams())).items.some(item=>item.id===row!.id)).toBe(false);
+  await restoreTransaction(f.db,SECOND_LEDGER,{id:row!.id,revision:2,requestId:'lunchflow-restore-1'});
+  expect((await readMobileTransactionPage(f.db,SECOND_LEDGER,new URLSearchParams())).items.find(item=>item.id===row!.id)).toMatchObject(edited);
+ }finally{f.close();}
+});
+it('does not repopulate expired transaction details on provider sync',async()=>{
+ const f=await selectedFixture();try{
+  const row=await f.db.prepare("SELECT id FROM transactions WHERE source='lunchflow'").first<{id:string}>();
+  await deleteTransaction(f.db,SECOND_LEDGER,{id:row!.id,revision:0,requestId:'lunchflow-expired-01'});
+  await f.db.prepare("UPDATE transaction_overrides SET deleted_at=datetime('now','-366 days') WHERE transaction_id=?").bind(row!.id).run();
+  await purgeExpiredTransactionOverrides(f.db,new Date().toISOString());
+  await f.service.sync();
+  expect(await f.db.prepare('SELECT merchant,amount_minor,category,note FROM transactions WHERE id=?').bind(row!.id).first()).toEqual({merchant:'',amount_minor:0,category:'',note:null});
+  expect(await f.db.prepare('SELECT content_digest FROM transaction_source_records WHERE transaction_id=?').bind(row!.id).first()).toEqual({content_digest:''});
+  expect((await readMobileTransactionPage(f.db,SECOND_LEDGER,new URLSearchParams())).items.some(item=>item.id===row!.id)).toBe(false);
  }finally{f.close();}
 });
 it.each(['snapshot','selection'] as const)('fences disconnect immediately before the %s batch including metadata and receipts',async operation=>{

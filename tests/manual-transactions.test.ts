@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
+import {deleteTransaction,restoreTransaction,editTransaction,purgeExpiredTransactionOverrides} from '../worker/transaction-overrides';
 import { createManualTransaction, listManualMatches, decideManualMatch } from '../worker/manual-transactions';
 import { readOwnerLedgerSnapshot } from '../worker/owner-ledger-snapshot';
 import { readBudgetActivity } from '../worker/budget-activity';
@@ -31,6 +32,16 @@ describe('manual transaction creation', () => {
       expect(await fixture.db.prepare('SELECT category FROM transactions WHERE id=?').bind(saved.id).first()).toEqual({category});
     } finally {fixture.close();}
   });
+  it('allows a duplicate decision for a 160-character imported bank ID', async () => {
+    const fixture=createSqliteD1Fixture();try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
+      const manual=await createManualTransaction(fixture.db,owner,entry),bankId='b'.repeat(160);
+      await fixture.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES(?,'acct','2026-11-07','Coffee',-1234,'CAD','Food','expense','confirmed','statement','hash','personal')").bind(bankId).run();
+      expect(await listManualMatches(fixture.db,owner)).toContainEqual(expect.objectContaining({manualId:manual.id,bankId}));
+      expect(await decideManualMatch(fixture.db,owner,{manualId:manual.id,bankId,decision:'confirmed',expectedRevision:0})).toMatchObject({revision:1});
+    }finally{fixture.close();}
+  });
+
   it('matches bank entries in the selected currency without matching another currency', async () => {
     const fixture=createSqliteD1Fixture();
     try {
@@ -48,6 +59,21 @@ describe('manual transaction creation', () => {
       await expect(createManualTransaction(fixture.db,owner,{...entry,currency:'JPY',amount:'1.01'})).rejects.toThrow();
     } finally {fixture.close();}
   });
+  it('retains manual creation retry protection after expired details are removed', async () => {
+    const fixture=createSqliteD1Fixture();
+    try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
+      const saved=await createManualTransaction(fixture.db,owner,entry);
+      await deleteTransaction(fixture.db,owner,{id:saved.id,revision:0,requestId:'expire-manual-delete'});
+      await fixture.db.prepare("UPDATE transaction_overrides SET deleted_at='2025-01-01 00:00:00' WHERE transaction_id=?").bind(saved.id).run();
+      await purgeExpiredTransactionOverrides(fixture.db,'2026-01-01T00:00:00.000Z');
+      expect(await createManualTransaction(fixture.db,owner,entry)).toEqual(saved);
+      await expect(createManualTransaction(fixture.db,owner,{...entry,amount:'1.00'})).rejects.toThrow();
+      expect(await fixture.db.prepare('SELECT merchant,amount_minor FROM transactions WHERE id=?').bind(saved.id).first()).toEqual({merchant:'',amount_minor:0});
+      expect((await readMobileTransactionPage(fixture.db,owner,new URLSearchParams())).items).toHaveLength(0);
+    } finally {fixture.close();}
+  });
+
   it('stores one confirmed transaction and provenance across retries', async () => {
     const fixture = createSqliteD1Fixture();
     try {
@@ -142,6 +168,34 @@ describe('manual transaction creation', () => {
       await decideManualMatch(fixture.db, owner, {manualId:manual.id,bankId:'bank',decision:'dismissed',expectedRevision:1});
       expect(await read()).toHaveLength(2);
     } finally { fixture.close(); }
+  });
+  it.each([false,true])('reconciles a restored duplicate when its bank value changes: %s', async changed => {
+    const fixture=createSqliteD1Fixture();try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
+      const manual=await createManualTransaction(fixture.db,owner,entry);
+      await fixture.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank','acct','2026-11-08','Coffee',-1234,'CAD','Food','expense','confirmed','plaid','bank','personal')").run();
+      await decideManualMatch(fixture.db,owner,{manualId:manual.id,bankId:'bank',decision:'confirmed',expectedRevision:0});
+      await deleteTransaction(fixture.db,owner,{id:'bank',revision:0,requestId:'delete_duplicate_001'});
+      const rows=await readBudgetActivity(fixture.db,owner,{from:'2026-11-01',to:'2026-11-30',currency:'CAD'});
+      expect(rows.map(row=>row.id)).toEqual([manual.id]);
+      const match=await fixture.db.prepare("SELECT decision,revision FROM manual_transaction_matches WHERE bank_id='bank'").first();
+      expect(match).toEqual({decision:'confirmed',revision:1});
+      if(changed)await fixture.db.prepare("UPDATE transactions SET amount_minor=-999 WHERE id='bank'").run();
+      await restoreTransaction(fixture.db,owner,{id:'bank',revision:1,requestId:'restore_duplicate_01'});
+      expect(await readBudgetActivity(fixture.db,owner,{from:'2026-11-01',to:'2026-11-30',currency:'CAD'})).toHaveLength(changed?2:1);
+      expect(await fixture.db.prepare("SELECT decision,revision FROM manual_transaction_matches WHERE bank_id='bank'").first()).toEqual(changed?{decision:'dismissed',revision:2}:{decision:'confirmed',revision:1});
+    }finally{fixture.close();}
+  });
+  it('releases a confirmed duplicate when a user edit changes the match', async () => {
+    const fixture=createSqliteD1Fixture();try {
+      await fixture.db.prepare("INSERT INTO accounts(id,name,institution,currency,kind,status,ledger_id) VALUES('acct','Account','Bank','CAD','chequing','connected','personal')").run();
+      const manual=await createManualTransaction(fixture.db,owner,entry);
+      await fixture.db.prepare("INSERT INTO transactions(id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint,ledger_id) VALUES('bank','acct','2026-11-08','Coffee',-1234,'CAD','Food','expense','confirmed','plaid','bank','personal')").run();
+      await decideManualMatch(fixture.db,owner,{manualId:manual.id,bankId:'bank',decision:'confirmed',expectedRevision:0});
+      await editTransaction(fixture.db,owner,{id:'bank',revision:0},{...entry,requestId:'edit_duplicate_0001',amount:'9.99',expectedAnnotationRevision:0});
+      expect(await fixture.db.prepare("SELECT decision,revision FROM manual_transaction_matches WHERE bank_id='bank'").first()).toEqual({decision:'dismissed',revision:2});
+      expect(await readBudgetActivity(fixture.db,owner,{from:'2026-11-01',to:'2026-11-30',currency:'CAD'})).toHaveLength(2);
+    }finally{fixture.close();}
   });
   it('restores a manual entry when its confirmed bank match changes', async () => {
     const fixture=createSqliteD1Fixture();

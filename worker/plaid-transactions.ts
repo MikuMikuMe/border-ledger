@@ -70,15 +70,17 @@ export async function plaidTransactionStatements(db:D1Database,context:LedgerCon
       date=excluded.date,merchant=excluded.merchant,amount_minor=excluded.amount_minor,currency=excluded.currency,
       category=CASE WHEN EXISTS(SELECT 1 FROM annotation_revisions ar WHERE ar.ledger_id=transactions.ledger_id AND ar.transaction_id=transactions.id) THEN transactions.category ELSE excluded.category END,kind=excluded.kind,status=excluded.status,fingerprint=excluded.fingerprint,note=CASE WHEN EXISTS(SELECT 1 FROM annotation_revisions ar WHERE ar.ledger_id=transactions.ledger_id AND ar.transaction_id=transactions.id) THEN transactions.note ELSE excluded.note END,
       provider_transaction_id=COALESCE(excluded.provider_transaction_id,transactions.provider_transaction_id),
-      provider_pending_transaction_id=COALESCE(excluded.provider_pending_transaction_id,transactions.provider_pending_transaction_id),updated_at=CURRENT_TIMESTAMP`)
+      provider_pending_transaction_id=COALESCE(excluded.provider_pending_transaction_id,transactions.provider_pending_transaction_id),updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM transaction_overrides o WHERE o.ledger_id=transactions.ledger_id AND o.transaction_id=transactions.id AND o.deleted_at IS NOT NULL AND julianday('now')-julianday(o.deleted_at)>=365)`)
       .bind(id,context.ledgerId,mapped.accountId,mapped.date,mapped.merchant,mapped.amountMinor,mapped.currency,mapped.category,mapped.kind,mapped.status,
         mapped.fingerprint,mapped.note??null,mapped.plaidItemId,mapped.providerTransactionId,mapped.providerPendingTransactionId,mapped.date),
+    db.prepare(`UPDATE transactions SET provider_transaction_id=COALESCE(?,provider_transaction_id),provider_pending_transaction_id=COALESCE(?,provider_pending_transaction_id) WHERE ledger_id=? AND id=? AND EXISTS (SELECT 1 FROM transaction_overrides o WHERE o.ledger_id=transactions.ledger_id AND o.transaction_id=transactions.id AND o.deleted_at IS NOT NULL AND julianday('now')-julianday(o.deleted_at)>=365)`)
+      .bind(mapped.providerTransactionId,mapped.providerPendingTransactionId,context.ledgerId,id),
     db.prepare(`INSERT INTO transaction_source_records(id,ledger_id,source_kind,identity_key,transaction_id,account_id,provider_item_id,
-      provider_transaction_id,provider_pending_transaction_id,content_digest) VALUES (?,?,'plaid',?,?,?,?,?,?,?)
+      provider_transaction_id,provider_pending_transaction_id,content_digest) VALUES (?,?,'plaid',?,?,?,?,?,?,CASE WHEN EXISTS (SELECT 1 FROM transaction_overrides o WHERE o.ledger_id=? AND o.transaction_id=? AND o.deleted_at IS NOT NULL AND julianday('now')-julianday(o.deleted_at)>=365) THEN '' ELSE ? END)
       ON CONFLICT(ledger_id,source_kind,identity_key) DO UPDATE SET content_digest=excluded.content_digest,
       provider_transaction_id=COALESCE(excluded.provider_transaction_id,transaction_source_records.provider_transaction_id),
       provider_pending_transaction_id=COALESCE(excluded.provider_pending_transaction_id,transaction_source_records.provider_pending_transaction_id)`)
-      .bind(sourceId,context.ledgerId,identity,id,mapped.accountId,item.provider_item_id,mapped.providerTransactionId,mapped.providerPendingTransactionId,plaidSourceContentDigest(mapped))];
+      .bind(sourceId,context.ledgerId,identity,id,mapped.accountId,item.provider_item_id,mapped.providerTransactionId,mapped.providerPendingTransactionId,context.ledgerId,id,plaidSourceContentDigest(mapped))];
   return {id,statements};
 }
 export async function upsertPlaidTransaction(db:D1Database,context:LedgerContext,mapped:MappedPlaidTransaction) {
@@ -88,7 +90,8 @@ export async function upsertPlaidTransaction(db:D1Database,context:LedgerContext
 }
 export function removePlaidTransactionStatement(db:D1Database,context:LedgerContext,itemId:string,providerTransactionId:string) {
   return db.prepare(`DELETE FROM transactions WHERE ledger_id=? AND source='plaid' AND plaid_item_id=?
-    AND (provider_transaction_id=? OR (provider_transaction_id IS NULL AND provider_pending_transaction_id=?))`)
+    AND (provider_transaction_id=? OR (provider_transaction_id IS NULL AND provider_pending_transaction_id=?))
+    AND NOT EXISTS(SELECT 1 FROM transaction_overrides o WHERE o.ledger_id=transactions.ledger_id AND o.transaction_id=transactions.id)`)
     .bind(context.ledgerId,itemId,providerTransactionId,providerTransactionId);
 }
 export async function removePlaidTransaction(db:D1Database,context:LedgerContext,itemId:string,providerTransactionId:string) {

@@ -117,13 +117,22 @@ class LedgerRemoteDecoderTest {
     }
 
     @Test
+    fun decodesLongTransactionCursor() {
+        val cursor = "a".repeat(700)
+        val payload = """{"items":[],"page":{"nextCursor":"$cursor","limit":1}}""".toByteArray()
+        val result = LedgerSnapshotDecoder.decodeTransactions(payload)
+        assertTrue(result is LedgerTransactionPageDecodeResult.Ready)
+        assertEquals(cursor, (result as LedgerTransactionPageDecodeResult.Ready).page.nextCursor)
+    }
+
+    @Test
     fun decodesActivityPageWithRevisionAndDisplaySign() {
         val payload = """
             {
               "items":[{
                 "id":"tx-1","accountId":"account-1","date":"2026-10-14","merchant":"Refund shop",
                 "amountMinor":2500,"currency":"CAD","category":"Refunds","kind":"refund",
-                "status":"confirmed","source":"statement","note":"Returned","revision":2
+                "status":"confirmed","source":"statement","note":"Returned","revision":2,"editRevision":3
               }],
               "page":{"nextCursor":"opaque","limit":1}
             }
@@ -134,6 +143,8 @@ class LedgerRemoteDecoderTest {
         val transaction = (result as LedgerTransactionPageDecodeResult.Ready).page.items.single()
         assertEquals(-2500L, transaction.signedMinorUnits)
         assertEquals(2, transaction.revision)
+        assertEquals(3, transaction.editRevision)
+        assertEquals(2500L, transaction.sourceAmountMinor)
         assertEquals("opaque", result.page.nextCursor)
     }
 }

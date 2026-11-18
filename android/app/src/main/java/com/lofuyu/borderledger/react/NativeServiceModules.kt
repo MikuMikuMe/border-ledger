@@ -254,6 +254,8 @@ class LedgerModule(context: ReactApplicationContext, private val r: NativeServic
 
     override fun categoryAction(action: String, body: String, p: Promise) = s.call(p) { r.container.manualTransactions.categoryAction(action, body) }
 
+    override fun readDeletedTransactions(p: Promise) = s.call(p) { r.container.manualTransactions.deleted() }
+
     override fun readManualMatches(offset: Double, p: Promise) = s.call(p) {
         require(offset.isFinite() && offset == offset.toInt().toDouble())
         r.container.manualTransactions.matches(offset.toInt())
@@ -261,10 +263,10 @@ class LedgerModule(context: ReactApplicationContext, private val r: NativeServic
 
     override fun startManualWrite(operationId: String, action: String, body: String, p: Promise) = s.call(p) {
         require(operationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
-        require(action == "create" || action == "match")
+        require(action in setOf("create", "match", "edit", "delete", "restore"))
         require(body.toByteArray(Charsets.UTF_8).size <= 16384)
         val input = org.json.JSONObject(body)
-        if (action == "create") require(input.optString("requestId") == operationId)
+        if (action != "match") require(input.optString("requestId") == operationId)
         val owner = r.ownerGeneration()
         val key = manualPendingKey(operationId)
         val record = org.json.JSONObject().put("owner", owner).put("action", action).put("body", body).toString()

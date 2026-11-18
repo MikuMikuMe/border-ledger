@@ -10,6 +10,7 @@ import {comparableTotals,fillReportDays,filterActivity,formatMoney,recurringMess
 
 const palette=(dark:boolean)=>dark?{text:'#EEF1E8',muted:'#A5B2AA',surface:'#1D2925',border:'#43534B',accent:'#83C9B1',error:'#FFB4AB',ripple:'#FFFFFF33'}:{text:'#18201F',muted:'#4F5C56',surface:'#FBF9F4',border:'#D2CCC0',accent:'#1B6B5B',error:'#A83F3F',ripple:'#1B6B5B33'};
 type Theme={dark:boolean};
+type ActionVariant='primary'|'danger'|'disclosure'|'selector';
 export function Copy({dark,children,heading=false,error=false}:Theme&{children:React.ReactNode;heading?:boolean;error?:boolean}) {
   const p=palette(dark);return <Text accessibilityRole={heading?'header':undefined} style={[styles.copy,{color:error?p.error:p.text},heading&&styles.heading]}>{children}</Text>;
 }
@@ -23,9 +24,37 @@ export function DetailModal({dark,title,onClose,children,dismissOutside=false,co
     </KeyboardAvoidingView>
   </Modal>;
 }
+const actionTones={light:{danger:'#FBEAE7',selected:'#D2E9DF',secondary:'#E0EEE7'},dark:{danger:'#482B29',selected:'#1D5145',secondary:'#28463B'}};
+function actionBackground(dark:boolean,radio:boolean,selected?:boolean,variant?:ActionVariant) {
+  const tones=actionTones[dark?'dark':'light'];
+  if(variant==='disclosure')return 'transparent';
+  if(variant==='selector')return palette(dark).surface;
+  if(variant==='primary')return palette(dark).accent;
+  if(variant==='danger')return tones.danger;
+  if(selected)return tones.selected;
+  return radio?palette(dark).surface:tones.secondary;
+}
+function actionTextColor(dark:boolean,variant?:ActionVariant) {
+  if(variant==='primary')return dark?'#10231B':'#FFFFFF';
+  return variant==='danger'?palette(dark).error:palette(dark).accent;
+}
+function actionBorderColor(dark:boolean,radio:boolean,variant?:ActionVariant) {
+  if(variant==='danger')return palette(dark).error;
+  if(variant==='selector')return palette(dark).border;
+  return radio?palette(dark).border:palette(dark).accent;
+}
+function ActionIndicator({dark,radio,selected,variant,expanded}:{dark:boolean;radio:boolean;selected?:boolean;variant?:ActionVariant;expanded?:boolean}) {
+  const color=palette(dark).accent;
+  if(radio)return <View testID="selection-indicator" accessible={false} importantForAccessibility="no-hide-descendants" style={{width:16,height:16,borderWidth:2,borderRadius:8,borderColor:color,alignItems:'center',justifyContent:'center'}}>{selected?<View style={{width:6,height:6,borderRadius:3,backgroundColor:color}}/>:null}</View>;
+  if(variant==='disclosure'||variant==='selector')return <View testID="disclosure-indicator" accessible={false} importantForAccessibility="no-hide-descendants" style={{width:9,height:9,borderRightWidth:2,borderBottomWidth:2,borderColor:color,transform:[{rotate:expanded?'225deg':'45deg'}],marginLeft:4,marginBottom:expanded?-3:3}}/>;
+  return null;
+}
+function actionStyle({dark,radio,selected,variant,disabled}:{dark:boolean;radio:boolean;selected?:boolean;variant?:ActionVariant;disabled:boolean}) {
+  return {...styles.action,flexDirection:'row' as const,alignItems:'center' as const,justifyContent:variant==='selector'?'space-between' as const:'flex-start' as const,gap:radio?6:8,borderWidth:variant==='disclosure'?0:1,paddingHorizontal:variant==='disclosure'?0:radio?10:14,borderColor:actionBorderColor(dark,radio,variant),backgroundColor:actionBackground(dark,radio,selected,variant),opacity:disabled?0.6:1};
+}
 function actionState(disabled:boolean,selected?:boolean,expanded?:boolean){return {disabled,...(selected===undefined?{}:{selected,checked:selected}),...(expanded===undefined?{}:{expanded})};}
-export function Action({dark,label,text,value,onPress,onActivate,disabled=false,selected,radio=false,expanded}:Theme&{label:string;text?:string;value?:string;onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void;disabled?:boolean;selected?:boolean;radio?:boolean;expanded?:boolean}) {
-  const p=palette(dark),ref=useRef<React.ComponentRef<typeof View>>(null);return <Pressable ref={ref} accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={actionState(disabled,selected,expanded)} onPress={()=>{onActivate?.(ref);onPress();}} disabled={disabled} android_ripple={{color:p.ripple}} style={{...styles.action,borderColor:p.border,backgroundColor:selected?(dark?'#1D5145':'#D2E9DF'):p.surface,opacity:disabled?0.6:1}}><Text style={[styles.copy,{color:p.accent}]}>{text??label}</Text></Pressable>;
+export function Action({dark,label,text,value,onPress,onActivate,disabled=false,selected,radio=false,expanded,variant}:Theme&{variant?:ActionVariant;label:string;text?:string;value?:string;onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void;disabled?:boolean;selected?:boolean;radio?:boolean;expanded?:boolean}) {
+  const p=palette(dark),ref=useRef<React.ComponentRef<typeof View>>(null);return <Pressable ref={ref} accessibilityRole={radio?'radio':'button'} accessibilityLabel={label} accessibilityValue={value?{text:value}:undefined} accessibilityState={actionState(disabled,selected,expanded)} onPress={()=>{onActivate?.(ref);onPress();}} disabled={disabled} android_ripple={{color:p.ripple}} style={actionStyle({dark,radio,selected,variant,disabled})}>{radio?<ActionIndicator dark={dark} radio selected={selected}/>:null}<Text style={[styles.copy,{color:actionTextColor(dark,variant),flexShrink:1}]}>{text??label}</Text><ActionIndicator dark={dark} radio={false} variant={variant} expanded={expanded}/></Pressable>;
 }
 export function LedgerRow({dark,label,title,amount,details,accessibilityDetails=details,onPress,onActivate}:Theme&{label:string;title:string;amount?:string;details:string[];accessibilityDetails?:string[];onPress():void;onActivate?(ref:React.RefObject<React.ComponentRef<typeof View>|null>):void}) {
   const p=palette(dark);
@@ -165,7 +194,7 @@ export function OverviewView({dark,state,previous,snapshot,lens,currencies,onLen
     </>:state.phase==='ready'?<Copy dark={dark}>No report is available. Connect an account and refresh the owner snapshot.</Copy>:null}
   </View>;
 }
-export type ActivityProps=Theme&{state:LoadState<Transactions>;facetRows?:Transaction[];filters:Partial<ActivityQuery>;selected:Transaction|null;draft?:{category:string;note:string};mutation?:MutationState;onRetry():void;onFilter(value:Partial<ActivityQuery>):void;onOpen(id:string):void;onLoadMore():void;onClose():void;onDraft(value:{category:string;note:string}):void;onSave():void;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>};
+export type ActivityProps=Theme&{state:LoadState<Transactions>;facetRows?:Transaction[];filters:Partial<ActivityQuery>;selected:Transaction|null;draft?:{category:string;note:string};mutation?:MutationState;onRetry():void;onFilter(value:Partial<ActivityQuery>):void;onOpen(id:string):void;onLoadMore():void;onClose():void;onDraft(value:{category:string;note:string}):void;onSave():void;onEdit?():void;onDelete?():void;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>};
 type ActivityFacetName='currency'|'category'|'status'|'source';
 const activityFacetNames:ActivityFacetName[]=['currency','category','status','source'];
 function activityFacetLabel(name:ActivityFacetName){return name==='status'?'State':name[0].toUpperCase()+name.slice(1);}
@@ -197,7 +226,7 @@ function ActivityResults({dark,state,rows,onLoadMore,onOpen,onActivate}:{dark:bo
 export function confirmDiscardChanges(onClose:()=>void){
   Alert.alert('Discard changes?','Your local category and note changes may be lost. Check the operation status before trying again.',[{text:'Keep editing',style:'cancel'},{text:'Discard',style:'destructive',onPress:onClose}]);
 }
-export function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose,onCategoryCleanup}:{dark:boolean;selected:Transaction;draft:{category:string;note:string};mutation:MutationState;onDraft(value:{category:string;note:string}):void;onSave():void;onClose():void;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>}){
+export function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onClose,onCategoryCleanup,onEdit,onDelete}:{dark:boolean;selected:Transaction;draft:{category:string;note:string};mutation:MutationState;onDraft(value:{category:string;note:string}):void;onSave():void;onClose():void;onEdit?():void;onDelete?():void;onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>}){
   const p=palette(dark),[categoryCleanupStatus,setCategoryCleanupStatus]=useState('ready' as 'ready'|'refreshing'|'failed');
   const refreshCategoryCleanup=async(cleanup:CategoryCleanup)=>{setCategoryCleanupStatus('refreshing');try{const refreshed=await onCategoryCleanup?.(cleanup);setCategoryCleanupStatus(refreshed===false?'failed':'ready');return refreshed!==false;}catch{setCategoryCleanupStatus('failed');return false;}};
   const blocked=mutation.blocked||categoryCleanupStatus!=='ready';
@@ -212,20 +241,26 @@ export function ActivityDetail({dark,selected,draft,mutation,onDraft,onSave,onCl
     <Copy dark={dark}>{selected.merchant??'Merchant unavailable'} · {selected.currency} {formatMoney(selected.signedMinorUnits,selected.currency)}</Copy>
     <Copy dark={dark}>{selected.occurredAt} · {selected.status} · {selected.kind}</Copy>
     <Copy dark={dark}>Account: {selected.accountLabel??'unavailable'} · Source: {selected.sourceLabel??'unavailable'} · Revision {selected.revision}</Copy>
+    {onEdit?<Action dark={dark} variant="primary" label="Edit transaction" onPress={onEdit} disabled={blocked||selected.editRevision==null||selected.sourceAmountMinor==null||!selected.accountId}/>:null}
+    {onDelete?<Action dark={dark} variant="danger" label="Delete transaction" onPress={onDelete} disabled={blocked||selected.editRevision==null}/>:null}
+    {onEdit&&(selected.editRevision==null||selected.sourceAmountMinor==null||!selected.accountId)?<Copy dark={dark}>Refresh Activity and reopen this transaction to edit it.</Copy>:null}
+    {onEdit?<><Copy dark={dark}>Category: {selected.category??'Uncategorized'}</Copy><Copy dark={dark}>Note: {selected.note||'None'}</Copy><MutationStatus dark={dark} mutation={mutation}/></>:<>
     <CategoryPicker dark={dark} disabled={blocked} value={draft.category} onChange={category=>onDraft({...draft,category})} onCleanup={refreshCategoryCleanup}/>
     <Copy dark={dark}>Note</Copy><TextInput accessibilityLabel="Note" editable={!blocked} value={draft.note} multiline maxLength={1000} onChangeText={note=>onDraft({...draft,note})} style={[styles.input,{color:p.text,borderColor:p.border}]}/>
     {categoryCleanupStatus==='failed'?<Copy dark={dark} error>Category updated, but the transaction could not be refreshed. Refresh Activity and reopen before saving.</Copy>:null}<MutationStatus dark={dark} mutation={mutation}/><Copy dark={dark}>Changes affect only the category and note.</Copy>
     <Action dark={dark} label="Save annotation" onPress={onSave} disabled={blocked||mutation.status==='revision_conflict'||!draft.category.trim()}/>
+    </>}
+
   </DetailModal>;
 }
-export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave,onCategoryCleanup}:ActivityProps) {
+export function ActivityView({dark,state,facetRows=state.data?.items??[],filters,selected,draft={category:'',note:''},mutation={blocked:true,status:'checking'},onRetry,onFilter,onOpen,onLoadMore,onClose,onDraft,onSave,onCategoryCleanup,onEdit,onDelete}:ActivityProps) {
   const rows=state.data?.items??[],visibleRows=filterActivity(rows,filters);
   const {remember:rememberOpener}=useAccessibilityReturnFocus(Boolean(selected));
   return <View style={styles.section}>
     <ActivityFilters dark={dark} facetRows={facetRows} filters={filters} onFilter={onFilter}/>
     <Status dark={dark} state={state} onRetry={onRetry} label="Activity"/>
     <ActivityResults dark={dark} state={state} rows={visibleRows} onLoadMore={onLoadMore} onOpen={onOpen} onActivate={rememberOpener}/>
-    {selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={mutation} onDraft={onDraft} onSave={onSave} onClose={onClose} onCategoryCleanup={onCategoryCleanup}/>:null}
+    {selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={mutation} onDraft={onDraft} onSave={onSave} onClose={onClose} onCategoryCleanup={onCategoryCleanup} onEdit={onEdit} onDelete={onDelete}/>:null}
   </View>;
 }
 export function MutationStatus({dark,mutation}:Theme&{mutation:MutationState}) {

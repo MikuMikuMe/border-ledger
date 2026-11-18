@@ -1,7 +1,9 @@
+import { appendAnnotationRevision } from '../worker/annotation-store';
+import { editTransaction } from '../worker/transaction-overrides';
 import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyAlertReview, commitStatementRows, type StatementCommitRow } from '../worker/reconciliation-store';
-import { applyMigrations, createD1Fixture, task10MigrationNames, task10PreUniquenessMigrationNames, task18MigrationNames, task24MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task10MigrationNames, task10PreUniquenessMigrationNames, task18MigrationNames, task24MigrationNames, currentMigrationNames } from './helpers/d1';
 import { createAlertFixture, event, postAlerts } from './helpers/alerts';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
@@ -9,7 +11,7 @@ const task10PreUniquenessWithFx = [...task10PreUniquenessMigrationNames, '0018-f
 
 async function seededFixture(migrationNames: readonly string[] = task18MigrationNames) {
   const fixture = await createD1Fixture(migrationNames);
-  await applyMigrations(fixture.db, task24MigrationNames);
+  await applyMigrations(fixture.db, currentMigrationNames);
   fixtures.push(fixture);
   await fixture.db.prepare(`INSERT INTO accounts (id, name, institution, currency, currency_mode, kind, status)
     VALUES ('statement-account', 'Synthetic BOC card', 'Bank of China', 'CNY', 'multi', 'credit', 'import_only')`).run();
@@ -33,6 +35,41 @@ function row(overrides: Partial<StatementCommitRow> = {}): StatementCommitRow {
     sourceIdentity: { accountId: 'statement-account', fileSha256: 'a'.repeat(64), rowIndex: 0 },
     ...overrides,
   };
+}
+
+async function commitArrivalStatement(db: Parameters<typeof postAlerts>[0]) {
+  return commitStatementRows(db, OWNER_LEDGER, {
+      importId: 'statement-after-alert',
+      accountId: 'account-boc',
+      filename: 'statement.csv',
+      fileSha256: '3'.repeat(64),
+      rows: [{
+        id: 'statement-after-alert-row',
+        accountId: 'account-boc',
+        date: '2026-10-13',
+        merchant: 'Synthetic merchant',
+        amountMinor: -1234,
+        currency: 'CAD',
+        category: 'Groceries',
+        kind: 'expense',
+        status: 'confirmed',
+        source: 'statement',
+        fingerprint: 'arrival-order-fingerprint',
+        sourceIdentity: { accountId: 'account-boc', fileSha256: '3'.repeat(64), rowIndex: 0 },
+        bankReference: 'arrival-order-ref',
+      }],
+    });
+}
+
+async function expectPreservedAlert(db: Parameters<typeof postAlerts>[0], alertId: string) {
+    await expect(db.prepare(`SELECT COUNT(*) AS count FROM transactions WHERE account_id = 'account-boc'`).all()).resolves.toMatchObject({ results: [{ count: 2 }] });
+    await expect(db.prepare(`SELECT source, status FROM transactions WHERE account_id = 'account-boc'`).all()).resolves.toMatchObject({ results: [{ source: 'alert', status: 'needs_review' }, { source: 'statement', status: 'confirmed' }] });
+    await expect(db.prepare('SELECT state, transaction_id, revision FROM alert_projections WHERE event_id = ?').bind(alertId).all()).resolves.toMatchObject({
+      results: [{ state: 'superseded', transaction_id: 'statement-after-alert-row', revision: 2 }],
+    });
+    await expect(db.prepare('SELECT relation, to_transaction_id, evidence_basis FROM alert_event_links WHERE from_event_id = ?').bind(alertId).all()).resolves.toMatchObject({
+      results: [{ relation: 'confirms', to_transaction_id: 'statement-after-alert-row', evidence_basis: 'bank_reference' }],
+    });
 }
 
 afterEach(async () => {
@@ -212,7 +249,7 @@ describe('durable statement reconciliation', () => {
     await expect(fixture.db.prepare('SELECT COUNT(*) AS count FROM transactions').all()).resolves.toMatchObject({ results: [{ count: 0 }] });
   });
 
-  it('supersedes an alert projection only through an audited confirmed statement link', async () => {
+  it.each(['plain','edited','annotated'])('preserves reviewed alert edits when the statement is %s', async targetState => {
     const fixture = await seededFixture(task18MigrationNames);
     await fixture.db.prepare(`INSERT INTO source_profiles (id, provider, source_kind, display_name, parser_version, status)
       VALUES ('boc-profile', 'boc', 'credit_alert', 'Synthetic BOC', 'test', 'approved')`).run();
@@ -225,6 +262,7 @@ describe('durable statement reconciliation', () => {
       VALUES ('projection-1', 'alert-1', 'alert-tx', 'provisional', '[]', 'CNY', 4200, 1)`).run();
     await fixture.db.prepare(`INSERT INTO annotation_revisions (id, transaction_id, author_subject_hash, revision, category, note)
       VALUES ('annotation-alert-1', 'alert-tx', 'reviewer', 1, 'Groceries', 'Keep this note')`).run();
+    await fixture.db.prepare("INSERT INTO transaction_overrides(ledger_id,transaction_id,revision,merchant,category,annotation_revision,has_edits) VALUES('personal','alert-tx',1,'Edited alert','Travel',1,1)").run();
     await commitStatementRows(fixture.db, OWNER_LEDGER, {
       importId: 'import-confirm',
       accountId: 'statement-account',
@@ -232,6 +270,8 @@ describe('durable statement reconciliation', () => {
       fileSha256: 'e'.repeat(64),
       rows: [row({ id: 'statement-tx', sourceIdentity: { accountId: 'statement-account', fileSha256: 'e'.repeat(64), rowIndex: 0 } })],
     });
+    if(targetState==='edited')await fixture.db.prepare("INSERT INTO transaction_overrides(ledger_id,transaction_id,revision,merchant,category,has_edits) VALUES('personal','statement-tx',1,'Target edit','Other',1)").run();
+    if(targetState==='annotated')await fixture.db.prepare("INSERT INTO annotation_revisions(id,ledger_id,transaction_id,author_subject_hash,revision,category,note) VALUES('target-annotation','personal','statement-tx','owner',1,'Target category','Target note')").run();
     await fixture.db.prepare(`INSERT INTO statement_reconciliation_candidates
       (id, ledger_id, source_record_id, statement_transaction_id, candidate_transaction_id, score, evidence_basis)
       SELECT 'confirm-candidate', 'personal', id, transaction_id, 'alert-tx', 100, 'user_review'
@@ -246,6 +286,10 @@ describe('durable statement reconciliation', () => {
       revision: 2,
     });
     expect(result.projectionSuperseded).toBe(true);
+    await fixture.db.prepare("UPDATE transaction_overrides SET deleted_at=CURRENT_TIMESTAMP WHERE transaction_id='alert-tx'").run();
+    expect(await fixture.db.prepare("SELECT id FROM effective_transactions WHERE id='statement-tx'").first()).toBeNull();
+    await fixture.db.prepare("UPDATE transaction_overrides SET deleted_at=NULL WHERE transaction_id='alert-tx'").run();
+    expect(await fixture.db.prepare("SELECT merchant,category FROM effective_transactions WHERE id='statement-tx'").first()).toEqual(targetState==='edited'?{merchant:'Target edit',category:'Other'}:targetState==='annotated'?{merchant:'Edited alert',category:'Target category'}:{merchant:'Edited alert',category:'Travel'});
     await expect(fixture.db.prepare(`SELECT COUNT(*) AS count FROM transactions WHERE account_id = 'statement-account'`).all()).resolves.toMatchObject({ results: [{ count: 2 }] });
     await expect(fixture.db.prepare(`SELECT source, status FROM transactions WHERE account_id = 'statement-account' ORDER BY id`).all()).resolves.toMatchObject({ results: [{ source: 'alert', status: 'needs_review' }, { source: 'statement', status: 'confirmed' }] });
     await expect(fixture.db.prepare(`SELECT COUNT(*) AS count FROM alert_events WHERE event_id = 'alert-1'`).all()).resolves.toMatchObject({ results: [{ count: 1 }] });
@@ -299,27 +343,7 @@ describe('durable statement reconciliation', () => {
     const alertResponse = await postAlerts(fixture.db, [event({ eventId: alertId, observationId: 'observation-31', bankReference: 'arrival-order-ref' })]);
     expect(await alertResponse.json()).toMatchObject({ acks: [{ status: 'accepted', projectionState: 'provisional' }] });
 
-    const result = await commitStatementRows(fixture.db, OWNER_LEDGER, {
-      importId: 'statement-after-alert',
-      accountId: 'account-boc',
-      filename: 'statement.csv',
-      fileSha256: '3'.repeat(64),
-      rows: [{
-        id: 'statement-after-alert-row',
-        accountId: 'account-boc',
-        date: '2026-10-13',
-        merchant: 'Synthetic merchant',
-        amountMinor: -1234,
-        currency: 'CAD',
-        category: 'Groceries',
-        kind: 'expense',
-        status: 'confirmed',
-        source: 'statement',
-        fingerprint: 'arrival-order-fingerprint',
-        sourceIdentity: { accountId: 'account-boc', fileSha256: '3'.repeat(64), rowIndex: 0 },
-        bankReference: 'arrival-order-ref',
-      }],
-    });
+    const result = await commitArrivalStatement(fixture.db);
 
     expect(result).toMatchObject({ accepted: 1, needsReview: 0, candidateCount: 0 });
     await expect(fixture.db.prepare(`SELECT COUNT(*) AS count FROM transactions WHERE account_id = 'account-boc'`).all()).resolves.toMatchObject({ results: [{ count: 1 }] });
@@ -330,6 +354,42 @@ describe('durable statement reconciliation', () => {
     await expect(fixture.db.prepare('SELECT relation, to_transaction_id, evidence_basis FROM alert_event_links WHERE from_event_id = ?').bind(alertId).all()).resolves.toMatchObject({
       results: [{ relation: 'confirms', to_transaction_id: 'statement-after-alert-row', evidence_basis: 'bank_reference' }],
     });
+  });
+
+  it('preserves a deleted alert when its statement arrives', async () => {
+    const fixture = await createAlertFixture({ migrationNames: currentMigrationNames });
+    const alertId = '00000000-0000-4000-8000-000000000031';
+    const alertResponse = await postAlerts(fixture.db, [event({ eventId: alertId, observationId: 'observation-31', bankReference: 'arrival-order-ref' })]);
+    expect(await alertResponse.json()).toMatchObject({ acks: [{ status: 'accepted', projectionState: 'provisional' }] });
+
+    await fixture.db.prepare(`INSERT INTO transaction_overrides (ledger_id, transaction_id, revision, deleted_at) SELECT 'personal', transaction_id, 1, CURRENT_TIMESTAMP FROM alert_projections WHERE event_id = ?`).bind(alertId).run();
+
+    const result = await commitArrivalStatement(fixture.db);
+
+    expect(result).toMatchObject({ accepted: 1, needsReview: 0, candidateCount: 0 });
+    await expect(fixture.db.prepare("SELECT id FROM effective_transactions WHERE id = 'statement-after-alert-row'").all()).resolves.toMatchObject({results:[]});
+    await fixture.db.prepare('UPDATE transaction_overrides SET deleted_at = NULL WHERE transaction_id = ?').bind(alertId).run();
+    await expect(fixture.db.prepare("SELECT id FROM effective_transactions WHERE id = 'statement-after-alert-row'").all()).resolves.toMatchObject({results:[{id:'statement-after-alert-row'}]});
+    await expectPreservedAlert(fixture.db, alertId);
+  });
+
+  it('preserves an edited alert when its statement arrives', async () => {
+    const fixture = await createAlertFixture({ migrationNames: currentMigrationNames });
+    const alertId = '00000000-0000-4000-8000-000000000031';
+    const alertResponse = await postAlerts(fixture.db, [event({ eventId: alertId, observationId: 'observation-31', bankReference: 'arrival-order-ref' })]);
+    expect(await alertResponse.json()).toMatchObject({ acks: [{ status: 'accepted', projectionState: 'provisional' }] });
+
+    await fixture.db.prepare(`INSERT INTO transaction_overrides (ledger_id, transaction_id, revision, has_edits, date, merchant, amount_minor, currency, kind, category, note) SELECT 'personal', transaction_id, 1, 1, '2026-10-12', 'User edit', -5678, 'CAD', 'expense', 'Hobbies', 'My note' FROM alert_projections WHERE event_id = ?`).bind(alertId).run();
+
+    const result = await commitArrivalStatement(fixture.db);
+
+    expect(result).toMatchObject({ accepted: 1, needsReview: 1, candidateCount: 1 });
+    await expect(fixture.db.prepare("SELECT date,merchant,amount_minor,category,note FROM effective_transactions WHERE id = 'statement-after-alert-row'").first()).resolves.toEqual({date:'2026-10-12',merchant:'User edit',amount_minor:-5678,category:'Hobbies',note:'My note'});
+    await expect(appendAnnotationRevision(fixture.db,OWNER_LEDGER,{id:'stale-statement-annotation',transactionId:'statement-after-alert-row',authorSubjectHash:'owner',revision:1,category:'Old',note:null})).rejects.toThrow();
+    await expect(editTransaction(fixture.db, OWNER_LEDGER, {id:alertId,revision:1}, {requestId:'stale-alert-edit-1',accountId:'account-boc',date:'2026-10-11',merchant:'Stale edit',amount:'56.78',currency:'CAD',kind:'expense',category:'Hobbies',note:'Updated',expectedAnnotationRevision:0})).rejects.toThrow();
+    expect(await editTransaction(fixture.db, OWNER_LEDGER, {id:'statement-after-alert-row',revision:1}, {requestId:'followup-edit-0001',accountId:'account-boc',date:'2026-10-11',merchant:'Second edit',amount:'56.78',currency:'CAD',kind:'expense',category:'Hobbies',note:'Updated',expectedAnnotationRevision:1})).toEqual({revision:2});
+    expect(await fixture.db.prepare("SELECT merchant FROM effective_transactions WHERE id='statement-after-alert-row'").first()).toEqual({merchant:'Second edit'});
+    await expectPreservedAlert(fixture.db, alertId);
   });
 
   it('keeps a cross-currency bank-reference candidate review-only without an automatic link', async () => {

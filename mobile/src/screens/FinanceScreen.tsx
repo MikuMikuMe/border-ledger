@@ -1,6 +1,8 @@
+import {RecentlyDeleted} from '../features/finance/RecentlyDeleted';
+import {TransactionEditor} from '../features/finance/TransactionEditor';
 import {CategoryServicesContext} from '../features/finance/categoryServices';
 import React,{useEffect,useMemo,useReducer,useRef,useState} from 'react';
-import {AppState,Text,View} from 'react-native';
+import {Alert,AppState,Text,View} from 'react-native';
 import NativeLedger from '../native/specs/NativeLedger';
 import NativeRecurring from '../native/specs/NativeRecurring';
 import NativePreferences from '../native/specs/NativePreferences';
@@ -55,15 +57,28 @@ async function refreshCategoryCleanedTransaction(controller:FinanceControllerIns
  return controller.activity.current().data?.items.find(row=>row.id===transaction.id)??await controller.refreshTransaction(transaction.id);
 }
 
+function confirmTransactionDeletion(transaction:Transaction|null,controller:FinanceControllerInstance,onDone:()=>void) {
+  if(!transaction || transaction.editRevision==null)return;
+  Alert.alert('Delete transaction?', 'It will be removed from your totals. You can restore it for 365 days.',[
+    {text:'Cancel',style:'cancel'},
+    {text:'Delete',style:'destructive',onPress:()=>{void (async()=>{
+      const id=operationId(),body={transactionId:transaction.id,requestId:id,expectedRevision:transaction.editRevision};
+      await controller.mutation.submit(id,()=>NativeLedger.startManualWrite(id,'delete',JSON.stringify(body)),key=>NativeSession.queryOperation({operationId:key}));
+      if(controller.mutation.current().status==='completed'){onDone();await controller.reload();}
+    })();}},
+  ]);
+}
+
 function OverviewPanel({dark,controller,currencies}:{dark:boolean;controller:FinanceControllerInstance;currencies:string[]}) {
-  const [selected,setSelected]=useState<Transaction|null>(null),[draft,setDraft]=useState({category:'',note:''}),[refresh,setRefresh]=useState(0);
+  const [selected,setSelected]=useState<Transaction|null>(null),[draft,setDraft]=useState({category:'',note:''}),[refresh,setRefresh]=useState(0),[editing,setEditing]=useState(false);
   const open=(transaction:Transaction)=>{setSelected(transaction);setDraft({category:transaction.category??'',note:transaction.note??''});void controller.recover();};
   const save=()=>{if(!selected)return;void controller.annotate(operationId(),selected,draft).then(()=>{if(controller.mutation.current().status==='completed'){setSelected(null);setRefresh(value=>value+1);}});};
   const categoryCleanup=async(cleanup:CategoryCleanup)=>{if(!selected)return false;const transaction=await refreshCategoryCleanedTransaction(controller,selected,cleanup);if(!transaction)return false;setSelected(transaction);setDraft(current=>({...current,category:current.category===cleanup.from?cleanup.to:current.category}));setRefresh(value=>value+1);return true;};
-  return <><OverviewView dark={dark} state={controller.report.current()} previous={controller.previousReport.current()} snapshot={controller.snapshot.current().data} lens={controller.lens} currencies={currencies} onLens={lens=>{void controller.setLens(lens);}} onRetry={()=>{void controller.reload();}} onOpenCategoryActivity={open} categoryRefresh={refresh}/>{selected?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={controller.mutation.current()} onDraft={setDraft} onSave={save} onClose={()=>setSelected(null)} onCategoryCleanup={categoryCleanup}/>:null}</>;
+  return <><OverviewView dark={dark} state={controller.report.current()} previous={controller.previousReport.current()} snapshot={controller.snapshot.current().data} lens={controller.lens} currencies={currencies} onLens={lens=>{void controller.setLens(lens);}} onRetry={()=>{void controller.reload();}} onOpenCategoryActivity={open} categoryRefresh={refresh}/>{selected&&!editing?<ActivityDetail dark={dark} selected={selected} draft={draft} mutation={controller.mutation.current()} onDraft={setDraft} onSave={save} onClose={()=>setSelected(null)} onEdit={()=>setEditing(true)} onDelete={()=>confirmTransactionDeletion(selected,controller,()=>{setSelected(null);setRefresh(value=>value+1);})} onCategoryCleanup={categoryCleanup}/>:null}{selected&&editing?<TransactionEditor dark={dark} transaction={selected} controller={controller} operationId={operationId} onClose={()=>{setEditing(false);setSelected(null);setRefresh(value=>value+1);}} onCategoryCleanup={categoryCleanup}/>:null}</>;
 }
 
 function ActivityPanel({dark,controller,selected,draft,setSelected,setDraft,manualRequest}:{dark:boolean;controller:FinanceControllerInstance;selected:Transaction|null;draft:{category:string;note:string};setSelected(value:Transaction|null):void;setDraft(value:{category:string;note:string}):void;manualRequest:number}) {
+  const [editing,setEditing]=useState(false);
   const openTransaction=(id:string)=>{
     const transaction=controller.activity.current().data?.items.find(row=>row.id===id);
     if(!transaction)return;
@@ -77,10 +92,11 @@ function ActivityPanel({dark,controller,selected,draft,setSelected,setDraft,manu
       if(controller.mutation.current().status==='completed')setSelected(null);
     });
   };
-  const categoryCleanup=async(cleanup:CategoryCleanup)=>{if(!selected)return refreshCategoryActivity(controller,cleanup);const transaction=await refreshCategoryCleanedTransaction(controller,selected,cleanup);if(!transaction){setSelected(null);return false;}setSelected(transaction);if(draft.category===cleanup.from)setDraft({...draft,category:cleanup.to});return true;};
-  return <><ManualTransactions dark={dark} controller={controller} operationId={operationId} manualRequest={manualRequest} onCategoryCleanup={categoryCleanup}/><ActivityView dark={dark} state={controller.activity.current()} facetRows={controller.activityFacetRows} filters={controller.activityFilters} selected={selected} draft={draft} mutation={controller.mutation.current()}
+  const deleteTransaction=()=>confirmTransactionDeletion(selected,controller,()=>setSelected(null));
+  const categoryCleanup=async(cleanup:CategoryCleanup)=>{if(!selected)return refreshCategoryActivity(controller,cleanup);const transaction=await refreshCategoryCleanedTransaction(controller,selected,cleanup);if(!transaction)return false;setSelected(transaction);if(draft.category===cleanup.from)setDraft({...draft,category:cleanup.to});return true;};
+  return <><RecentlyDeleted dark={dark} controller={controller} operationId={operationId}/><ManualTransactions dark={dark} controller={controller} operationId={operationId} manualRequest={manualRequest} onCategoryCleanup={categoryCleanup}/><ActivityView dark={dark} state={controller.activity.current()} facetRows={controller.activityFacetRows} filters={controller.activityFilters} selected={editing?null:selected} draft={draft} mutation={controller.mutation.current()}
     onRetry={()=>{void controller.loadActivity();}} onFilter={filters=>{void controller.filterActivity(filters);}} onOpen={openTransaction}
-    onLoadMore={()=>{void controller.loadActivity(true);}} onClose={()=>setSelected(null)} onDraft={setDraft} onSave={saveTransaction} onCategoryCleanup={categoryCleanup}/></>;
+    onLoadMore={()=>{void controller.loadActivity(true);}} onEdit={()=>setEditing(true)} onDelete={deleteTransaction} onClose={()=>setSelected(null)} onDraft={setDraft} onSave={saveTransaction} onCategoryCleanup={categoryCleanup}/>{editing&&selected?<TransactionEditor dark={dark} transaction={selected} controller={controller} operationId={operationId} onClose={()=>{setEditing(false);setSelected(null);}} onCategoryCleanup={categoryCleanup}/>:null}</>;
 }
 
 function openRecurringStream(controller:FinanceControllerInstance,id:string,onOpenRecurring:((id:string)=>void)|undefined,setStream:(value:Stream|null)=>void):void {

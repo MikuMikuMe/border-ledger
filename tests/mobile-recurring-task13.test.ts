@@ -2,7 +2,7 @@ import { ClientRequest as Request } from './helpers/client-request';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMobileRequest } from '../worker/mobile';
 import { createOpaqueCredential, hashSecret, type OwnerScope } from '../worker/mobile-auth';
-import { createD1Fixture, task22MigrationNames, task24MigrationNames } from './helpers/d1';
+import { createD1Fixture, task22MigrationNames, task24MigrationNames, currentMigrationNames } from './helpers/d1';
 
 const fixtures: Array<{ dispose(): Promise<void> }> = [];
 const ORIGIN = 'https://pf.example.com';
@@ -91,7 +91,7 @@ function request(path: string, credential: string, init: RequestInit = {}) {
 
 describe('Task 13 mobile recurring routes', () => {
   it('returns owner-authorized list, summary, and detail DTOs with bounded paging', async () => {
-    const fixture = await createD1Fixture(task22MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const credential = await ownerCredential(fixture.db, ['ledger:read']);

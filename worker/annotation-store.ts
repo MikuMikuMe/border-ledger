@@ -40,7 +40,7 @@ export async function appendAnnotationRevision(db: D1Database, suppliedContext: 
     input.note === null ? null : text(input.note, 'annotation note', 4096),
   );
   const revisionGuard = reviewStateGuard(db, context, `EXISTS (
-      SELECT 1 FROM transactions WHERE id=? AND ledger_id=?)
+      SELECT 1 FROM effective_transactions t WHERE t.id=? AND t.ledger_id=? AND NOT EXISTS (SELECT 1 FROM transaction_alert_links link WHERE link.ledger_id=t.ledger_id AND link.alert_transaction_id=t.id))
     AND (SELECT COALESCE(MAX(revision),0) FROM annotation_revisions
       WHERE transaction_id=? AND ledger_id=?)=?`, [
     input.transactionId, context.ledgerId,

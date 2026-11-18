@@ -1,6 +1,6 @@
 import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyMigrations, createD1Fixture, task24MigrationNames } from './helpers/d1';
+import { applyMigrations, createD1Fixture, task24MigrationNames, currentMigrationNames } from './helpers/d1';
 import { appendAlertEventBatch, appendAlertEventLink, appendAlertProjection, appendTransactionSourceRecord, type AlertEventStorageInput } from '../worker/alert-store';
 import { addSourceProfileHint, approveDeviceSourceScope, approveSourceAccountMapping, createDevicePairing, issueCaptureCredential, upsertSourceProfile } from '../worker/device-store';
 import { appendAnnotationRevision } from '../worker/annotation-store';
@@ -154,6 +154,7 @@ describe('Task 3 alert and device stores', () => {
 
   it('uses immutable event links and rejects a lifecycle cycle', async () => {
     const fixture = await setup();
+    await applyMigrations(fixture.db, currentMigrationNames);
     await appendAlertEventBatch(fixture.db, OWNER_LEDGER, [event(), event({ id: 'event-2', eventId: 'event-2', observationId: 'observation-2', payloadDigest: 'digest-event-1' })]);
     await appendAlertProjection(fixture.db, OWNER_LEDGER, {
       id: 'projection-1',

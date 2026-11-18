@@ -117,7 +117,7 @@ export async function readOwnerLedgerSnapshot(db: D1Database, context: LedgerCon
       FROM bounded_accounts a LEFT JOIN account_currencies ac ON ac.account_id = a.id AND ac.ledger_id = a.ledger_id
       ORDER BY a.institution, a.name, a.id, ac.currency`).bind(context.ledgerId).all<AccountRow>(),
     db.prepare(`SELECT t.id, t.date, t.amount_minor, t.currency, t.merchant, a.name AS account_name, t.status, t.source, t.category, t.note, t.kind
-      FROM transactions t JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
+      FROM effective_transactions t JOIN accounts a ON a.id = t.account_id AND a.ledger_id = t.ledger_id
       WHERE t.ledger_id = ? AND ${visibleTransactionPredicate}
       ORDER BY t.date DESC, t.created_at DESC LIMIT 5000`).bind(context.ledgerId).all<TransactionRow>(),
     db.prepare(`SELECT rs.id, rs.merchant_name, rs.currency, rs.predicted_amount_minor, rs.average_amount_minor,
@@ -125,7 +125,7 @@ export async function readOwnerLedgerSnapshot(db: D1Database, context: LedgerCon
       FROM recurring_streams rs LEFT JOIN recurring_classifications rc ON rc.recurring_stream_id = rs.id AND rc.ledger_id = rs.ledger_id
       WHERE rs.ledger_id = ? AND rs.present_in_latest_snapshot = 1 ORDER BY rs.predicted_next_date, rs.id LIMIT 1000`).bind(context.ledgerId).all<RecurringRow>(),
     db.prepare(`SELECT id, 'needs_review' AS reason, currency, amount_minor, merchant, status
-      FROM transactions t WHERE t.ledger_id = ? AND ${visibleTransactionPredicate} AND t.status = 'needs_review'
+      FROM effective_transactions t WHERE t.ledger_id = ? AND ${visibleTransactionPredicate} AND t.status = 'needs_review'
       ORDER BY t.date DESC, t.created_at DESC LIMIT 1000`).bind(context.ledgerId).all<ReviewRow>(),
     readLedgerReport(db, context, { timeZone }),
   ]);

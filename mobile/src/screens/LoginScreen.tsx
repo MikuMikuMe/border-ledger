@@ -92,7 +92,7 @@ function LoginOptions({ open, display, onClose, onAppearance, onAbout }: { open:
   return <Modal visible={open} transparent animationType={display.reducedMotion ? 'none' : 'fade'} onRequestClose={onClose}>
     <View style={styles.modalBackdrop}><Pressable accessibilityRole="button" accessibilityLabel="Dismiss login options" onPress={onClose} style={StyleSheet.absoluteFill}/><View style={styles.menu} accessibilityViewIsModal><ScrollView>
       <Text style={styles.menuTitle}>Appearance</Text>
-      {APPEARANCES.map(mode => <Pressable key={mode} accessibilityRole="radio" accessibilityLabel={`Appearance: ${mode}`} accessibilityState={{ selected: display.appearanceMode === mode }} style={[styles.menuItem, display.appearanceMode === mode && styles.menuItemSelected]} onPress={async () => { onClose(); await onAppearance(mode); }}><Text style={styles.menuItemText}>{mode}</Text></Pressable>)}
+      {APPEARANCES.map(mode => <Pressable key={mode} accessibilityRole="radio" accessibilityLabel={`Appearance: ${mode}`} accessibilityState={{ checked: display.appearanceMode === mode }} style={[styles.menuItem, display.appearanceMode === mode && styles.menuItemSelected]} onPress={async () => { onClose(); await onAppearance(mode); }}><Text style={styles.menuItemText}>{mode}</Text></Pressable>)}
       <Pressable accessibilityRole="button" accessibilityLabel="About" style={styles.menuItem} onPress={() => { onClose(); onAbout(); }}><Text style={styles.menuItemText}>About</Text></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="Close login options" style={styles.menuItem} onPress={onClose}><Text style={styles.menuItemText}>Close</Text></Pressable>
     </ScrollView></View></View>

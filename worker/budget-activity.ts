@@ -36,7 +36,7 @@ async function readActivityRows(db:D1Database,context:LedgerContext,query:Activi
   const {dependencies,includeIncome}=options;
   validateQuery(query);
   const result=await db.prepare(`SELECT t.id,t.date,t.category,t.currency,t.amount_minor,t.kind,COALESCE(t.fx_lock_date,t.date) AS lock_date
-    FROM transactions t WHERE t.ledger_id=? AND t.date>=? AND t.date<=? AND t.status='confirmed'
+    FROM effective_transactions t WHERE t.ledger_id=? AND t.date>=? AND t.date<=? AND t.status='confirmed'
     AND t.kind IN ('expense','refund','fee'${includeIncome?",'income'":""}) AND ${notSupersededAlertTransactionPredicate('t')} ORDER BY t.date,t.id LIMIT 10001`)
     .bind(context.ledgerId,query.from,query.to).all<TransactionRow>();
   if (result.results.length>10000) throw new RangeError('Too many budget transactions');

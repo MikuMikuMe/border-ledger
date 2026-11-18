@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import {deleteTransaction,purgeExpiredTransactionOverrides} from '../worker/transaction-overrides';
 import { createSqliteD1Fixture } from './helpers/sqlite-d1';
 import { OWNER_LEDGER, SECOND_LEDGER, seedTenants, tenantOwner } from './helpers/tenants';
 import { createImportPreview, readImportPreview, stageImportChunk, cleanupExpiredImportStaging, publishImport } from '../worker/import-store';
@@ -142,6 +143,22 @@ describe('import tenant boundaries', () => {
       expect(await fixture.db.prepare('SELECT COUNT(*) AS count FROM transaction_source_records').first('count')).toBe(0);
     } finally { fixture.close(); }
   });
+  it('does not offer deleted transactions as import-preview duplicate candidates', async () => {
+    const fixture=createSqliteD1Fixture();try {
+      await seedTenants(fixture.db);
+      await fixture.db.prepare("INSERT INTO transactions(id,ledger_id,account_id,date,merchant,amount_minor,currency,category,kind,status,source,fingerprint) VALUES('second-alert','second-ledger','second-account','2026-10-23','Cafe',-123,'CAD','Food','expense','confirmed','alert','alert-fp')").run();
+      await fixture.db.prepare("INSERT INTO transaction_source_records(id,ledger_id,source_kind,identity_key,transaction_id,account_id,event_id,content_digest) VALUES('second-alert-source','second-ledger','alert','alert-key','second-alert','second-account','second-event','digest')").run();
+      await deleteTransaction(fixture.db,SECOND_LEDGER,{id:'second-alert',revision:0,requestId:'preview-hidden-delete'});
+      const owner=tenantOwner(SECOND_LEDGER);
+      const created=await createImportPreviewForOwner(fixture.db,owner,{accountId:'second-account',fileName:'bank.csv',fileSizeBytes:100,fileSha256:digest,format:'csv',rowCount:1,idempotencyKey:'hidden-preview'});
+      const row={...statement('second').rows[0],rowId:'same-row',rowIndex:0};
+      const staged=await stageImportChunkForOwner(fixture.db,owner,{previewId:created.id,chunkIndex:0,operationId:'chunk',rowStart:0,rows:[row]});
+      expect(staged.duplicateCandidates).toEqual([]);
+      const committed=await commitImportForOwner(fixture.db,owner,{previewId:created.id,expectedRevision:staged.revision,rowIds:['same-row'],operationId:'hidden-commit'});
+      expect(committed.duplicateCandidates).toEqual([]);
+    }finally{fixture.close();}
+  });
+
   it('overwrites a client canonical ID and retains the server ID in staged and published candidates', async () => {
     const fixture = createSqliteD1Fixture();
     try {
@@ -182,6 +199,59 @@ describe('import tenant boundaries', () => {
       expect(await fixture.db.prepare('SELECT COUNT(*) AS count FROM imports').first('count')).toBe(0);
     } finally {fixture.close();}
   });
+  it.each([{date:'2026-10-23',amount:-123,reference:'bank-ref-unique',hidden:true,expire:false},{date:'2026-10-23',amount:-123,reference:'bank-ref-unique',hidden:true,expire:true},{date:'2026-10-27',amount:-123,reference:'bank-ref-unique',hidden:false},{date:'2026-10-23',amount:-124,reference:'bank-ref-unique',hidden:false},{date:'2026-10-23',amount:-123,reference:'another-ref',hidden:false}])('matches expired alerts only with strong evidence: $date $amount $reference', async ({date,amount,reference,hidden,expire}) => {
+    const fixture=createSqliteD1Fixture();
+    try {
+      await seedTenants(fixture.db);
+      await fixture.db.prepare("UPDATE transactions SET source='alert',date='2026-10-23',merchant='Cafe',amount_minor=-123 WHERE id='owner-tx-1'").run();
+      await fixture.db.prepare("INSERT INTO source_profiles(id,ledger_id,provider,source_kind,display_name,parser_version,status,config_json) VALUES('match-profile','personal','bank','credit_alert','Bank','test','approved','{}')").run();
+      await fixture.db.prepare("INSERT INTO alert_events(id,event_id,observation_id,source_profile_id,parser_version,captured_at,event_time_basis,event_type,direction,bank_reference,payload_digest) VALUES('deleted-event','deleted-event','obs','match-profile','test','2026-10-23','notification_posted','purchase_notice','outflow','bank-ref-unique','hash')").run();
+      await fixture.db.prepare("INSERT INTO alert_projections(id,event_id,transaction_id,state) VALUES('deleted-projection','deleted-event','owner-tx-1','provisional')").run();
+      await fixture.db.prepare("INSERT INTO transaction_source_records(id,source_kind,identity_key,transaction_id,account_id,event_id,bank_reference,content_digest) VALUES('deleted-source','alert','alert-identity','owner-tx-1','owner-account','deleted-event','bank-ref-unique','hash')").run();
+      await deleteTransaction(fixture.db,OWNER_LEDGER,{id:'owner-tx-1',revision:0,requestId:'delete-alert-for-match'});
+      if(expire!==false){
+        await fixture.db.prepare("UPDATE transaction_overrides SET deleted_at='2025-01-01 00:00:00' WHERE transaction_id='owner-tx-1'").run();
+        await purgeExpiredTransactionOverrides(fixture.db,'2026-01-01T00:00:00.000Z');
+        const evidence=await fixture.db.prepare("SELECT match_digest FROM transaction_retention_evidence WHERE transaction_id='owner-tx-1'").first<string>('match_digest');
+        expect(evidence).toMatch(/^[a-f0-9]{64}$/);
+      }
+      const input=statement('owner');Object.assign(input.rows[0],{bankReference:reference,date,amountMinor:amount});
+      const result=await commitStatementRows(fixture.db,OWNER_LEDGER,input);
+      expect(result.accepted).toBe(1);
+      expect(result.candidates).toEqual([]);
+      const visible=await fixture.db.prepare('SELECT id FROM effective_transactions WHERE id=?').bind(result.transactionIds[0]).first();
+      const link=await fixture.db.prepare("SELECT statement_transaction_id FROM transaction_alert_links WHERE alert_transaction_id='owner-tx-1'").first();
+      expect(visible).toEqual(hidden?null:{id:result.transactionIds[0]});
+      expect(link).toEqual(hidden?{statement_transaction_id:result.transactionIds[0]}:null);
+    } finally {fixture.close();}
+  });
+
+  it('replays a published import safely after an expired row is redacted', async () => {
+    const fixture=createSqliteD1Fixture();
+    try {
+      await seedTenants(fixture.db);
+      const owner=tenantOwner(SECOND_LEDGER);
+      const created=await createImportPreviewForOwner(fixture.db,owner,{accountId:'second-account',fileName:'bank.csv',fileSizeBytes:100,fileSha256:digest,format:'csv',rowCount:1,idempotencyKey:'retention-key'});
+      const input={...statement('second').rows[0],rowId:'same-row',rowIndex:0,sourceIdentity:{bankSourceId:'bank-id',bankRowId:'row-id'}};
+      const staged=await stageImportChunkForOwner(fixture.db,owner,{previewId:created.id,chunkIndex:0,operationId:'chunk',rowStart:0,rows:[input]});
+      const request={previewId:created.id,expectedRevision:staged.revision,rowIds:['same-row'],operationId:'commit-retention'};
+      const first=await commitImportForOwner(fixture.db,owner,request);
+      const source=await fixture.db.prepare("SELECT transaction_id FROM transaction_source_records WHERE ledger_id=? AND source_kind='statement'").bind(SECOND_LEDGER.ledgerId).first<{transaction_id:string}>();
+      await deleteTransaction(fixture.db,SECOND_LEDGER,{id:source!.transaction_id,revision:0,requestId:'retention-import-delete'});
+      await fixture.db.prepare("UPDATE transaction_overrides SET deleted_at=datetime('now','-366 days') WHERE transaction_id=?").bind(source!.transaction_id).run();
+      await purgeExpiredTransactionOverrides(fixture.db,new Date().toISOString());
+      const replay=await commitImportForOwner(fixture.db,owner,request);
+      expect(replay).toMatchObject({receiptId:first.receiptId,importId:first.importId,publishedRows:first.publishedRows,duplicateRows:first.duplicateRows});
+      const chunk=await fixture.db.prepare('SELECT rows_json FROM import_chunks WHERE preview_id=?').bind(created.id).first<string>('rows_json');
+      expect(chunk).not.toContain('Cafe');
+      expect(JSON.parse(chunk!)[0].sourceIdentity).toEqual({bankSourceId:'bank-id',bankRowId:'row-id'});
+      const reimport=statement('second');
+      reimport.rows[0].sourceIdentity={...reimport.rows[0].sourceIdentity,bankSourceId:'bank-id',bankRowId:'row-id'};
+      expect((await commitStatementRows(fixture.db,SECOND_LEDGER,reimport)).duplicates).toBe(1);
+      expect(await fixture.db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE ledger_id=? AND source='statement'").bind(SECOND_LEDGER.ledgerId).first('count')).toBe(1);
+    } finally {fixture.close();}
+  });
+
   it('supports the second tenant preview, chunk and commit lifecycle', async () => {
     const fixture = createSqliteD1Fixture();
     try { await seedTenants(fixture.db);

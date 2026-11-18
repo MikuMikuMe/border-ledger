@@ -256,7 +256,7 @@ async function readStreamRows(db: D1Database, context: LedgerContext, query: Rec
 }
 
 async function readMembershipRows(db: D1Database, context: LedgerContext, streamIds?: readonly string[]) {
-  const clauses = ['rt.ledger_id = ?', 'rt.present_in_latest_snapshot = 1'];
+  const clauses = ['rt.ledger_id = ?', 'rt.present_in_latest_snapshot = 1', '(rt.transaction_id IS NULL OR t.id IS NOT NULL)'];
   const bindings: unknown[] = [context.ledgerId];
   if (streamIds && streamIds.length > 0) {
     clauses.push(`rt.recurring_stream_id IN (${streamIds.map(() => '?').join(', ')})`);
@@ -264,12 +264,12 @@ async function readMembershipRows(db: D1Database, context: LedgerContext, stream
   }
   if (streamIds && streamIds.length === 0) return new Map<string, RecurringMembership[]>();
   const result = await db.prepare(`SELECT rt.recurring_stream_id, rt.provider_transaction_id, rt.provider_pending_transaction_id,
-      rt.date, rt.amount_minor, rt.currency, COALESCE(t.kind, rt.kind) AS kind,
+      COALESCE(t.date, rt.date) AS date, COALESCE(t.amount_minor, rt.amount_minor) AS amount_minor, COALESCE(t.currency, rt.currency) AS currency, COALESCE(t.kind, rt.kind) AS kind,
       t.status AS transaction_status, rt.transaction_id
     FROM recurring_stream_transactions rt
-    LEFT JOIN transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
+    LEFT JOIN effective_transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
     WHERE ${clauses.join(' AND ')}
-    ORDER BY rt.date DESC, rt.provider_transaction_id DESC`).bind(...bindings).all<RecurringMembershipRow>();
+    ORDER BY COALESCE(t.date, rt.date) DESC, rt.provider_transaction_id DESC`).bind(...bindings).all<RecurringMembershipRow>();
   const grouped = new Map<string, RecurringMembership[]>();
   for (const row of result.results) {
     const list = grouped.get(row.recurring_stream_id) ?? [];
@@ -313,19 +313,19 @@ export async function readRecurringDetail(db: D1Database, context: LedgerContext
   const [rowWithRevision] = await attachClassificationRevisions(db, context, [row]);
   const limit = boundedLimit(requestedLimit);
   const decoded = decodeCursor(cursor);
-  const clauses = ['rt.ledger_id = ?', 'rt.recurring_stream_id = ?', 'rt.present_in_latest_snapshot = 1'];
+  const clauses = ['rt.ledger_id = ?', 'rt.recurring_stream_id = ?', 'rt.present_in_latest_snapshot = 1', '(rt.transaction_id IS NULL OR t.id IS NOT NULL)'];
   const bindings: unknown[] = [context.ledgerId, id];
   if (decoded) {
-    clauses.push('(rt.date < ? OR (rt.date = ? AND rt.provider_transaction_id < ?))');
+    clauses.push('(COALESCE(t.date, rt.date) < ? OR (COALESCE(t.date, rt.date) = ? AND rt.provider_transaction_id < ?))');
     bindings.push(decoded.date, decoded.date, decoded.id);
   }
   const historyResult = await db.prepare(`SELECT rt.recurring_stream_id, rt.provider_transaction_id, rt.provider_pending_transaction_id,
-      rt.date, rt.amount_minor, rt.currency, COALESCE(t.kind, rt.kind) AS kind,
+      COALESCE(t.date, rt.date) AS date, COALESCE(t.amount_minor, rt.amount_minor) AS amount_minor, COALESCE(t.currency, rt.currency) AS currency, COALESCE(t.kind, rt.kind) AS kind,
       t.status AS transaction_status, rt.transaction_id
     FROM recurring_stream_transactions rt
-    LEFT JOIN transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
+    LEFT JOIN effective_transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
     WHERE ${clauses.join(' AND ')}
-      ORDER BY rt.date DESC, rt.provider_transaction_id DESC LIMIT ${limit + 1}`).bind(...bindings).all<RecurringMembershipRow>();
+      ORDER BY COALESCE(t.date, rt.date) DESC, rt.provider_transaction_id DESC LIMIT ${limit + 1}`).bind(...bindings).all<RecurringMembershipRow>();
   const hasMore = historyResult.results.length > limit;
   const historyRows = hasMore ? historyResult.results.slice(0, limit) : historyResult.results;
   const last = historyRows.at(-1);
@@ -370,7 +370,7 @@ export async function readRecurringSummary(db: D1Database, context: LedgerContex
       FROM recurring_stream_transactions rt
       JOIN recurring_streams s ON s.id = rt.recurring_stream_id AND s.ledger_id = rt.ledger_id
       LEFT JOIN recurring_classifications c ON c.recurring_stream_id = s.id AND c.ledger_id = s.ledger_id
-      JOIN transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
+      JOIN effective_transactions t ON t.id = rt.transaction_id AND t.ledger_id = rt.ledger_id
       WHERE ${clauses.join(' AND ')}
       GROUP BY t.id, t.currency, t.amount_minor`).bind(...bindings).all<{ id: string; currency: Currency; amount_minor: number }>();
     for (const row of actual.results) actualCostByCurrency[row.currency] -= row.amount_minor;
@@ -467,10 +467,13 @@ function membershipStatements(db: D1Database, context: LedgerContext, itemId: st
     return db.prepare(`INSERT INTO recurring_stream_transactions
       (recurring_stream_id, ledger_id, item_id, provider_transaction_id, provider_pending_transaction_id, transaction_id, account_id,
        date, amount_minor, currency, kind, is_outflow, membership_id, present_in_latest_snapshot)
-      VALUES (?, ?, ?, ?, ?, COALESCE(
+      SELECT ?, ?, ?, ?, ?, COALESCE(
         (SELECT id FROM transactions WHERE ledger_id = ? AND plaid_item_id = ? AND provider_transaction_id = ? LIMIT 1),
         (SELECT id FROM transactions WHERE ledger_id = ? AND plaid_item_id = ? AND provider_pending_transaction_id = ? LIMIT 1)
-      ), ?, ?, ?, ?, ?, ?, ?, 1)`)
+      ), ?, ?, ?, ?, ?, ?, ?, 1 WHERE NOT EXISTS (
+        SELECT 1 FROM transactions t JOIN transaction_overrides o ON o.ledger_id=t.ledger_id AND o.transaction_id=t.id
+        WHERE t.ledger_id=? AND t.plaid_item_id=? AND (t.provider_transaction_id IN (?,?) OR t.provider_pending_transaction_id IN (?,?))
+          AND o.deleted_at IS NOT NULL AND julianday('now')-julianday(o.deleted_at)>=365)`)
       .bind(
         stream.id,
         context.ledgerId,
@@ -490,6 +493,12 @@ function membershipStatements(db: D1Database, context: LedgerContext, itemId: st
         stream.isOutflow ? 'expense' : 'income',
         stream.isOutflow ? 1 : 0,
         membership.providerTransactionId,
+        context.ledgerId,
+        itemId,
+        membership.providerTransactionId,
+        membership.pendingProviderTransactionId,
+        membership.providerTransactionId,
+        membership.pendingProviderTransactionId,
       );
   });
 }

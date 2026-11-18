@@ -24,6 +24,14 @@ class OwnerLedgerApiTest {
     }
 
     @Test
+    fun transactionQueryAcceptsMaximumTransactionIdLength() {
+        assertEquals(160, OwnerTransactionQuery(query = "a".repeat(160)).query?.length)
+        assertTrue(runCatching { OwnerTransactionQuery(query = "a".repeat(161)) }.isFailure)
+        assertEquals(1024, OwnerTransactionQuery(cursor = "a".repeat(1024)).cursor?.length)
+        assertTrue(runCatching { OwnerTransactionQuery(cursor = "a".repeat(1025)) }.isFailure)
+    }
+
+    @Test
     fun reportQueryRejectsUnregisteredReportingTargets() {
         var rejected = false
         try {

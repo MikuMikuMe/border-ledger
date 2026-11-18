@@ -1,7 +1,9 @@
+import {createSqliteD1Fixture} from './helpers/sqlite-d1';
+import { editTransaction, deleteTransaction, restoreTransaction, purgeExpiredTransactionOverrides } from '../worker/transaction-overrides';
 import { OWNER_LEDGER } from './helpers/tenants';
 import { afterEach, describe, expect, it } from 'vitest';
 import { validRecurringResponse } from './fixtures/recurring/valid';
-import { createD1Fixture, task23MigrationNames } from './helpers/d1';
+import { createD1Fixture, task23MigrationNames, currentMigrationNames } from './helpers/d1';
 import { normalizeRecurringSnapshot } from '../worker/plaid-recurring';
 import { publishRecurringSnapshot, readRecurringDetail, readRecurringPage, readRecurringSummary, setRecurringClassification } from '../worker/recurring-store';
 import { classifyMobileRecurring } from '../worker/recurring-service';
@@ -28,7 +30,7 @@ async function seed(db: Awaited<ReturnType<typeof createD1Fixture>>['db']) {
 
 describe('recurring repository reads', () => {
   it('paginates stable streams, reads detail history, and aggregates actual cost across full history', async () => {
-    const fixture = await createD1Fixture(task23MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await seed(fixture.db);
     const snapshot = normalizeRecurringSnapshot(validRecurringResponse, 'item-1', new Map([['plaid-cad', 'account-cad'], ['plaid-cny', 'account-cny']]));
@@ -61,8 +63,54 @@ describe('recurring repository reads', () => {
     expect(summary.subscriptionByCurrency.CAD).toBeLessThan(0);
   });
 
+  it('reflects transaction edits, deletion and restoration in recurring history and actual spending', async () => {
+    const fixture = await createD1Fixture(currentMigrationNames);
+    fixtures.push(fixture);
+    await seed(fixture.db);
+    const snapshot = normalizeRecurringSnapshot(validRecurringResponse, 'item-1', new Map([['plaid-cad', 'account-cad'], ['plaid-cny', 'account-cny']]));
+    await publishRecurringSnapshot(fixture.db, OWNER_LEDGER, {itemId:'item-1',generation:1,scopeVersion:0,connectionRevision:1,snapshot,checkedAt:'2026-10-13T15:00:00.000Z'});
+    const range={startDate:'2026-10-01',endDate:'2026-10-31',today:'2026-10-13'};
+    await editTransaction(fixture.db,OWNER_LEDGER,{id:'ledger-expense',revision:0},{requestId:'recurring-edit-0001',accountId:'account-cad',date:'2026-10-05',merchant:'Edited',amount:'25.00',currency:'CAD',kind:'expense',category:'Transport',note:null,expectedAnnotationRevision:0});
+    expect((await readRecurringSummary(fixture.db,OWNER_LEDGER,range)).actualCostByCurrency.CAD).toBe(2500);
+    expect((await readRecurringDetail(fixture.db,OWNER_LEDGER,'item-1:stream-cad'))?.history).toContainEqual(expect.objectContaining({date:'2026-10-05',amountMinor:-2500}));
+    await deleteTransaction(fixture.db,OWNER_LEDGER,{id:'ledger-expense',revision:1,requestId:'recurring-delete-01'});
+    expect((await readRecurringSummary(fixture.db,OWNER_LEDGER,range)).actualCostByCurrency.CAD).toBe(0);
+    expect((await readRecurringDetail(fixture.db,OWNER_LEDGER,'item-1:stream-cad'))?.history).toHaveLength(0);
+    await restoreTransaction(fixture.db,OWNER_LEDGER,{id:'ledger-expense',revision:2,requestId:'recurring-restore-1'});
+    expect((await readRecurringSummary(fixture.db,OWNER_LEDGER,range)).actualCostByCurrency.CAD).toBe(2500);
+  });
+
+  it('removes expired transaction details from recurring membership and keeps them out on sync', async () => {
+    const fixture=createSqliteD1Fixture();fixtures.push({dispose:async()=>fixture.close()});await seed(fixture.db);
+    const snapshot=normalizeRecurringSnapshot(validRecurringResponse,'item-1',new Map([['plaid-cad','account-cad'],['plaid-cny','account-cny']]));
+    const publication={itemId:'item-1',generation:1,scopeVersion:0,connectionRevision:1,snapshot,checkedAt:'2026-10-13T15:00:00.000Z'};
+    await publishRecurringSnapshot(fixture.db,OWNER_LEDGER,publication);
+    expect(await fixture.db.prepare("SELECT COUNT(*) AS count FROM recurring_stream_transactions WHERE transaction_id='ledger-expense'").first('count')).toBeGreaterThan(0);
+    await deleteTransaction(fixture.db,OWNER_LEDGER,{id:'ledger-expense',revision:0,requestId:'recurring-expiry-delete'});
+    await fixture.db.prepare("UPDATE transaction_overrides SET deleted_at='2025-01-01 00:00:00' WHERE transaction_id='ledger-expense'").run();
+    await purgeExpiredTransactionOverrides(fixture.db,'2026-01-01T00:00:00.000Z');
+    expect(await fixture.db.prepare("SELECT COUNT(*) AS count FROM recurring_stream_transactions WHERE transaction_id='ledger-expense'").first('count')).toBe(0);
+    await publishRecurringSnapshot(fixture.db,OWNER_LEDGER,publication);
+    expect(await fixture.db.prepare("SELECT COUNT(*) AS count FROM recurring_stream_transactions WHERE transaction_id='ledger-expense'").first('count')).toBe(0);
+    await fixture.db.prepare("UPDATE transactions SET provider_transaction_id='new-posted',provider_pending_transaction_id='posted-cad-1' WHERE id='ledger-expense'").run();
+    await publishRecurringSnapshot(fixture.db,OWNER_LEDGER,publication);
+    expect(await fixture.db.prepare("SELECT COUNT(*) AS count FROM recurring_stream_transactions WHERE provider_transaction_id='posted-cad-1'").first('count')).toBe(0);
+  });
+
+  it('paginates recurring history using edited dates', async () => {
+    const fixture=await createD1Fixture(currentMigrationNames);fixtures.push(fixture);await seed(fixture.db);
+    const snapshot=normalizeRecurringSnapshot(validRecurringResponse,'item-1',new Map([['plaid-cad','account-cad'],['plaid-cny','account-cny']]));
+    await publishRecurringSnapshot(fixture.db,OWNER_LEDGER,{itemId:'item-1',generation:1,scopeVersion:0,connectionRevision:1,snapshot,checkedAt:'2026-10-13T15:00:00.000Z'});
+    await fixture.db.prepare(`INSERT INTO recurring_stream_transactions (recurring_stream_id,item_id,provider_transaction_id,transaction_id,account_id,date,amount_minor,currency,kind,is_outflow) VALUES (?,?,?,?,?,?,?,?,?,?)`).bind('item-1:stream-cad','item-1','refund-1','ledger-refund','account-cad','2026-10-02',200,'CAD','refund',1).run();
+    await editTransaction(fixture.db,OWNER_LEDGER,{id:'ledger-expense',revision:0},{requestId:'recurring-edit-page',accountId:'account-cad',date:'2026-10-05',merchant:'Edited',amount:'25.00',currency:'CAD',kind:'expense',category:'Transport',note:null,expectedAnnotationRevision:0});
+    const first=await readRecurringDetail(fixture.db,OWNER_LEDGER,'item-1:stream-cad',{limit:1});
+    expect(first?.history.map(row=>row.date)).toEqual(['2026-10-05']);expect(first?.nextCursor).toBeTruthy();
+    const second=await readRecurringDetail(fixture.db,OWNER_LEDGER,'item-1:stream-cad',{limit:1,cursor:first!.nextCursor!});
+    expect(second?.history.map(row=>row.date)).toEqual(['2026-10-02']);expect(second?.nextCursor).toBeNull();
+  });
+
   it('keeps registered currencies in recurring summary maps without converting source amounts', async () => {
-    const fixture = await createD1Fixture(task23MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await fixture.db.batch([
       fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)')
@@ -98,7 +146,7 @@ describe('recurring repository reads', () => {
   });
 
   it('returns waiting state before the first successful source result and validates classification IDs', async () => {
-    const fixture = await createD1Fixture(task23MigrationNames);
+    const fixture = await createD1Fixture(currentMigrationNames);
     fixtures.push(fixture);
     await fixture.db.batch([
       fixture.db.prepare('INSERT INTO accounts (id, name, institution, currency, kind, status) VALUES (?, ?, ?, ?, ?, ?)').bind('account-cad', 'CAD account', 'RBC', 'CAD', 'chequing', 'connected'),

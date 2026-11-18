@@ -69,8 +69,8 @@ data class OwnerTransactionQuery(
 ) {
     init {
         require(limit in 1..100) { "Transaction page size must be between 1 and 100." }
-        require(cursor == null || cursor.length <= 512) { "Transaction cursor is too long." }
-        require(query == null || query.length <= 120) { "Transaction query is too long." }
+        require(cursor == null || cursor.length <= 1024) { "Transaction cursor is too long." }
+        require(query == null || query.length <= 160) { "Transaction query is too long." }
         require(currency == null || CurrencyRegistry().metadata(currency) != null) { "Transaction currency is not registered." }
         require(status == null || status in OWNER_TRANSACTION_STATUSES) { "Transaction status is not supported." }
         require(source == null || source in OWNER_TRANSACTION_SOURCES) { "Transaction source is not supported." }

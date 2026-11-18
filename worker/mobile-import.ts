@@ -401,7 +401,7 @@ async function readPreviewCandidateRows(db: D1Database, context: LedgerContext, 
   const statementCandidates = await db.prepare(`SELECT DISTINCT t.id, sr.id AS source_record_id, sr.source_kind, sr.identity_key, sr.event_id,
       t.account_id, t.date, t.merchant, t.amount_minor, t.currency, t.kind, t.status, t.source, sr.bank_reference
     FROM transaction_source_records sr
-    JOIN transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id AND t.ledger_id = sr.ledger_id
+    JOIN effective_transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id AND t.ledger_id = sr.ledger_id
     WHERE sr.ledger_id = ? AND sr.source_kind = 'statement' AND sr.account_id = ? AND t.account_id = ?
       AND t.source = 'statement' AND t.kind = ? AND t.status IN ('confirmed', 'provisional', 'needs_review')
       AND t.currency = ? AND t.amount_minor = ?
@@ -419,7 +419,7 @@ async function readPreviewCandidateRows(db: D1Database, context: LedgerContext, 
           WHERE ap.ledger_id = t.ledger_id AND ap.transaction_id = t.id AND ae.bank_reference IS NOT NULL ORDER BY ap.updated_at DESC LIMIT 1)
       ) AS bank_reference
     FROM transaction_source_records sr
-    JOIN transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id AND t.ledger_id = sr.ledger_id
+    JOIN effective_transactions t ON t.id = sr.transaction_id AND t.account_id = sr.account_id AND t.ledger_id = sr.ledger_id
     WHERE sr.ledger_id = ? AND sr.source_kind = 'alert' AND sr.account_id = ? AND t.account_id = ?
       AND t.kind = ? AND t.status IN ('confirmed', 'provisional', 'needs_review')
       AND NOT EXISTS (SELECT 1 FROM alert_projections superseded_alert
