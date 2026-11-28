@@ -3,7 +3,7 @@ import {act,createElement} from 'react';
 import {createRoot} from 'react-dom/client';
 import {expect,it,vi} from 'vitest';
 import type {LedgerApi} from '../src/domain/api';
-vi.mock('../src/components/ReceiptScan',()=>({ReceiptScan:(props:{onBegin():void;onResult(value:unknown,clearMissingDate?:boolean):void})=>createElement('div',null,createElement('button',{type:'button',onClick:()=>{props.onBegin();props.onResult({merchant:'Shop',date:null,amount:'12.50',currency:null});}},'Test scan'),createElement('button',{type:'button',onClick:()=>props.onResult({merchant:'AI Shop',date:'2026-11-20',amount:'13.50',currency:null},false)},'Test AI'))}));
+vi.mock('../src/components/ReceiptScan',()=>({ReceiptScan:(props:{onBegin():void;onResult(value:unknown,clearMissingDate?:boolean):void})=>createElement('div',null,createElement('button',{type:'button',onClick:()=>{props.onBegin();props.onResult({merchant:'Shop',date:null,amount:'12.50',currency:null});}},'Test scan'),createElement('button',{type:'button',onClick:()=>{props.onBegin();props.onResult({merchant:'Second Shop',date:null,amount:null,currency:null});}},'Unreadable total'),createElement('button',{type:'button',onClick:()=>props.onResult({merchant:'AI Shop',date:'2026-11-20',amount:'13.50',currency:null},false)},'Test AI'))}));
 import {ManualTransactions} from '../src/components/ManualTransactions';
 (globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
 it('requires review and currency confirmation after a scan',async()=>{
@@ -31,5 +31,19 @@ it('preserves edits after local OCR while applying untouched AI suggestions',asy
   act(()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(field('Description'),'My edit');field('Description').dispatchEvent(new Event('input',{bubbles:true}));});
   act(()=>[...host.querySelectorAll('button')].find(x=>x.textContent==='Test AI')!.click());
   expect(field('Description').value).toBe('My edit');expect(field('Amount').value).toBe('13.50');
+ }finally{act(()=>root.unmount());host.remove();}
+});
+
+it.each([false,true])('replacing a receipt clears only an unedited scan amount (edited: %s)',async(edited)=>{
+ const api:LedgerApi=async<T>(path:string)=> (path.includes('manual-matches')?{matches:[]}:{categories:[]}) as T;
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
+ try {
+  await act(async()=>root.render(createElement(ManualTransactions,{accounts:[{id:'acct',name:'Checking',institution:'Bank',currency:'CAD'}],api,onChanged:async()=>{}})));
+  const click=(name:string)=>act(()=>[...host.querySelectorAll('button')].find(x=>x.textContent===name)!.click());
+  click('Add transaction');click('Test scan');
+  const amount=[...host.querySelectorAll('label')].find(x=>x.textContent?.startsWith('Amount'))!.querySelector('input')!;
+  if(edited)act(()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(amount,'17.00');amount.dispatchEvent(new Event('input',{bubbles:true}));});
+  click('Unreadable total');
+  expect(amount.value).toBe(edited?'17.00':'');
  }finally{act(()=>root.unmount());host.remove();}
 });

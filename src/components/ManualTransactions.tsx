@@ -1,6 +1,6 @@
 import {CategoryPicker} from './CategoryPicker';
 import {ReceiptScan} from './ReceiptScan';
-import {markReceiptEdits,mergeReceiptScan,type ReceiptEditField,type ReceiptSuggestion} from '../domain/receipt';
+import {beginReceiptScan,markReceiptEdits,mergeReceiptScan,type ReceiptEditField,type ReceiptSuggestion} from '../domain/receipt';
 import { useEffect, useId, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from 'react';
 import type { LedgerApi } from '../domain/api';
 import { LedgerApiError, ledgerSession } from '../domain/api';
@@ -141,11 +141,11 @@ export function ManualTransactions({accounts,api,onChanged}:{accounts:Account[];
   const loadMatches=async()=>{try {setMatches(await readMatches(api));}catch {setMessage('Could not load possible duplicates.');}};
   useEffect(()=>{void loadMatches();},[]);
   useEffect(()=>{restorePendingEntry(pendingKey,{setEntry,setOpen,setUncertain,setMessage});},[pendingKey]);
-  const start=()=>{setEntry(newEntry(accounts));setMessage('');setUncertain(false);setConfirmedCurrency(undefined);setOpen(true);};
+  const start=()=>{scanEdits.current.clear();setEntry(newEntry(accounts));setMessage('');setUncertain(false);setConfirmedCurrency(undefined);setOpen(true);};
   const actions={entry,pendingKey,api,onChanged,loadMatches,setBusy,setMessage,setOpen,setUncertain};
   const submit=(event:FormEvent)=>submitReceiptEntry(event,actions,scanBusy,confirmedCurrency);
   const editEntry:Dispatch<SetStateAction<Entry>>=update=>setEntry(current=>trackEntryEdit(current,update,scanEdits.current));
-  const receipt=(suggestion:ReceiptSuggestion,clearMissingDate=true,clearMissingAmount=false)=>{
+  const receipt=(suggestion:ReceiptSuggestion,clearMissingDate=true,clearMissingAmount=true)=>{
     setEntry(current=>mergeEntryScan(current,suggestion,scanEdits.current,{accounts,clearMissingDate,clearMissingAmount}));setConfirmedCurrency(null);
   };
   const decide=(match:Match,decision:'confirmed'|'dismissed')=>decideMatch(match,decision,actions);
@@ -154,7 +154,7 @@ export function ManualTransactions({accounts,api,onChanged}:{accounts:Account[];
     <div className="section-heading"><div><h2>Manual transactions</h2><p>Add one transaction or review possible duplicates.</p></div>{!open?<button ref={addButton} type="button" className="outline-button" disabled={!accounts.length} onClick={start}>Add transaction</button>:null}</div>
     {!accounts.length?<p>Add an account before recording a transaction.</p>:null}
     <ManualMessage message={message}/>
-    {open?<><ReceiptScan api={api} disabled={busy||uncertain} onBusy={setScanBusy} onBegin={()=>{scanEdits.current.clear();}} onResult={receipt}/><EntryForm api={api} accounts={accounts} entry={entry} setEntry={editEntry} busy={busy} scanBusy={scanBusy} uncertain={uncertain} message={message} onSubmit={submit} onCancel={()=>setOpen(false)} onCategoryCleanup={cleanup} needsCurrencyConfirmation={currencyNeedsConfirmation(confirmedCurrency,entry.currency)} onConfirmCurrency={()=>setConfirmedCurrency(entry.currency)}/></>:null}
+    {open?<><ReceiptScan api={api} disabled={busy||uncertain} onBusy={setScanBusy} onBegin={()=>beginReceiptScan(scanEdits.current)} onResult={receipt}/><EntryForm api={api} accounts={accounts} entry={entry} setEntry={editEntry} busy={busy} scanBusy={scanBusy} uncertain={uncertain} message={message} onSubmit={submit} onCancel={()=>setOpen(false)} onCategoryCleanup={cleanup} needsCurrencyConfirmation={currencyNeedsConfirmation(confirmedCurrency,entry.currency)} onConfirmCurrency={()=>setConfirmedCurrency(entry.currency)}/></>:null}
     <MatchList accounts={accounts} matches={matches} busy={busy} onDecide={(match,decision)=>{void decide(match,decision);}}/>
   </section>;
 }

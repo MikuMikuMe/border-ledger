@@ -96,6 +96,9 @@ type ReceiptDraft=ReceiptFields & {accountId:string;currency:string;category?:st
 export function markReceiptEdits(before:ReceiptDraft,after:ReceiptDraft,edits:Set<ReceiptEditField>) {
   for(const key of ['merchant','date','amount','accountId','currency','category'] as const)if(before[key]!==after[key])edits.add(key);
 }
+export function beginReceiptScan(edits:Set<ReceiptEditField>) {
+  for(const field of edits)if(field!=='amount')edits.delete(field);
+}
 function removeEditedSuggestions(suggestion:ReceiptSuggestion,edits:Set<ReceiptEditField>):ReceiptSuggestion {
   return {...suggestion,merchant:edits.has('merchant')?null:suggestion.merchant,date:edits.has('date')?null:suggestion.date,amount:edits.has('amount')?null:suggestion.amount,currency:edits.has('accountId')||edits.has('currency')?null:suggestion.currency};
 }

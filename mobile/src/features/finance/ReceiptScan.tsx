@@ -75,7 +75,7 @@ export function ReceiptScan({dark,disabled,sessionKey,onBegin,onBusy,onResult}:P
     try {
       const raw:unknown=await NativeModules.NativeReceiptScanner.scanForCloud();if(!current(token) || raw===null)return;
       const image=cloudScan(raw);if(!image)throw new Error();
-      if(image.text.trim()){setText(image.text);onResult(parseReceipt(image.text));}
+      setText(image.text);onResult(parseReceipt(image.text));
       if(!current(token))return;
       submitted=true;
       const result=JSON.parse(await executeOcr('ocr_scan',JSON.stringify({configurationRevision:chosen.revision,...image,confirmed:true}))) as {suggestion:ReceiptSuggestion;deletionRequested:boolean|null;amountConflict:boolean};

@@ -93,6 +93,15 @@ describe('mobile receipt scanner safety',()=>{
     expect(onResult).toHaveBeenLastCalledWith(expect.objectContaining({amount:null}),false,true);
     expect(JSON.stringify(tree.toJSON())).toContain('totals disagree');act(()=>tree.unmount());
   });
+  it('applies an empty local suggestion when a provider capture has no local text',async()=>{
+    resetNative();shared.ocrSettingsPayload=JSON.stringify({provider:'azure',endpoint:'https://receipt.cognitiveservices.azure.com',model:'',revision:'r1'});
+    shared.native.scanForCloud.mockResolvedValue(JSON.stringify({text:'',image:'/9j/2Q==',contentType:'image/jpeg'}));
+    shared.native.execute.mockImplementation(async(command:string)=>command==='ocr_settings'?shared.ocrSettingsPayload:command==='ocr_scan'?JSON.stringify({suggestion:{merchant:'Second',date:null,amount:null,currency:null},deletionRequested:true,amountConflict:false}):'{}');
+    const {tree,onResult}=await renderScan();act(()=>tree.root.findByProps({accessibilityLabel:'Scan with OCR provider'}).props.onPress());
+    await act(async()=>{shared.alertButtons.find(button=>button.text==='Continue')?.onPress?.();await new Promise(resolve=>setTimeout(resolve,0));});
+    expect(onResult).toHaveBeenNthCalledWith(1,expect.objectContaining({amount:null}));
+    act(()=>tree.unmount());
+  });
   it('offers retake guidance if the recognized receipt is missing key details',async()=>{
     resetNative();
     shared.native.scan.mockResolvedValue('STORE\nSUBTOTAL 12.00');

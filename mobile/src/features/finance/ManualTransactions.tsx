@@ -6,7 +6,7 @@ import {Action,Card,Copy,DetailModal} from './FinanceViews';
 import {ManualEntryFocusContext} from './accessibilityFocus';
 import {ManualEntryForm,type ManualDraft} from './ManualEntryForm';
 import {ReceiptScan} from './ReceiptScan';
-import {markReceiptEdits,mergeReceiptScan,type ReceiptEditField,type ReceiptSuggestion} from '../../../../src/domain/receipt';
+import {beginReceiptScan,markReceiptEdits,mergeReceiptScan,type ReceiptEditField,type ReceiptSuggestion} from '../../../../src/domain/receipt';
 import type {CategoryCleanup} from './CategoryPicker';
 import {formatMoney} from './model';
 import type {FinanceController} from './FinanceController';
@@ -78,7 +78,7 @@ export function ManualTransactions({dark,controller,operationId,manualRequest,on
   const [confirmedCurrency,setConfirmedCurrency]=useState<string|null|undefined>(undefined);
   const [draft,setDraft]=useState<ManualDraft>(()=>initial(accounts)),[open,setOpen]=useState(false),[matches,setMatches]=useState<Match[]>([]),[message,setMessage]=useState(''),[pending,setPending]=useState<string|null>(null);
   useEffect(()=>{notifyOpen(open);return()=>notifyOpen(false);},[open,notifyOpen]);
-  useEffect(()=>{if(lastRequest.current!==manualRequest){lastRequest.current=manualRequest;setDraft(initial(accounts));setConfirmedCurrency(undefined);setOpen(true);}},[manualRequest]);
+  useEffect(()=>{if(lastRequest.current!==manualRequest){lastRequest.current=manualRequest;scanEdits.current.clear();setDraft(initial(accounts));setConfirmedCurrency(undefined);setOpen(true);}},[manualRequest]);
   useEffect(()=>{if(needsDraft(open,draft,accounts))setDraft(initial(accounts));},[open,accounts,draft.accountId]);
   const mutation=controller.mutation.current();
   const load=()=>loadManualStatus(setMatches,setPending,setMessage);
@@ -88,11 +88,11 @@ export function ManualTransactions({dark,controller,operationId,manualRequest,on
   const decide=(match:Match,decision:'confirmed'|'dismissed')=>{const id=operationId();void write('match',{manualId:match.manualId,bankId:match.bankId,decision,expectedRevision:match.revision},id);};
   const resume=()=>resumeManualOperation(pending,controller,load,setMessage);
   const editDraft=(next:ManualDraft)=>{markReceiptEdits(draft,next,scanEdits.current);setDraft(next);};
-  const receiveReceipt=(value:ReceiptSuggestion,clearMissingDate=true,clearMissingAmount=false)=>{setDraft(current=>mergeReceiptScan(current,value,scanEdits.current,{allowed:['CAD','USD'],clearMissingDate,clearMissingAmount}));setConfirmedCurrency(null);};
+  const receiveReceipt=(value:ReceiptSuggestion,clearMissingDate=true,clearMissingAmount=true)=>{setDraft(current=>mergeReceiptScan(current,value,scanEdits.current,{allowed:['CAD','USD'],clearMissingDate,clearMissingAmount}));setConfirmedCurrency(null);};
   const formReady=open&&accounts.some(account=>account.id===draft.accountId);
   return <>
     <ManualStatus dark={dark} message={message} pending={pending} matches={matches} accounts={accounts} blocked={mutation.blocked} onRefresh={()=>{setMessage('');void load();}} onResume={()=>{void resume();}} onDecide={decide}/>
-    {formReady?<ManualEntryForm dark={dark} accounts={accounts} draft={draft} onDraft={editDraft} mutation={mutation} onSave={create} onClose={()=>setOpen(false)} onCategoryCleanup={onCategoryCleanup} receipt={<ReceiptScan dark={dark} disabled={mutation.blocked} sessionKey={manualRequest} onBusy={setScanBusy} onBegin={()=>{scanEdits.current.clear();}} onResult={receiveReceipt}/>} scanBusy={scanBusy} currencyConfirmed={confirmedCurrency===undefined||confirmedCurrency===draft.currency} onConfirmCurrency={()=>setConfirmedCurrency(draft.currency)}/>:null}
+    {formReady?<ManualEntryForm dark={dark} accounts={accounts} draft={draft} onDraft={editDraft} mutation={mutation} onSave={create} onClose={()=>setOpen(false)} onCategoryCleanup={onCategoryCleanup} receipt={<ReceiptScan dark={dark} disabled={mutation.blocked} sessionKey={manualRequest} onBusy={setScanBusy} onBegin={()=>beginReceiptScan(scanEdits.current)} onResult={receiveReceipt}/>} scanBusy={scanBusy} currencyConfirmed={confirmedCurrency===undefined||confirmedCurrency===draft.currency} onConfirmCurrency={()=>setConfirmedCurrency(draft.currency)}/>:null}
     {open&&!formReady?<AccountStatus dark={dark} snapshot={snapshot} onRetry={()=>{void controller.reload();}} onClose={()=>setOpen(false)}/>:null}
   </>;
 }

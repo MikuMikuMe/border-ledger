@@ -31,6 +31,13 @@ it('clears an unedited conflicting amount but preserves a user edit',async()=>{
  expect(mergeReceiptScan(draft,suggestion,new Set(),{allowed:['CAD'],clearMissingAmount:true}).amount).toBe('');
  expect(mergeReceiptScan(draft,suggestion,new Set(['amount']),{allowed:['CAD'],clearMissingAmount:true}).amount).toBe('12.50');
 });
+it('preserves a deliberate amount edit across replacement scans',async()=>{
+ const {beginReceiptScan,mergeReceiptScan}=await import('../src/domain/receipt');
+ const draft={merchant:'First',date:'2026-11-20',amount:'17.00',accountId:'a',currency:'CAD'};
+ const edits=new Set<import('../src/domain/receipt').ReceiptEditField>(['amount','merchant']);
+ beginReceiptScan(edits);
+ expect(mergeReceiptScan(draft,{merchant:'Second',date:null,amount:null,currency:null},edits,{allowed:['CAD'],clearMissingAmount:true})).toMatchObject({merchant:'Second',amount:'17.00'});
+});
 it('fills a suggested category but preserves a user choice',async()=>{
  const {mergeReceiptScan,markReceiptEdits}=await import('../src/domain/receipt');
  const draft={merchant:'Metro',date:'2026-11-20',amount:'12.50',accountId:'a',currency:'CAD',category:''};
