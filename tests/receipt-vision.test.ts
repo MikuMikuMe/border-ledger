@@ -12,12 +12,13 @@ describe('vision AI receipt analysis',()=>{
     const fetcher=vi.fn(async(_url:RequestInfo|URL,_init?:RequestInit)=>Response.json({choices:[{message:{content:'{"merchant":"Store","date":"2026-11-25","amount":"12.50","currency":null}'}}]}));
     expect(await analyzeVisionReceipt(input,fetcher)).toEqual({merchant:'Store',date:'2026-11-25',amount:'12.50',currency:null});
     const body=JSON.parse(fetcher.mock.calls[0][1]!.body as string);
-    expect(body.model).toBe('vision-model');expect(body.messages[0].content[1].image_url.url).toBe('data:image/jpeg;base64,LzlqLw==');
+    expect(body.model).toBe('vision-model');expect(body.max_completion_tokens).toBe(1024);expect(body).not.toHaveProperty('max_tokens');expect(body.messages[0].content[1].image_url.url).toBe('data:image/jpeg;base64,LzlqLw==');
   });
   it('uses Anthropic image blocks and provider authentication',async()=>{
     const fetcher=vi.fn(async(_url:RequestInfo|URL,_init?:RequestInit)=>Response.json({content:[{type:'text',text:'{"merchant":null,"date":null,"amount":null,"currency":null}'}]}));
     await analyzeVisionReceipt({...input,provider:'anthropic',endpoint:'https://api.anthropic.com/v1/messages'},fetcher);
     const [_,request]=fetcher.mock.calls[0];const body=JSON.parse(request!.body as string);
+    expect(body.max_tokens).toBe(1024);expect(body).not.toHaveProperty('max_completion_tokens');
     expect(body.messages[0].content[1].source).toEqual({type:'base64',media_type:'image/jpeg',data:'LzlqLw=='});
     expect(new Headers(request!.headers).get('x-api-key')).toBe('vision-key');
   });
