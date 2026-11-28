@@ -13,7 +13,8 @@ export async function analyzeVisionReceipt(input:VisionInput,fetcher:typeof fetc
   const image=input.provider==='anthropic'?{type:'image',source:{type:'base64',media_type:input.contentType,data:input.image}}:{type:'image_url',image_url:{url:`data:${input.contentType};base64,${input.image}`}};
   if(input.provider==='anthropic'){headers.set('x-api-key',input.credential);headers.set('anthropic-version','2023-06-01');}
   else headers.set('authorization',`Bearer ${input.credential}`);
-  const body=JSON.stringify({model:input.model,max_tokens:1024,messages:[{role:'user',content:[{type:'text',text:prompt+' Return category as an additional JSON key. '+categoryInstruction(input.categories??[])},image]}]});
+  const tokenLimit=input.provider==='anthropic'?{max_tokens:1024}:{max_completion_tokens:1024};
+  const body=JSON.stringify({model:input.model,...tokenLimit,messages:[{role:'user',content:[{type:'text',text:prompt+' Return category as an additional JSON key. '+categoryInstruction(input.categories??[])},image]}]});
   let response:Response;
   try {response=await fetcher(input.endpoint,{method:'POST',headers,body,redirect:'manual',signal:AbortSignal.timeout(30000)});}catch {throw new Error('OCR provider is unavailable');}
   if(!response.ok)throw new Error('OCR provider is unavailable');
