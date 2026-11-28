@@ -93,6 +93,8 @@ export interface MobileRouteEnv {
   PLAID_SECRET?: string;
   PLAID_ENV?: string;
   AI_CREDENTIAL_ENCRYPTION_KEY?: string;
+  RECEIPT_AZURE_ENDPOINT?: string;
+  RECEIPT_AZURE_KEY?: string;
   WEALTH_CREDENTIAL_ENCRYPTION_KEY?: string;
   AI_ALLOWED_ENDPOINT_HOSTS?: string;
   AI_EGRESS?: AiEgressBinding;
@@ -525,7 +527,7 @@ async function handleMobileAiRequest(request:Request,env:MobileRouteEnv,config:M
   const scope=request.method==='PUT' || request.method==='DELETE' ? 'preferences:write' : 'ledger:read';
   const owner=await authenticateOwner(bearer(request),env.DB,config,scope);
   authorizeMobileRoute(owner,url.pathname,scope);
-  return handleAiApi(request,{db:env.DB,context:owner,root,env:{secret:env.AI_CREDENTIAL_ENCRYPTION_KEY??'',origin:env.LEDGER_APP_ORIGIN??'',allowedHosts:env.AI_ALLOWED_ENDPOINT_HOSTS,egress:env.AI_EGRESS,egressSecret:env.AI_EGRESS_AUTH_KEY}});
+  return handleAiApi(request,{db:env.DB,context:owner,root,env:{secret:env.AI_CREDENTIAL_ENCRYPTION_KEY??'',origin:env.LEDGER_APP_ORIGIN??'',allowedHosts:env.AI_ALLOWED_ENDPOINT_HOSTS,egress:env.AI_EGRESS,egressSecret:env.AI_EGRESS_AUTH_KEY,azureEndpoint:env.RECEIPT_AZURE_ENDPOINT,azureKey:env.RECEIPT_AZURE_KEY}});
 }
 async function handleMobilePlanRequest(request: Request, env: MobileRouteEnv, config: MobileAuthConfig, url: URL) {
   const root = '/api/mobile/v1/recurring-plans';

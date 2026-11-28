@@ -1,5 +1,5 @@
 export type AiProvider = 'openai' | 'anthropic' | 'deepseek';
-export interface AiCredentialBinding { userId:string; ledgerId:string; provider:AiProvider }
+export interface AiCredentialBinding { userId:string; ledgerId:string; provider:AiProvider|'receipt-azure'|'receipt-openai'|'receipt-anthropic' }
 export interface SealedAiCredential { ciphertext:string; iv:string }
 const encoder=new TextEncoder();
 function encode(bytes:Uint8Array) { return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); }

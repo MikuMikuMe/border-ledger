@@ -10,11 +10,16 @@ import org.json.JSONObject
 class AnalysisFailure(val code:String):Exception()
 private const val ROOT = "/api/mobile/v1/analysis"
 internal fun analysisRoute(action:String, body:String):Pair<String,String> {
-    require(body.toByteArray(Charsets.UTF_8).size <= 16384)
+    val limit=if(action=="ocr_scan") 6*1024*1024 else 16384
+    require(body.toByteArray(Charsets.UTF_8).size <= limit)
     return when(action) {
         "settings" -> "GET" to ROOT
         "configuration", "sharing" -> "PUT" to "$ROOT/$action"
-        "preview", "run" -> "POST" to "$ROOT/$action"
+        "preview", "run", "receipt" -> "POST" to "$ROOT/$action"
+        "ocr_settings" -> "GET" to "$ROOT/ocr/configuration"
+        "ocr_configuration" -> "PUT" to "$ROOT/ocr/configuration"
+        "ocr_remove" -> "DELETE" to "$ROOT/ocr/configuration"
+        "ocr_scan" -> "POST" to "$ROOT/ocr/scan"
         "remove" -> {
             val provider=JSONObject(body).getString("provider")
             require(provider in setOf("openai","anthropic","deepseek"))

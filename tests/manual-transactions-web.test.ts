@@ -11,6 +11,7 @@ describe('manual transaction form',()=>{
   it('refreshes activity after category cleanup even when the entry is canceled',async()=>{
     let writes=0;
     const api:LedgerApi=async <T>(path:string)=>{
+      if(path==='/api/analysis/ocr/configuration')return null as T;
       if(path.includes('/manual-matches'))return {matches:[]} as T;
       if(path==='/api/categories')return {categories:[{name:'Food',archived:false}]} as T;
       if(path==='/api/categories/preview')return {from:'Food',to:'Dining',transactions:1,budget:{},conflicts:[],version:'v1'} as T;
@@ -37,6 +38,7 @@ describe('manual transaction form',()=>{
   it('keeps the same request and fields when a save outcome is uncertain',async()=>{
     const writes:string[]=[];
     const api:LedgerApi=async <T>(path:string,init?:RequestInit)=>{
+      if(path==='/api/analysis/ocr/configuration')return null as T;
       if(path.includes('/manual-matches'))return {matches:[]} as T;
       if(path==='/api/categories')return {categories:[{name:'Food',archived:false}]} as T;
       writes.push(String(init?.body));if(writes.length===1)throw new Error('connection lost');return {id:'saved'} as T;
@@ -58,6 +60,7 @@ describe('manual transaction form',()=>{
   it('reports a successful save when the subsequent refresh fails',async()=>{
     let writes=0;
     const api:LedgerApi=async <T>(path:string)=>{
+      if(path==='/api/analysis/ocr/configuration')return null as T;
       if(path.includes('/manual-matches'))return {matches:[]} as T;
       if(path==='/api/categories')return {categories:[{name:'Food',archived:false}]} as T;
       writes++;return {id:'saved'} as T;
@@ -82,7 +85,7 @@ describe('manual transaction form',()=>{
     try {
       await act(async()=>root.render(createElement(ManualTransactions,{accounts:[{id:'acct',name:'Chequing',institution:'Bank',currency:'CAD'}],api,onChanged:async()=>{}})));
       act(()=>[...container.querySelectorAll('button')].find(node=>node.textContent==='Add transaction')!.click());
-      expect(document.activeElement).toBe(container.querySelector('select'));
+      expect(document.activeElement).toBe(container.querySelector('select[required]'));
       const amount=[...container.querySelectorAll('label')].find(node=>node.textContent?.startsWith('Amount'))!.querySelector('input')!;
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(amount,'1.001');
       act(()=>amount.dispatchEvent(new Event('input',{bubbles:true})));

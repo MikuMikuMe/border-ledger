@@ -1,4 +1,6 @@
 import {CategoryPicker} from './CategoryPicker';
+import {ReceiptScan} from './ReceiptScan';
+import {markReceiptEdits,mergeReceiptScan,type ReceiptEditField,type ReceiptSuggestion} from '../domain/receipt';
 import { useEffect, useId, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from 'react';
 import type { LedgerApi } from '../domain/api';
 import { LedgerApiError, ledgerSession } from '../domain/api';
@@ -44,7 +46,7 @@ function CurrencyField({selected,value,onChange}:{selected:Account|undefined;val
   return <label>Currency<select value={value} onChange={event=>onChange(event.target.value)}>{currencies.map(code=><option key={code}>{code}</option>)}</select></label>;
 }
 
-function EntryForm({api,accounts,entry,setEntry,busy,uncertain,message,onSubmit,onCancel,onCategoryCleanup}:{api:LedgerApi;accounts:Account[];entry:Entry;setEntry:Dispatch<SetStateAction<Entry>>;busy:boolean;uncertain:boolean;message:string;onSubmit(event:FormEvent):Promise<void>;onCancel():void;onCategoryCleanup():void}) {
+function EntryForm({api,accounts,entry,setEntry,busy,scanBusy,uncertain,message,onSubmit,onCancel,onCategoryCleanup,needsCurrencyConfirmation,onConfirmCurrency}:{api:LedgerApi;accounts:Account[];entry:Entry;setEntry:Dispatch<SetStateAction<Entry>>;busy:boolean;scanBusy:boolean;uncertain:boolean;message:string;onSubmit(event:FormEvent):Promise<void>;onCancel():void;onCategoryCleanup():void;needsCurrencyConfirmation:boolean;onConfirmCurrency():void}) {
   const amountError=message===amountErrorText;
   const selected=accounts.find(account=>account.id===entry.accountId);
   const update=(name:keyof Entry,value:string)=>setEntry(current=>({...current,[name]:value}));
@@ -53,12 +55,12 @@ function EntryForm({api,accounts,entry,setEntry,busy,uncertain,message,onSubmit,
       <label>Date<input type="date" required value={entry.date} onChange={event=>update('date',event.target.value)}/></label>
       <label>Description<input required maxLength={160} value={entry.merchant} onChange={event=>update('merchant',event.target.value)}/></label>
       <AmountField entry={entry} update={update} error={amountError}/>
-      <CurrencyField selected={selected} value={entry.currency} onChange={value=>update('currency',value)}/>
+      <CurrencyField selected={selected} value={entry.currency} onChange={value=>update('currency',value)}/>{needsCurrencyConfirmation?<label><input type="checkbox" checked={false} onChange={onConfirmCurrency}/> I confirm the selected currency for this receipt.</label>:null}
       <label>Type<select value={entry.kind} onChange={event=>update('kind',event.target.value)}>{['expense','income','transfer','refund','fee'].map(kind=><option key={kind} value={kind}>{kind}</option>)}</select></label>
       {entry.kind==='transfer'?<label>Direction<select value={entry.direction} onChange={event=>update('direction',event.target.value)}><option value="out">Out of account</option><option value="in">Into account</option></select></label>:null}
       <CategoryPicker api={api} value={entry.category} disabled={busy||uncertain} onChange={value=>update('category',value)} onCleanup={onCategoryCleanup}/>
       <label>Note (optional)<input maxLength={1000} value={entry.note} onChange={event=>update('note',event.target.value)}/></label>
-    </fieldset><div className="manual-actions"><button type="submit" className="primary-button" disabled={busy}>{busy?'Saving…':uncertain?'Retry same entry':'Save transaction'}</button>{!uncertain?<button type="button" className="quiet-button" disabled={busy} onClick={onCancel}>Cancel</button>:null}</div></form>;
+    </fieldset><div className="manual-actions"><button type="submit" className="primary-button" disabled={busy||scanBusy}>{busy?'Saving…':uncertain?'Retry same entry':'Save transaction'}</button>{!uncertain?<button type="button" className="quiet-button" disabled={busy} onClick={onCancel}>Cancel</button>:null}</div></form>;
 }
 
 type EntryActions = {entry:Entry;pendingKey:string|null;api:LedgerApi;onChanged:()=>Promise<void>;loadMatches:()=>Promise<void>;setBusy:Dispatch<SetStateAction<boolean>>;setMessage:Dispatch<SetStateAction<string>>;setOpen:Dispatch<SetStateAction<boolean>>;setUncertain:Dispatch<SetStateAction<boolean>>};
@@ -106,10 +108,31 @@ function restorePendingEntry(pendingKey:string|null,{setEntry,setOpen,setUncerta
   try{const saved=sessionStorage.getItem(pendingKey);if(saved){setEntry(JSON.parse(saved) as Entry);setOpen(true);setUncertain(true);setMessage('A previous save is unresolved. Retry this same entry to check safely.');}}catch{setMessage('Could not restore the previous manual entry.');}
 }
 
+function currencyNeedsConfirmation(confirmed:string|null|undefined,currency:string) {return confirmed!==undefined && confirmed!==currency;}
+function submitReceiptEntry(event:FormEvent,actions:EntryActions,scanBusy:boolean,confirmedCurrency:string|null|undefined) {
+  if(scanBusy){event.preventDefault();return Promise.resolve();}
+  if(confirmedCurrency!==undefined && confirmedCurrency!==actions.entry.currency){event.preventDefault();actions.setMessage('Confirm the receipt currency before saving.');return Promise.resolve();}
+  return submitEntry(event,actions);
+}
+
+function trackEntryEdit(current:Entry,update:SetStateAction<Entry>,edits:Set<ReceiptEditField>) {
+  const next=typeof update==='function'?update(current):update;
+  markReceiptEdits(current,next,edits);
+  return next;
+}
+function mergeEntryScan(current:Entry,suggestion:ReceiptSuggestion,edits:Set<ReceiptEditField>,options:{accounts:Account[];clearMissingDate:boolean;clearMissingAmount:boolean}) {
+  const account=options.accounts.find(item=>item.id===current.accountId);
+  const allowed=account?.currencies?.length?account.currencies:[account?.currency??''];
+  return mergeReceiptScan(current,suggestion,edits,{allowed,clearMissingDate:options.clearMissingDate,clearMissingAmount:options.clearMissingAmount});
+}
+function ManualMessage({message}:{message:string}) {return message && message!==amountErrorText?<p role="status">{message}</p>:null;}
 export function ManualTransactions({accounts,api,onChanged}:{accounts:Account[];api:LedgerApi;onChanged:()=>Promise<void>}) {
   const [entry,setEntry]=useState(()=>newEntry(accounts));
   const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[uncertain,setUncertain]=useState(false);
   const [message,setMessage]=useState('');
+  const [scanBusy,setScanBusy]=useState(false);
+  const [confirmedCurrency,setConfirmedCurrency]=useState<string|null|undefined>(undefined);
+  const scanEdits=useRef(new Set<ReceiptEditField>());
   const [matches,setMatches]=useState<Match[]>([]);
   const addButton=useRef<HTMLButtonElement>(null),wasOpen=useRef(false);
   useEffect(()=>{if(!open && wasOpen.current)addButton.current?.focus();wasOpen.current=open;},[open]);
@@ -118,16 +141,20 @@ export function ManualTransactions({accounts,api,onChanged}:{accounts:Account[];
   const loadMatches=async()=>{try {setMatches(await readMatches(api));}catch {setMessage('Could not load possible duplicates.');}};
   useEffect(()=>{void loadMatches();},[]);
   useEffect(()=>{restorePendingEntry(pendingKey,{setEntry,setOpen,setUncertain,setMessage});},[pendingKey]);
-  const start=()=>{setEntry(newEntry(accounts));setMessage('');setUncertain(false);setOpen(true);};
+  const start=()=>{setEntry(newEntry(accounts));setMessage('');setUncertain(false);setConfirmedCurrency(undefined);setOpen(true);};
   const actions={entry,pendingKey,api,onChanged,loadMatches,setBusy,setMessage,setOpen,setUncertain};
-  const submit=(event:FormEvent)=>submitEntry(event,actions);
+  const submit=(event:FormEvent)=>submitReceiptEntry(event,actions,scanBusy,confirmedCurrency);
+  const editEntry:Dispatch<SetStateAction<Entry>>=update=>setEntry(current=>trackEntryEdit(current,update,scanEdits.current));
+  const receipt=(suggestion:ReceiptSuggestion,clearMissingDate=true,clearMissingAmount=false)=>{
+    setEntry(current=>mergeEntryScan(current,suggestion,scanEdits.current,{accounts,clearMissingDate,clearMissingAmount}));setConfirmedCurrency(null);
+  };
   const decide=(match:Match,decision:'confirmed'|'dismissed')=>decideMatch(match,decision,actions);
   const cleanup=()=>refreshAfterCategoryCleanup(onChanged,setMessage);
   return <section className="panel manual-transactions" aria-label="Manual transactions">
     <div className="section-heading"><div><h2>Manual transactions</h2><p>Add one transaction or review possible duplicates.</p></div>{!open?<button ref={addButton} type="button" className="outline-button" disabled={!accounts.length} onClick={start}>Add transaction</button>:null}</div>
     {!accounts.length?<p>Add an account before recording a transaction.</p>:null}
-    {message && message!==amountErrorText?<p role="status">{message}</p>:null}
-    {open?<EntryForm api={api} accounts={accounts} entry={entry} setEntry={setEntry} busy={busy} uncertain={uncertain} message={message} onSubmit={submit} onCancel={()=>setOpen(false)} onCategoryCleanup={cleanup}/>:null}
+    <ManualMessage message={message}/>
+    {open?<><ReceiptScan api={api} disabled={busy||uncertain} onBusy={setScanBusy} onBegin={()=>{scanEdits.current.clear();}} onResult={receipt}/><EntryForm api={api} accounts={accounts} entry={entry} setEntry={editEntry} busy={busy} scanBusy={scanBusy} uncertain={uncertain} message={message} onSubmit={submit} onCancel={()=>setOpen(false)} onCategoryCleanup={cleanup} needsCurrencyConfirmation={currencyNeedsConfirmation(confirmedCurrency,entry.currency)} onConfirmCurrency={()=>setConfirmedCurrency(entry.currency)}/></>:null}
     <MatchList accounts={accounts} matches={matches} busy={busy} onDecide={(match,decision)=>{void decide(match,decision);}}/>
   </section>;
 }

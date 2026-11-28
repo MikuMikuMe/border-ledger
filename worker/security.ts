@@ -53,7 +53,7 @@ export function apiSecurityHeaders() {
 
 export function staticSecurityHeaders() {
   return {
-    'content-security-policy': "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'",
+    'content-security-policy': "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.plaid.com; connect-src 'self' https://*.plaid.com; frame-src https://*.plaid.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'",
     'strict-transport-security': 'max-age=31536000',
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',

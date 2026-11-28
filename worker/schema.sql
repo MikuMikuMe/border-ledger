@@ -1561,6 +1561,17 @@ CREATE TABLE budget_transfer_operations (
 
 CREATE TRIGGER budget_allocation_start_insert BEFORE INSERT ON budget_allocations WHEN NEW.month < (SELECT start_month FROM budget_settings WHERE ledger_id=NEW.ledger_id) BEGIN SELECT RAISE(ABORT,'allocation precedes budget start'); END;
 CREATE TRIGGER budget_allocation_start_update BEFORE UPDATE ON budget_allocations WHEN NEW.month < (SELECT start_month FROM budget_settings WHERE ledger_id=NEW.ledger_id) BEGIN SELECT RAISE(ABORT,'allocation precedes budget start'); END;
+CREATE TABLE receipt_ocr_settings (
+  ledger_id TEXT NOT NULL REFERENCES ledgers(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  provider TEXT NOT NULL CHECK(provider IN ('azure','openai','anthropic')),
+  endpoint TEXT NOT NULL,
+  model TEXT NOT NULL,
+  ciphertext TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  PRIMARY KEY(ledger_id,user_id)
+);
 CREATE TABLE ai_credentials (
   ledger_id TEXT NOT NULL REFERENCES ledgers(id),
   user_id TEXT NOT NULL REFERENCES users(id),
