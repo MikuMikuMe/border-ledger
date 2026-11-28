@@ -3,10 +3,11 @@ import {describe,expect,it,vi} from 'vitest';
 const require=createRequire(new URL('../mobile/package.json',import.meta.url));
 const React=require('react');
 const {create,act}=require('react-test-renderer');
-vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
-const native=vi.hoisted(()=>({write:vi.fn(async()=>({status:'completed'})),matches:[] as unknown[],operations:[] as unknown[]}));
+vi.mock('../mobile/node_modules/react-native/index.js',()=>({NativeModules:{NativeReceiptScanner:{scan:()=>native.scan()}},Text:'Text',View:'View',Pressable:'Pressable',TextInput:'TextInput',ActivityIndicator:'ActivityIndicator',Modal:'Modal',KeyboardAvoidingView:'KeyboardAvoidingView',ScrollView:'ScrollView',AccessibilityInfo:{setAccessibilityFocus:()=>{}},findNodeHandle:()=>null,StyleSheet:{create:(v:unknown)=>v}}));
+const native=vi.hoisted(()=>({write:vi.fn(async()=>({status:'completed'})),matches:[] as unknown[],operations:[] as unknown[],settings:vi.fn(async()=>{throw new Error('unavailable');}),scan:vi.fn(async()=> 'COFFEE SHOP\n2026-11-20\nTOTAL $12.50')}));
 vi.mock('../mobile/src/native/specs/NativeLedger',()=>({default:{readCategories:async()=>JSON.stringify({categories:[{name:"Food",archived:false}]}),readManualMatches:async()=>JSON.stringify({matches:native.matches}),startManualWrite:native.write,onChanged:()=>({remove(){}})}}));
 vi.mock('../mobile/src/native/specs/NativeSession',()=>({default:{readOperations:async()=>native.operations}}));
+vi.mock('../mobile/src/native/specs/NativeAnalysis',()=>({default:{execute:native.settings}}));
 const {CategoryServicesContext}=await import('../mobile/src/features/finance/categoryServices');
 const categoryServices={readCategories:async()=>JSON.stringify({categories:[{name:'Food',archived:false}]}),categoryAction:async(action:string)=>JSON.stringify(action==='preview'?{from:'Food',to:'Dining',transactions:1,budget:{},conflicts:[],version:'v1'}:{ok:true})};
 const {ManualTransactions}=await import('../mobile/src/features/finance/ManualTransactions');
@@ -49,6 +50,58 @@ describe('manual transaction account states',()=>{
     await act(async()=>{tree.root.findByProps({accessibilityLabel:'Save transaction'}).props.onPress();await new Promise(resolve=>setTimeout(resolve,0));});
     expect(native.write).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(tree.toJSON())).toContain('Transaction saved.');act(()=>tree.unmount());
+  });
+  it('prefills a receipt draft and requires currency confirmation before saving',async()=>{
+    native.write.mockClear();const {tree}=await render({phase:'ready',data:snapshot([account]),message:null});
+    await act(async()=>{tree.root.findByProps({accessibilityLabel:'Scan receipt'}).props.onPress();await new Promise(resolve=>setTimeout(resolve,0));});
+    expect(tree.root.findByProps({accessibilityLabel:'Description'}).props.value).toBe('COFFEE SHOP');
+    expect(tree.root.findByProps({accessibilityLabel:'Amount'}).props.value).toBe('12.50');
+    expect(tree.root.findByProps({accessibilityLabel:'Date (YYYY-MM-DD)'}).props.value).toBe('2026-11-20');
+    expect(tree.root.findByProps({accessibilityLabel:'Save transaction'}).props.disabled).toBe(true);
+    act(()=>tree.root.findByProps({accessibilityLabel:'Confirm receipt currency'}).props.onPress());
+    expect(native.write).not.toHaveBeenCalled();act(()=>tree.unmount());
+  });
+  it('finishes local scanning while optional AI settings remain unavailable',async()=>{
+    native.settings.mockImplementationOnce(()=>new Promise(()=>{}));
+    const {tree}=await render({phase:'ready',data:snapshot([account]),message:null});
+    await act(async()=>{tree.root.findByProps({accessibilityLabel:'Scan receipt'}).props.onPress();await new Promise(resolve=>setTimeout(resolve,0));});
+    expect(tree.root.findByProps({accessibilityLabel:'Amount'}).props.value).toBe('12.50');
+    expect(tree.root.findByProps({accessibilityLabel:'Scan receipt'}).props.disabled).toBe(false);act(()=>tree.unmount());
+  });
+  it('preserves edits after local OCR while applying untouched AI suggestions',async()=>{
+    const {tree}=await render({phase:'ready',data:snapshot([account]),message:null});
+    await act(async()=>{tree.root.findByProps({accessibilityLabel:'Scan receipt'}).props.onPress();await new Promise(resolve=>setTimeout(resolve,0));});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Description'}).props.onChangeText('My edit'));
+    const {ReceiptScan}=await import('../mobile/src/features/finance/ReceiptScan');
+    act(()=>tree.root.findByType(ReceiptScan).props.onResult({merchant:'AI Shop',date:'2026-11-20',amount:'13.50',currency:null},false));
+    expect(tree.root.findByProps({accessibilityLabel:'Description'}).props.value).toBe('My edit');
+    expect(tree.root.findByProps({accessibilityLabel:'Amount'}).props.value).toBe('13.50');act(()=>tree.unmount());
+  });
+  it('fills an AI category in the draft without saving it',async()=>{
+    native.write.mockClear();const {tree}=await render({phase:'ready',data:snapshot([account]),message:null});
+    const {ReceiptScan}=await import('../mobile/src/features/finance/ReceiptScan');
+    act(()=>tree.root.findByType(ReceiptScan).props.onResult({merchant:'Metro',date:'2026-11-20',amount:'12.50',currency:null,category:'Food'},false));
+    expect(tree.root.findByProps({accessibilityLabel:'Choose category'}).props.accessibilityValue.text).toBe('Food');
+    expect(native.write).not.toHaveBeenCalled();act(()=>tree.unmount());
+  });
+  it('preserves edits made while the scanner is open',async()=>{
+    let complete!:(value:string)=>void;native.scan.mockImplementationOnce(()=>new Promise<string>(resolve=>{complete=resolve;}));
+    const {tree}=await render({phase:'ready',data:snapshot([account]),message:null});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Scan receipt'}).props.onPress());
+    act(()=>tree.root.findByProps({accessibilityLabel:'Description'}).props.onChangeText('My own description'));
+    await act(async()=>{complete('SHOP\n2026-11-20\nTOTAL 12.50');await new Promise(resolve=>setTimeout(resolve,0));});
+    expect(tree.root.findByProps({accessibilityLabel:'Description'}).props.value).toBe('My own description');
+    expect(tree.root.findByProps({accessibilityLabel:'Amount'}).props.value).toBe('12.50');act(()=>tree.unmount());
+  });
+  it('drops a scanner result when a new manual form session starts',async()=>{
+    let complete!:(value:string)=>void;native.scan.mockImplementationOnce(()=>new Promise<string>(resolve=>{complete=resolve;}));
+    const {tree,controller}=await render({phase:'ready',data:snapshot([account]),message:null});
+    act(()=>tree.root.findByProps({accessibilityLabel:'Scan receipt'}).props.onPress());
+    await act(async()=>{tree.update(React.createElement(CategoryServicesContext.Provider,{value:categoryServices},React.createElement(ManualTransactions,{dark:false,controller,operationId:()=> 'op',manualRequest:2})));});
+    await act(async()=>{complete('OLD RECEIPT\n2026-11-20\nTOTAL 12.50');await new Promise(resolve=>setTimeout(resolve,0));});
+    expect(tree.root.findByProps({accessibilityLabel:'Description'}).props.value).toBe('');
+    expect(tree.root.findByProps({accessibilityLabel:'Amount'}).props.value).toBe('');
+    act(()=>tree.unmount());
   });
   it('opens the form when accounts finish loading after the menu was selected',async()=>{
     const state:any={phase:'loading',data:null,message:null};

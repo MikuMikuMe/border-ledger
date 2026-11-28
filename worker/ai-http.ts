@@ -13,7 +13,8 @@ async function dispatch(request:Request,route:Route) {
   const read=await readRoute(request,path,route);
   if(read) return read;
   if(request.method!=='PUT' && request.method!=='POST') return json({code:'not_found',message:'Not found'},404);
-  const body=record(await readJsonBody(request,16384));
+  const limit=request.method==='POST' && path==='/ocr/scan'?6*1024*1024:16384;
+  const body=record(await readJsonBody(request,limit));
   const result=request.method==='PUT'?await putRoute(path,body,route):await postRoute(path,body,route);
   return result ?? json({code:'not_found',message:'Not found'},404);
 }

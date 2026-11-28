@@ -579,3 +579,9 @@ h2 { margin-bottom: 0; font: 600 18px/1.15 'IBM Plex Sans', sans-serif; letter-s
 
 .category-picker-extra[open] { display: grid; gap: 8px; padding-bottom: 12px; }
 .category-picker p { margin: 0; }
+
+.receipt-scan { display: grid; gap: 10px; margin: 16px 0; min-width: 0; }
+.receipt-scan label { display: grid; gap: 6px; min-width: 0; }
+.receipt-scan input[type="file"] { width: 100%; min-width: 0; max-width: 100%; }
+.receipt-scan p { margin: 0; }
+.receipt-scan input[type="file"]::file-selector-button { min-height: 44px; padding: 0 14px; font: inherit; cursor: pointer; }

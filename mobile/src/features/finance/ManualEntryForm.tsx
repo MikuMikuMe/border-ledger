@@ -35,9 +35,16 @@ function TransactionRecovery({dark,recovery}:{dark:boolean;recovery?:{message:st
   if(!recovery)return null;
   return <View accessibilityLiveRegion="polite"><Copy dark={dark} error>{recovery.message}</Copy><Action dark={dark} label="Refresh transaction" onPress={recovery.onRefresh}/></View>;
 }
+function canSave(draft:ManualDraft,mutation:MutationState,scanBusy:boolean,currencyConfirmed:boolean) {
+  return !mutation.blocked && !scanBusy && currencyConfirmed && !!draft.accountId && !!draft.date && !!draft.merchant.trim() && !!draft.amount && !!draft.category.trim();
+}
+function KindFields({dark,draft,disabled,update}:{dark:boolean;draft:ManualDraft;disabled:boolean;update(key:keyof ManualDraft,value:string):void}) {
+  return <><Copy dark={dark}>Type</Copy><View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{['expense','income','transfer','refund','fee'].map(kind=><Action key={kind} dark={dark} label={kind} disabled={disabled} radio selected={draft.kind===kind} onPress={()=>update('kind',kind)}/>)}</View>
+    {draft.kind==='transfer'?<><Copy dark={dark}>Direction</Copy><Action dark={dark} label="Out of account" disabled={disabled} radio selected={draft.direction==='out'} onPress={()=>update('direction','out')}/><Action dark={dark} label="Into account" disabled={disabled} radio selected={draft.direction==='in'} onPress={()=>update('direction','in')}/></>:null}</>;
+}
 function formTitle(mode:'add'|'edit') {return mode==='edit'?'Edit transaction':'Add transaction';}
-type ManualEntryFormProps={dark:boolean;accounts:Account[];draft:ManualDraft;onDraft(value:ManualDraft):void;mutation:MutationState;onSave():void;onClose():void;mode?:'add'|'edit';recovery?:{message:string;onRefresh():void};onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>|void};
-export function ManualEntryForm({dark,accounts,draft,onDraft,mutation,onSave,onClose,onCategoryCleanup,recovery,mode='add'}:ManualEntryFormProps) {
+type ManualEntryFormProps={dark:boolean;accounts:Account[];draft:ManualDraft;onDraft(value:ManualDraft):void;mutation:MutationState;onSave():void;onClose():void;mode?:'add'|'edit';recovery?:{message:string;onRefresh():void};onCategoryCleanup?(cleanup:CategoryCleanup):Promise<boolean>|void;receipt?:React.ReactNode;currencyConfirmed?:boolean;scanBusy?:boolean;onConfirmCurrency?():void};
+export function ManualEntryForm({dark,accounts,draft,onDraft,mutation,onSave,onClose,onCategoryCleanup,recovery,receipt,currencyConfirmed=true,scanBusy=false,onConfirmCurrency,mode='add'}:ManualEntryFormProps) {
   const [error,setError]=useState('');
   const initial=useRef({...draft});
   const close=()=>closeManualDraft(draft,initial.current,mutation,onClose);
@@ -45,16 +52,17 @@ export function ManualEntryForm({dark,accounts,draft,onDraft,mutation,onSave,onC
   const update=(key:keyof ManualDraft,value:string)=>{setError('');onDraft({...draft,[key]:value});};
   const submit=()=>submitManualDraft(draft,setError,onSave);
   return <DetailModal dark={dark} title={formTitle(mode)} onClose={close} dismissOutside>
+    {mode==='add'?receipt:null}
     <Copy dark={dark}>Account</Copy>{accounts.map(account=><Action key={account.id} dark={dark} label={`${account.institution??''} ${account.displayName}`} disabled={mutation.blocked} radio selected={draft.accountId===account.id} onPress={()=>{if(draft.accountId!==account.id)onDraft({...draft,accountId:account.id,currency:account.currencies[0]??''});}}/>)}
     <Field dark={dark} disabled={mutation.blocked} label="Date (YYYY-MM-DD)" error={fieldError(error,'Enter a valid date')} value={draft.date} onChange={value=>update('date',value)}/>
     <Field dark={dark} disabled={mutation.blocked} label="Description" value={draft.merchant} onChange={value=>update('merchant',value)}/>
     <Field dark={dark} disabled={mutation.blocked} label="Amount" error={fieldError(error,'Enter a positive amount')} value={draft.amount} keyboard="decimal-pad" onChange={value=>update('amount',value)}/>
     <CurrencyPicker dark={dark} accountCurrency={selected?.currencies[0]} value={draft.currency} disabled={mutation.blocked} onChange={code=>update('currency',code)}/>
-    <Copy dark={dark}>Type</Copy><View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{['expense','income','transfer','refund','fee'].map(kind=><Action key={kind} dark={dark} label={kind} disabled={mutation.blocked} radio selected={draft.kind===kind} onPress={()=>update('kind',kind)}/>)}</View>
-    {draft.kind==='transfer'?<><Copy dark={dark}>Direction</Copy><Action dark={dark} label="Out of account" disabled={mutation.blocked} radio selected={draft.direction==='out'} onPress={()=>update('direction','out')}/><Action dark={dark} label="Into account" disabled={mutation.blocked} radio selected={draft.direction==='in'} onPress={()=>update('direction','in')}/></>:null}
+    {!currencyConfirmed?<Action dark={dark} label="Confirm receipt currency" onPress={()=>onConfirmCurrency?.()}/>:null}
+    <KindFields dark={dark} draft={draft} disabled={mutation.blocked} update={update}/>
     <CategoryPicker dark={dark} disabled={mutation.blocked} value={draft.category} onChange={value=>update('category',value)} onCleanup={onCategoryCleanup}/><Field dark={dark} disabled={mutation.blocked} label="Note (optional)" value={draft.note} onChange={value=>update('note',value)}/>
     <TransactionRecovery dark={dark} recovery={recovery}/>
-    <MutationStatus dark={dark} mutation={mutation}/><Action dark={dark} variant="primary" label="Save transaction" disabled={mutation.blocked||!draft.accountId||!draft.date||!draft.merchant.trim()||!draft.amount||!draft.category.trim()} onPress={submit}/>
+    <MutationStatus dark={dark} mutation={mutation}/><Action dark={dark} variant="primary" label="Save transaction" disabled={!canSave(draft,mutation,scanBusy,currencyConfirmed)} onPress={submit}/>
     <Action dark={dark} label={mutation.blocked?'Close':'Cancel'} onPress={close}/>
   </DetailModal>;
 }

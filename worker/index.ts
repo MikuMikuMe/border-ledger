@@ -91,6 +91,8 @@ interface Env {
   PLAID_SECRET?: string;
   PLAID_ENV?: string;
   AI_CREDENTIAL_ENCRYPTION_KEY?: string;
+  RECEIPT_AZURE_ENDPOINT?: string;
+  RECEIPT_AZURE_KEY?: string;
   WEALTH_CREDENTIAL_ENCRYPTION_KEY?: string;
   AI_ALLOWED_ENDPOINT_HOSTS?: string;
   AI_EGRESS?: AiEgressBinding;
@@ -1064,7 +1066,7 @@ async function handleAuthorizedApiRequest(request: Request, env: Env, url: URL, 
       () => handleReportRoutes(request, env, url, context),
       () => handleBudgetApi(request, env.DB, context, '/api/budget'),
       () => handleCategoryApi(request, env.DB, context, '/api/categories'),
-      () => handleAiApi(request, {db:env.DB,context,root:'/api/analysis',env:{secret:env.AI_CREDENTIAL_ENCRYPTION_KEY??'',origin:env.LEDGER_APP_ORIGIN??'',allowedHosts:env.AI_ALLOWED_ENDPOINT_HOSTS,egress:env.AI_EGRESS,egressSecret:env.AI_EGRESS_AUTH_KEY}}),
+      () => handleAiApi(request, {db:env.DB,context,root:'/api/analysis',env:{secret:env.AI_CREDENTIAL_ENCRYPTION_KEY??'',origin:env.LEDGER_APP_ORIGIN??'',allowedHosts:env.AI_ALLOWED_ENDPOINT_HOSTS,egress:env.AI_EGRESS,egressSecret:env.AI_EGRESS_AUTH_KEY,azureEndpoint:env.RECEIPT_AZURE_ENDPOINT,azureKey:env.RECEIPT_AZURE_KEY}}),
       () => handlePlanApi(request, env.DB, context, '/api/recurring-plans'),
       () => handleRecurringRoutes(request, env, url, context),
       () => handleImportAndPlaidRoutes(request, env, url, context),
